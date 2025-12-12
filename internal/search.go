@@ -1,4 +1,4 @@
-package main
+package internal
 
 import (
 	"strings"
@@ -30,25 +30,17 @@ func NewSearchEngine() *SearchEngine {
 func (se *SearchEngine) FindDriver(driverName string, data []map[string]interface{}, trackID, classID string) (DriverResult, time.Duration) {
 	startTime := time.Now()
 
-	// Prepare search terms
-	searchTerms := strings.Fields(strings.ToLower(driverName))
+	// Normalize search name for exact matching
+	searchNameLower := strings.ToLower(strings.TrimSpace(driverName))
 
 	// Search through entries
 	for _, entry := range data {
 		if driver, ok := entry["driver"].(map[string]interface{}); ok {
 			if name, ok := driver["name"].(string); ok {
-				driverLower := strings.ToLower(name)
+				driverNameLower := strings.ToLower(strings.TrimSpace(name))
 
-				// Check if all search terms match
-				allMatch := true
-				for _, term := range searchTerms {
-					if !strings.Contains(driverLower, term) {
-						allMatch = false
-						break
-					}
-				}
-
-				if allMatch {
+				// Check for exact match
+				if driverNameLower == searchNameLower {
 					// Extract driver details
 					result := DriverResult{
 						Name:         name,
