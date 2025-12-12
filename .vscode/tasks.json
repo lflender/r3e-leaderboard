@@ -4,7 +4,7 @@
 		{
 			"label": "Build Go Application",
 			"type": "shell",
-			"command": "go build -o bin/r3e-leaderboard.exe cmd/server/main.go",
+			"command": "go build -o bin/r3e-leaderboard.exe main.go config.go data.go",
 			"problemMatcher": [
 				"$go"
 			],
