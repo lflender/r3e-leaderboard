@@ -7,14 +7,15 @@ import (
 
 // DriverResult represents a found driver with their details
 type DriverResult struct {
-	Name     string
-	Position int
-	LapTime  string
-	Country  string
-	Track    string
-	TrackID  string
-	ClassID  string
-	Found    bool
+	Name         string
+	Position     int
+	LapTime      string
+	Country      string
+	Track        string
+	TrackID      string
+	ClassID      string
+	Found        bool
+	TotalEntries int
 }
 
 // SearchEngine handles searching through leaderboard data
@@ -50,11 +51,12 @@ func (se *SearchEngine) FindDriver(driverName string, data []map[string]interfac
 				if allMatch {
 					// Extract driver details
 					result := DriverResult{
-						Name:     name,
-						Position: 1, // default
-						TrackID:  trackID,
-						ClassID:  "class-" + classID,
-						Found:    true,
+						Name:         name,
+						Position:     1, // default
+						TrackID:      trackID,
+						ClassID:      "class-" + classID,
+						Found:        true,
+						TotalEntries: len(data),
 					}
 
 					// Extract position
@@ -90,5 +92,5 @@ func (se *SearchEngine) FindDriver(driverName string, data []map[string]interfac
 
 	// Driver not found
 	duration := time.Since(startTime)
-	return DriverResult{Found: false}, duration
+	return DriverResult{Found: false, TotalEntries: len(data)}, duration
 }

@@ -1,77 +1,144 @@
 package main
 
 import (
+	"bufio"
+	"fmt"
 	"log"
 	"os"
+	"strings"
+	"time"
 )
 
+// TrackInfo represents information about a track
+type TrackInfo struct {
+	Name    string
+	TrackID string
+	Data    []map[string]interface{}
+}
+
 func main() {
-	// Check for command line arguments for direct driver search
-	if len(os.Args) >= 4 {
-		driverName := os.Args[1]
-		trackID := os.Args[2]
-		classID := os.Args[3]
+	log.Println("🏎️  RaceRoom Leaderboard Search System")
+	log.Println("Loading leaderboard data for car class 1703...")
 
-		log.Printf("🔍 Quick Search: %s on track %s, class %s", driverName, trackID, classID)
+	// Load all track data at startup
+	tracks := loadAllTrackData()
 
-		// Perform search using separated modules
-		performDriverSearch(driverName, trackID, classID)
-		return
+	log.Printf("✅ Ready! Loaded data for %d tracks", len(tracks))
+	log.Println("Type a driver name to search, or 'quit' to exit")
+
+	// Interactive search loop
+	runInteractiveSearch(tracks)
+}
+
+// loadAllTrackData loads leaderboard data for all specified tracks
+func loadAllTrackData() []TrackInfo {
+	// Define the tracks we want to load for class 1703
+	trackConfigs := []struct {
+		name    string
+		trackID string
+	}{
+		{"Anderstorp Raceway - Grand Prix", "5301"},
+		{"Anderstorp Raceway - South", "6164"},
+		{"Autodrom Most - Grand Prix", "7112"},
+		{"Bathurst Circuit - Mount Panorama", "1846"},
 	}
 
-	// Show usage information if no arguments provided
-	showUsage()
-}
-
-// showUsage displays help information
-func showUsage() {
-	log.Println("🏎️  RaceRoom Leaderboard Driver Search")
-	log.Println("Usage: program.exe \"Driver Name\" trackID classID")
-	log.Println("Example: program.exe \"Alex Pate\" 9344 1703")
-	log.Println("Example: program.exe \"Stefan Krause\" 1693 1703")
-	log.Println("Note: Class ID should be just the number (1703), 'class-' is added automatically")
-}
-
-// performDriverSearch orchestrates the complete search process
-func performDriverSearch(driverName, trackID, classID string) {
-	// Initialize modules
 	apiClient := NewAPIClient()
+	var tracks []TrackInfo
+
+	for _, config := range trackConfigs {
+		log.Printf("📡 Loading %s (ID: %s)...", config.name, config.trackID)
+
+		data, duration, err := apiClient.FetchLeaderboardData(config.trackID, "1703")
+		if err != nil {
+			log.Printf("❌ Failed to load %s: %v", config.name, err)
+			continue
+		}
+
+		if len(data) == 0 {
+			log.Printf("⚠️  No data found for %s", config.name)
+			continue
+		}
+
+		tracks = append(tracks, TrackInfo{
+			Name:    config.name,
+			TrackID: config.trackID,
+			Data:    data,
+		})
+
+		log.Printf("✅ %s loaded: %.2fs (%d entries)", config.name, duration.Seconds(), len(data))
+
+		// Small delay between requests to be respectful
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	return tracks
+}
+
+// runInteractiveSearch runs the interactive search loop
+func runInteractiveSearch(tracks []TrackInfo) {
+	scanner := bufio.NewScanner(os.Stdin)
 	searchEngine := NewSearchEngine()
 
-	// Fetch data from API
-	data, apiDuration, err := apiClient.FetchLeaderboardData(trackID, classID)
-	if err != nil {
-		log.Fatal("❌ API request failed:", err)
+	for {
+		fmt.Print("🔍 Enter driver name (or 'quit'): ")
+
+		if !scanner.Scan() {
+			break
+		}
+
+		input := strings.TrimSpace(scanner.Text())
+
+		if strings.ToLower(input) == "quit" {
+			log.Println("👋 Goodbye!")
+			break
+		}
+
+		if input == "" {
+			continue
+		}
+
+		// Search across all tracks
+		searchAllTracks(searchEngine, input, tracks)
 	}
-
-	if len(data) == 0 {
-		log.Fatal("❌ No entries found for this track/class combination")
-	}
-
-	// Log API timing
-	log.Printf("📊 API Response: %.3f seconds (%d entries)", apiDuration.Seconds(), len(data))
-
-	// Search for driver
-	result, searchDuration := searchEngine.FindDriver(driverName, data, trackID, classID)
-
-	// Log search timing
-	log.Printf("🔍 Search Time: %.3f seconds", searchDuration.Seconds())
-
-	// Print results
-	printSearchResult(result, len(data), trackID, classID)
 }
 
-// printSearchResult displays the search results in a formatted way
-func printSearchResult(result DriverResult, totalEntries int, trackID, classID string) {
-	if result.Found {
-		log.Printf("\n🎯 FOUND: %s", result.Name)
-		log.Printf("🏆 Position: #%d", result.Position)
-		log.Printf("⏱️ Lap Time: %s", result.LapTime)
-		log.Printf("🌍 Country: %s", result.Country)
-		log.Printf("🏁 Track: %s", result.Track)
-		log.Printf("📍 Track ID: %s", trackID)
-		log.Printf("🏎️ Class ID: %s", result.ClassID)
-	} else {
-		log.Printf("❌ Driver not found in %d entries on track %s, class class-%s", totalEntries, trackID, classID)
+// searchAllTracks searches for a driver across all loaded tracks
+func searchAllTracks(searchEngine *SearchEngine, driverName string, tracks []TrackInfo) {
+	log.Printf("\n🔍 Searching for '%s' across %d tracks...", driverName, len(tracks))
+
+	searchStart := time.Now()
+	var allResults []DriverResult
+	totalEntries := 0
+
+	for _, track := range tracks {
+		result, _ := searchEngine.FindDriver(driverName, track.Data, track.TrackID, "1703")
+		totalEntries += len(track.Data)
+
+		if result.Found {
+			// Override track name with our defined name
+			result.Track = track.Name
+			allResults = append(allResults, result)
+		}
 	}
+
+	searchDuration := time.Since(searchStart)
+	log.Printf("🔍 Search completed in %.3f seconds (%d total entries)", searchDuration.Seconds(), totalEntries)
+
+	// Display results
+	if len(allResults) == 0 {
+		log.Printf("❌ '%s' not found in any of the %d tracks", driverName, len(tracks))
+	} else {
+		log.Printf("\n🎯 FOUND '%s' in %d track(s):", driverName, len(allResults))
+		for i, result := range allResults {
+			log.Printf("\n--- Result %d ---", i+1)
+			log.Printf("🏁 Track: %s", result.Track)
+			log.Printf("🏆 Position: #%d (of %d)", result.Position, result.TotalEntries)
+			log.Printf("⏱️ Lap Time: %s", result.LapTime)
+			log.Printf("🌍 Country: %s", result.Country)
+			log.Printf("📍 Track ID: %s", result.TrackID)
+		}
+	}
+
+	log.Println() // Empty line for readability
 }
