@@ -24,7 +24,10 @@ func main() {
 	tracks := loadAllTrackData()
 
 	log.Printf("✅ Ready! Loaded data for %d tracks", len(tracks))
-	log.Println("Type a driver name to search, or 'quit' to exit")
+	log.Println("Type a driver name to search, 'fetch' to refresh data, or 'quit' to exit")
+
+	// Start background scheduler for daily refresh at 4:00 AM
+	go startDailyRefreshScheduler()
 
 	// Interactive search loop
 	runInteractiveSearch(tracks)
@@ -75,7 +78,7 @@ func runInteractiveSearch(tracks []TrackInfo) {
 	searchEngine := NewSearchEngine()
 
 	for {
-		fmt.Print("🔍 Enter driver name (or 'quit'): ")
+		fmt.Print("🔍 Enter driver name ('fetch' to refresh, 'quit' to exit): ")
 
 		if !scanner.Scan() {
 			break
@@ -86,6 +89,13 @@ func runInteractiveSearch(tracks []TrackInfo) {
 		if strings.ToLower(input) == "quit" {
 			log.Println("👋 Goodbye!")
 			break
+		}
+
+		if strings.ToLower(input) == "fetch" {
+			log.Println("🔄 Refreshing all track data...")
+			tracks = forceRefreshAllTracks()
+			log.Printf("✅ Refresh complete! Data updated for %d tracks", len(tracks))
+			continue
 		}
 
 		if input == "" {
@@ -135,4 +145,43 @@ func searchAllTracks(searchEngine *SearchEngine, driverName string, tracks []Tra
 	}
 
 	log.Println() // Empty line for readability
+}
+
+// startDailyRefreshScheduler starts a background scheduler for daily refresh at 4:00 AM
+func startDailyRefreshScheduler() {
+	for {
+		now := time.Now()
+		
+		// Calculate next 4:00 AM
+		next4AM := time.Date(now.Year(), now.Month(), now.Day(), 4, 0, 0, 0, now.Location())
+		
+		// If it's past 4:00 AM today, schedule for tomorrow
+		if now.After(next4AM) {
+			next4AM = next4AM.Add(24 * time.Hour)
+		}
+		
+		duration := next4AM.Sub(now)
+		log.Printf("🕐 Next automatic refresh scheduled for: %s (in %.1f hours)", 
+			next4AM.Format("2006-01-02 15:04:05"), duration.Hours())
+		
+		// Wait until 4:00 AM
+		time.Sleep(duration)
+		
+		// Perform refresh
+		log.Println("🌅 Daily refresh starting at 4:00 AM...")
+		forceRefreshAllTracks()
+		log.Println("✅ Daily refresh completed")
+	}
+}
+
+// forceRefreshAllTracks forces a refresh of all track data, bypassing cache
+func forceRefreshAllTracks() []TrackInfo {
+	// Clear existing cache to force fresh downloads
+	dataCache := NewDataCache()
+	if err := dataCache.ClearCache(); err != nil {
+		log.Printf("⚠️ Warning: Could not clear cache: %v", err)
+	}
+	
+	// Reload all track data (this will fetch fresh data since cache is cleared)
+	return loadAllTrackData()
 }
