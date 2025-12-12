@@ -1,0 +1,14 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Build Go Application",
+			"type": "shell",
+			"command": "go build -o bin/r3e-leaderboard.exe cmd/server/main.go",
+			"problemMatcher": [
+				"$go"
+			],
+			"group": "build"
+		}
+	]
+}
