@@ -34,16 +34,8 @@ func main() {
 
 // loadAllTrackData loads leaderboard data for all specified tracks
 func loadAllTrackData() []internal.TrackInfo {
-	// Define the tracks we want to load for class 1703
-	trackConfigs := []struct {
-		name    string
-		trackID string
-	}{
-		{"Anderstorp Raceway - Grand Prix", "5301"},
-		{"Anderstorp Raceway - South", "6164"},
-		{"Autodrom Most - Grand Prix", "7112"},
-		{"Bathurst Circuit - Mount Panorama", "1846"},
-	}
+	// Get all configured tracks
+	trackConfigs := internal.GetTracks()
 
 	apiClient := internal.NewAPIClient()
 	var tracks []internal.TrackInfo
@@ -51,14 +43,14 @@ func loadAllTrackData() []internal.TrackInfo {
 	dataCache := internal.NewDataCache()
 
 	for _, config := range trackConfigs {
-		trackInfo, err := dataCache.LoadOrFetchTrackData(apiClient, config.name, config.trackID)
+		trackInfo, err := dataCache.LoadOrFetchTrackData(apiClient, config.Name, config.TrackID)
 		if err != nil {
-			log.Printf("❌ Failed to load %s: %v", config.name, err)
+			log.Printf("❌ Failed to load %s: %v", config.Name, err)
 			continue
 		}
 
 		if len(trackInfo.Data) == 0 {
-			log.Printf("⚠️  No data found for %s", config.name)
+			log.Printf("⚠️  No data found for %s", config.Name)
 			continue
 		}
 
