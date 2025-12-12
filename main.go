@@ -46,30 +46,24 @@ func loadAllTrackData() []TrackInfo {
 	apiClient := NewAPIClient()
 	var tracks []TrackInfo
 
-	for _, config := range trackConfigs {
-		log.Printf("📡 Loading %s (ID: %s)...", config.name, config.trackID)
+	dataCache := NewDataCache()
 
-		data, duration, err := apiClient.FetchLeaderboardData(config.trackID, "1703")
+	for _, config := range trackConfigs {
+		trackInfo, err := dataCache.LoadOrFetchTrackData(apiClient, config.name, config.trackID)
 		if err != nil {
 			log.Printf("❌ Failed to load %s: %v", config.name, err)
 			continue
 		}
 
-		if len(data) == 0 {
+		if len(trackInfo.Data) == 0 {
 			log.Printf("⚠️  No data found for %s", config.name)
 			continue
 		}
 
-		tracks = append(tracks, TrackInfo{
-			Name:    config.name,
-			TrackID: config.trackID,
-			Data:    data,
-		})
+		tracks = append(tracks, trackInfo)
 
-		log.Printf("✅ %s loaded: %.2fs (%d entries)", config.name, duration.Seconds(), len(data))
-
-		// Small delay between requests to be respectful
-		time.Sleep(500 * time.Millisecond)
+		// Small delay between requests to be respectful (only if we fetched, not cached)
+		time.Sleep(100 * time.Millisecond)
 	}
 
 	return tracks
