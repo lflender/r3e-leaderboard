@@ -26,7 +26,7 @@ func main() {
 	})
 
 	log.Printf("✅ Ready! Loaded data for %d tracks", len(tracks))
-	log.Println("Type a driver name to search, 'fetch' to refresh data, or 'quit' to exit")
+	log.Println("Type a driver name to search, 'fetch' to refresh data, 'clear' to clear cache, or 'quit' to exit")
 
 	// Interactive search loop
 	runInteractiveSearch(tracks)
@@ -69,7 +69,7 @@ func runInteractiveSearch(tracks []internal.TrackInfo) {
 	searchEngine := internal.NewSearchEngine()
 
 	for {
-		fmt.Print("🔍 Enter driver name ('fetch' to refresh, 'quit' to exit): ")
+		fmt.Print("🔍 Enter driver name ('fetch' to refresh, 'clear' to clear cache, 'quit' to exit): ")
 
 		if !scanner.Scan() {
 			break
@@ -86,6 +86,17 @@ func runInteractiveSearch(tracks []internal.TrackInfo) {
 			log.Println("🔄 Manual refresh triggered...")
 			tracks = forceRefreshAllTracks()
 			log.Printf("✅ Refresh complete! Data updated for %d tracks", len(tracks))
+			continue
+		}
+
+		if strings.ToLower(input) == "clear" {
+			log.Println("🗑️  Clearing cache...")
+			dataCache := internal.NewDataCache()
+			if err := dataCache.ClearCache(); err != nil {
+				log.Printf("❌ Failed to clear cache: %v", err)
+			} else {
+				log.Println("✅ Cache cleared successfully! All JSON files removed.")
+			}
 			continue
 		}
 
