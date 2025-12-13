@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// TrackInfo represents information about a track
+// TrackInfo represents information about a track+class combination
 type TrackInfo struct {
 	Name    string
 	TrackID string
+	ClassID string
 	Data    []map[string]interface{}
 }
 
@@ -43,14 +44,14 @@ func (dc *DataCache) EnsureCacheDir() error {
 	return os.MkdirAll(dc.cacheDir, 0755)
 }
 
-// GetCacheFileName returns the cache filename for a track
-func (dc *DataCache) GetCacheFileName(trackID string) string {
-	return filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s.json", trackID))
+// GetCacheFileName returns the cache filename for a track+class combination
+func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
+	return filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s_class_%s.json", trackID, classID))
 }
 
 // IsCacheValid checks if cached data exists and is not expired
-func (dc *DataCache) IsCacheValid(trackID string) bool {
-	filename := dc.GetCacheFileName(trackID)
+func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
+	filename := dc.GetCacheFileName(trackID, classID)
 
 	// Check if file exists
 	info, err := os.Stat(filename)
@@ -76,7 +77,7 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 		EntryCount: len(trackInfo.Data),
 	}
 
-	filename := dc.GetCacheFileName(trackInfo.TrackID)
+	filename := dc.GetCacheFileName(trackInfo.TrackID, trackInfo.ClassID)
 	file, err := os.Create(filename)
 	if err != nil {
 		return err
@@ -89,8 +90,8 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 }
 
 // LoadTrackData loads track data from cache
-func (dc *DataCache) LoadTrackData(trackID string) (TrackInfo, error) {
-	filename := dc.GetCacheFileName(trackID)
+func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
+	filename := dc.GetCacheFileName(trackID, classID)
 
 	file, err := os.Open(filename)
 	if err != nil {
@@ -107,20 +108,18 @@ func (dc *DataCache) LoadTrackData(trackID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID string) (TrackInfo, error) {
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string) (TrackInfo, error) {
 	// Try to load from cache first
-	if dc.IsCacheValid(trackID) {
-		trackInfo, err := dc.LoadTrackData(trackID)
+	if dc.IsCacheValid(trackID, classID) {
+		trackInfo, err := dc.LoadTrackData(trackID, classID)
 		if err == nil {
-			fmt.Printf("📂 Loaded %s from cache (%d entries)\n", trackName, len(trackInfo.Data))
+			fmt.Printf("📂 %s + %s: cached (%d entries)\n", trackName, className, len(trackInfo.Data))
 			return trackInfo, nil
 		}
 	}
 
 	// Cache miss or expired - fetch fresh data
-	fmt.Printf("📡 Fetching %s (ID: %s)...\n", trackName, trackID)
-
-	data, duration, err := apiClient.FetchLeaderboardData(trackID, "1703")
+	data, duration, err := apiClient.FetchLeaderboardData(trackID, classID)
 	if err != nil {
 		return TrackInfo{}, err
 	}
@@ -128,15 +127,20 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	trackInfo := TrackInfo{
 		Name:    trackName,
 		TrackID: trackID,
+		ClassID: classID,
 		Data:    data,
 	}
 
 	// Save to cache
 	if err := dc.SaveTrackData(trackInfo); err != nil {
-		fmt.Printf("⚠️ Warning: Could not cache data for %s: %v\n", trackName, err)
+		fmt.Printf("⚠️ Warning: Could not cache %s + %s: %v\n", trackName, className, err)
 	}
 
-	fmt.Printf("✅ %s loaded: %.2fs (%d entries)\n", trackName, duration.Seconds(), len(data))
+	if len(data) > 0 {
+		fmt.Printf("✅ %s + %s: %.2fs (%d entries)\n", trackName, className, duration.Seconds(), len(data))
+	} else {
+		fmt.Printf("⚪ %s + %s: no data\n", trackName, className)
+	}
 	return trackInfo, nil
 }
 
@@ -149,7 +153,7 @@ func (dc *DataCache) ClearCache() error {
 func (dc *DataCache) GetCacheInfo() []string {
 	var info []string
 
-	files, err := filepath.Glob(filepath.Join(dc.cacheDir, "track_*.json"))
+	files, err := filepath.Glob(filepath.Join(dc.cacheDir, "track_*_class_*.json"))
 	if err != nil {
 		return info
 	}

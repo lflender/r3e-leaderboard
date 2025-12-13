@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"log"
 	"strings"
 	"time"
 )
@@ -46,7 +47,7 @@ func (se *SearchEngine) FindDriver(driverName string, data []map[string]interfac
 						Name:         name,
 						Position:     1, // default
 						TrackID:      trackID,
-						ClassID:      "class-" + classID,
+						ClassID:      classID,
 						Found:        true,
 						TotalEntries: len(data),
 					}
@@ -85,4 +86,45 @@ func (se *SearchEngine) FindDriver(driverName string, data []map[string]interfac
 	// Driver not found
 	duration := time.Since(startTime)
 	return DriverResult{Found: false, TotalEntries: len(data)}, duration
+}
+
+// SearchAllTracks searches for a driver across all loaded track+class combinations
+func (se *SearchEngine) SearchAllTracks(driverName string, tracks []TrackInfo) {
+	log.Printf("\n🔍 Searching for '%s' across %d track+class combinations...", driverName, len(tracks))
+
+	searchStart := time.Now()
+	var allResults []DriverResult
+	totalEntries := 0
+
+	for _, track := range tracks {
+		result, _ := se.FindDriver(driverName, track.Data, track.TrackID, track.ClassID)
+		totalEntries += len(track.Data)
+
+		if result.Found {
+			// Override track name with our defined name and add class info
+			result.Track = track.Name
+			allResults = append(allResults, result)
+		}
+	}
+
+	searchDuration := time.Since(searchStart)
+	log.Printf("🔍 Search completed in %.3f seconds (%d total entries)", searchDuration.Seconds(), totalEntries)
+
+	// Display results
+	if len(allResults) == 0 {
+		log.Printf("❌ '%s' not found in any track+class combination", driverName)
+	} else {
+		log.Printf("\n🎯 FOUND '%s' in %d combination(s):", driverName, len(allResults))
+		for i, result := range allResults {
+			log.Printf("\n--- Result %d ---", i+1)
+			log.Printf("🏁 Track: %s", result.Track)
+			log.Printf("🏎️ Class: %s", GetCarClassName(result.ClassID))
+			log.Printf("🏆 Position: #%d (of %d)", result.Position, result.TotalEntries)
+			log.Printf("⏱️ Lap Time: %s", result.LapTime)
+			log.Printf("🌍 Country: %s", result.Country)
+			log.Printf("📍 Track ID: %s", result.TrackID)
+		}
+	}
+
+	log.Println() // Empty line for readability
 }

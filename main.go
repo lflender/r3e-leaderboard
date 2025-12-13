@@ -2,74 +2,58 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"r3e-leaderboard/internal"
 	"strings"
-	"time"
+)
+
+var (
+	fetchContext    context.Context
+	fetchCancel     context.CancelFunc
+	fetchInProgress bool
 )
 
 func main() {
 	log.Println("🏎️  RaceRoom Leaderboard Search System")
-	log.Println("Loading leaderboard data for car class 1703...")
+	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
+
+	// Initialize cancellation context
+	fetchContext, fetchCancel = context.WithCancel(context.Background())
 
 	// Load all track data at startup
-	tracks := loadAllTrackData()
+	tracks := internal.LoadAllTrackData(fetchContext)
 
 	// Start background scheduler for automatic refresh
 	scheduler := internal.NewScheduler()
 	scheduler.Start(func() {
 		log.Println("🔄 Refreshing all track data...")
-		tracks = loadAllTrackData()
+		newCtx, newCancel := context.WithCancel(context.Background())
+		fetchContext, fetchCancel = newCtx, newCancel
+		tracks = internal.LoadAllTrackData(fetchContext)
 		log.Println("✅ Automatic refresh completed")
 	})
 
 	log.Printf("✅ Ready! Loaded data for %d tracks", len(tracks))
-	log.Println("Type a driver name to search, 'fetch' to refresh data, 'clear' to clear cache, or 'quit' to exit")
+	log.Println("Type a driver name to search, 'fetch' to refresh data, 'stop' to stop fetching, 'clear' to clear cache, or 'quit' to exit")
 
 	// Interactive search loop
 	runInteractiveSearch(tracks)
 }
 
-// loadAllTrackData loads leaderboard data for all specified tracks
-func loadAllTrackData() []internal.TrackInfo {
-	// Get all configured tracks
-	trackConfigs := internal.GetTracks()
-
-	apiClient := internal.NewAPIClient()
-	var tracks []internal.TrackInfo
-
-	dataCache := internal.NewDataCache()
-
-	for _, config := range trackConfigs {
-		trackInfo, err := dataCache.LoadOrFetchTrackData(apiClient, config.Name, config.TrackID)
-		if err != nil {
-			log.Printf("❌ Failed to load %s: %v", config.Name, err)
-			continue
-		}
-
-		if len(trackInfo.Data) == 0 {
-			log.Printf("⚠️  No data found for %s", config.Name)
-			continue
-		}
-
-		tracks = append(tracks, trackInfo)
-
-		// Small delay between requests to be respectful (only if we fetched, not cached)
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	return tracks
-}
-
 // runInteractiveSearch runs the interactive search loop
 func runInteractiveSearch(tracks []internal.TrackInfo) {
-	scanner := bufio.NewScanner(os.Stdin)
 	searchEngine := internal.NewSearchEngine()
+	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print("🔍 Enter driver name ('fetch' to refresh, 'clear' to clear cache, 'quit' to exit): ")
+		statusText := ""
+		if fetchInProgress {
+			statusText = " (FETCHING - cannot stop during Windows terminal limitations)"
+		}
+		fmt.Printf("🔍 Enter driver name ('fetch', 'clear', 'quit')%s: ", statusText)
 
 		if !scanner.Scan() {
 			break
@@ -78,14 +62,26 @@ func runInteractiveSearch(tracks []internal.TrackInfo) {
 		input := strings.TrimSpace(scanner.Text())
 
 		if strings.ToLower(input) == "quit" {
+			if fetchInProgress {
+				fetchCancel()
+			}
 			log.Println("👋 Goodbye!")
 			break
 		}
 
 		if strings.ToLower(input) == "fetch" {
+			if fetchInProgress {
+				log.Println("⚠️  Fetch already in progress. Wait for it to complete.")
+				continue
+			}
 			log.Println("🔄 Manual refresh triggered...")
-			tracks = forceRefreshAllTracks()
-			log.Printf("✅ Refresh complete! Data updated for %d tracks", len(tracks))
+			log.Println("⚠️  Note: Due to Windows terminal limitations, you cannot stop fetch once started.")
+			log.Println("    The process will continue until completion or you close the terminal.")
+
+			fetchInProgress = true
+			tracks = internal.ForceRefreshAllTracks(context.Background())
+			fetchInProgress = false
+			log.Printf("✅ Refresh complete! Data updated for %d combinations", len(tracks))
 			continue
 		}
 
@@ -105,58 +101,6 @@ func runInteractiveSearch(tracks []internal.TrackInfo) {
 		}
 
 		// Search across all tracks
-		searchAllTracks(searchEngine, input, tracks)
+		searchEngine.SearchAllTracks(input, tracks)
 	}
-}
-
-// searchAllTracks searches for a driver across all loaded tracks
-func searchAllTracks(searchEngine *internal.SearchEngine, driverName string, tracks []internal.TrackInfo) {
-	log.Printf("\n🔍 Searching for '%s' across %d tracks...", driverName, len(tracks))
-
-	searchStart := time.Now()
-	var allResults []internal.DriverResult
-	totalEntries := 0
-
-	for _, track := range tracks {
-		result, _ := searchEngine.FindDriver(driverName, track.Data, track.TrackID, "1703")
-		totalEntries += len(track.Data)
-
-		if result.Found {
-			// Override track name with our defined name
-			result.Track = track.Name
-			allResults = append(allResults, result)
-		}
-	}
-
-	searchDuration := time.Since(searchStart)
-	log.Printf("🔍 Search completed in %.3f seconds (%d total entries)", searchDuration.Seconds(), totalEntries)
-
-	// Display results
-	if len(allResults) == 0 {
-		log.Printf("❌ '%s' not found in any of the %d tracks", driverName, len(tracks))
-	} else {
-		log.Printf("\n🎯 FOUND '%s' in %d track(s):", driverName, len(allResults))
-		for i, result := range allResults {
-			log.Printf("\n--- Result %d ---", i+1)
-			log.Printf("🏁 Track: %s", result.Track)
-			log.Printf("🏆 Position: #%d (of %d)", result.Position, result.TotalEntries)
-			log.Printf("⏱️ Lap Time: %s", result.LapTime)
-			log.Printf("🌍 Country: %s", result.Country)
-			log.Printf("📍 Track ID: %s", result.TrackID)
-		}
-	}
-
-	log.Println() // Empty line for readability
-}
-
-// forceRefreshAllTracks forces a refresh of all track data, bypassing cache
-func forceRefreshAllTracks() []internal.TrackInfo {
-	// Clear existing cache to force fresh downloads
-	dataCache := internal.NewDataCache()
-	if err := dataCache.ClearCache(); err != nil {
-		log.Printf("⚠️ Warning: Could not clear cache: %v", err)
-	}
-
-	// Reload all track data (this will fetch fresh data since cache is cleared)
-	return loadAllTrackData()
 }

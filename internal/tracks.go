@@ -275,3 +275,14 @@ func GetCarClasses() []CarClassConfig {
 		{"Zonda R Cup", "7110"},
 	}
 }
+
+// GetCarClassName returns the car class name for a given class ID
+func GetCarClassName(classID string) string {
+	classes := GetCarClasses()
+	for _, class := range classes {
+		if class.ClassID == classID {
+			return class.Name
+		}
+	}
+	return "Unknown Class " + classID
+}
