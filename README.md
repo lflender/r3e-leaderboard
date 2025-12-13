@@ -160,7 +160,7 @@ go build -o bin/r3e-leaderboard.exe .
 .\bin\r3e-leaderboard.exe
 
 # Build and run (quick test)
-go run cmd/server/main.go
+go run main.go
 ```
 
 ### API Usage
@@ -216,8 +216,8 @@ Edit `config.json` to customize:
 r3e-leaderboard/
 ├── bin/                      # Compiled executable
 ├── cache/                    # Cached leaderboard data
-├── cmd/server/              
-│   └── main.go              # Server entry point
+├── main.go                   # Application entry point
+├── orchestrator.go           # Coordination logic
 ├── internal/
 │   ├── api.go               # RaceRoom API client
 │   ├── cache.go             # Cache management
