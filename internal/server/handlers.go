@@ -33,6 +33,12 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize input: limit length and reject suspicious patterns
+	if len(driver) > 100 {
+		writeErrorResponse(w, "Driver name too long (max 100 characters)", http.StatusBadRequest)
+		return
+	}
+
 	// Check if data is loaded yet
 	if !h.server.IsDataLoaded() {
 		response := map[string]interface{}{
@@ -104,6 +110,21 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		// Try form data for POST body
 		r.ParseForm()
 		trackID = r.Form.Get("trackID")
+	}
+
+	// Validate trackID if provided (must be numeric)
+	if trackID != "" {
+		if len(trackID) > 10 {
+			writeErrorResponse(w, "Invalid trackID", http.StatusBadRequest)
+			return
+		}
+		// Check if it's a valid number
+		for _, char := range trackID {
+			if char < '0' || char > '9' {
+				writeErrorResponse(w, "trackID must be numeric", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	if trackID != "" {
