@@ -7,19 +7,22 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"time"
 )
 
 // HTTPServer manages the HTTP server and routing
 type HTTPServer struct {
-	apiServer *APIServer
-	port      int
+	apiServer   *APIServer
+	port        int
+	rateLimiter *RateLimiter
 }
 
 // NewHTTPServer creates a new HTTP server instance
 func NewHTTPServer(apiServer *APIServer, port int) *HTTPServer {
 	return &HTTPServer{
-		apiServer: apiServer,
-		port:      port,
+		apiServer:   apiServer,
+		port:        port,
+		rateLimiter: NewRateLimiter(60, 1*time.Minute), // 60 requests per minute
 	}
 }
 
@@ -53,8 +56,8 @@ func (h *HTTPServer) setupRoutes() {
 	// Create API handlers with the server
 	handlers := NewHandlers(h.apiServer)
 
-	// API routes
-	http.HandleFunc("/api/search", handlers.HandleSearch)
+	// API routes with rate limiting on search endpoint
+	http.HandleFunc("/api/search", h.rateLimiter.Middleware(handlers.HandleSearch))
 	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
 	http.HandleFunc("/api/clear", handlers.HandleClear)
 	http.HandleFunc("/api/status", handlers.HandleStatus)
