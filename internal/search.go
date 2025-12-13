@@ -12,6 +12,8 @@ type DriverResult struct {
 	Position     int
 	LapTime      string
 	Country      string
+	Car          string
+	CarClass     string
 	Track        string
 	TrackID      string
 	ClassID      string
@@ -142,14 +144,8 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 
 	for _, track := range tracks {
 		totalEntries += len(track.Data)
-		log.Printf("🔍 DEBUG: Indexing track %s (ID: %s, Class: %s) with %d entries",
-			track.Name, track.TrackID, track.ClassID, len(track.Data))
 
-		for i, entry := range track.Data {
-			// DEBUG: Show first entry structure for each track
-			if i == 0 {
-				log.Printf("🔍 DEBUG: First entry structure for %s: %+v", track.Name, entry)
-			}
+		for _, entry := range track.Data {
 
 			// Extract driver name from nested structure: entry["driver"]["name"]
 			driverInterface, driverExists := entry["driver"]
@@ -172,10 +168,18 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 				continue
 			}
 
-			// Create driver result
+			// Get position from entry data
+			positionInterface, posExists := entry["index"]
+			position := 1 // default position
+			if posExists {
+				if posFloat, ok := positionInterface.(float64); ok {
+					position = int(posFloat) + 1
+				}
+			}
+
 			result := DriverResult{
 				Name:         name,
-				Position:     i + 1,
+				Position:     position,
 				TrackID:      track.TrackID,
 				ClassID:      track.ClassID,
 				Track:        track.Name,
@@ -191,6 +195,22 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
 					if countryName, nameOk := countryMap["name"].(string); nameOk {
 						result.Country = countryName
+					}
+				}
+			}
+
+			// Extract car information from car_class.car
+			if carClassInterface, carClassExists := entry["car_class"]; carClassExists {
+				if carClassMap, carClassOk := carClassInterface.(map[string]interface{}); carClassOk {
+					if carInterface, carExists := carClassMap["car"]; carExists {
+						if carMap, carOk := carInterface.(map[string]interface{}); carOk {
+							if carName, carNameOk := carMap["name"].(string); carNameOk {
+								result.Car = carName
+							}
+							if className, classNameOk := carMap["class-name"].(string); classNameOk {
+								result.CarClass = className
+							}
+						}
 					}
 				}
 			}

@@ -13,6 +13,7 @@ import (
 
 var (
 	fetchContext    context.Context
+	fetchCancel     context.CancelFunc
 	fetchInProgress bool
 	fetchProgress   struct {
 		current int
@@ -27,8 +28,8 @@ func main() {
 	// Load configuration
 	config := internal.GetDefaultConfig()
 
-	// Initialize context
-	fetchContext = context.Background()
+	// Initialize cancelable context
+	fetchContext, fetchCancel = context.WithCancel(context.Background())
 
 	// Create API server
 	searchEngine := internal.NewSearchEngine()
@@ -61,14 +62,23 @@ func startBackgroundDataLoading(apiServer *server.APIServer) {
 		log.Println("🔄 Starting background data loading...")
 		fetchInProgress = true
 
-		tracks := internal.LoadAllTrackData(fetchContext)
+		// Create a callback to update server incrementally during loading
+		progressCallback := func(currentTracks []internal.TrackInfo) {
+			apiServer.UpdateData(currentTracks)
+			// Reduced logging - only show major milestones
+			if len(currentTracks)%500 == 0 {
+				log.Printf("📊 %d tracks loaded", len(currentTracks))
+			}
+		}
 
-		log.Println("🔄 Building search index...")
+		tracks := internal.LoadAllTrackDataWithCallback(fetchContext, progressCallback)
+
+		log.Println("🔄 Building final search index...")
 		searchEngine := apiServer.GetSearchEngine()
 		searchEngine.BuildIndex(tracks)
-		log.Println("✅ Search index built successfully")
+		log.Println("✅ Final index complete")
 
-		// Update server state with loaded data
+		// Final update with all data
 		apiServer.UpdateData(tracks)
 
 		fetchInProgress = false
@@ -114,13 +124,11 @@ func startPeriodicIndexing(apiServer *server.APIServer, intervalMinutes int) {
 		for range ticker.C {
 			// Only index if we're still fetching and have some data
 			if fetchInProgress && apiServer.GetTrackCount() > 0 {
-				log.Printf("🔄 Performing periodic indexing (%dm interval) with %d tracks loaded so far...", intervalMinutes, apiServer.GetTrackCount())
-
 				tracks := apiServer.GetTracks()
 				if len(tracks) > 0 {
 					searchEngine := apiServer.GetSearchEngine()
 					searchEngine.BuildIndex(tracks)
-					log.Printf("✅ Periodic indexing complete - %d tracks indexed", len(tracks))
+					log.Printf("🔍 Index updated: %d tracks searchable", len(tracks))
 				}
 			} else if !fetchInProgress {
 				log.Println("⏹️ Stopping periodic indexing - data loading completed")
@@ -135,13 +143,16 @@ func waitForShutdown() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	sig := <-sigChan
-	log.Printf("🛑 Received %s signal, shutting down gracefully...", sig)
+	log.Printf("🛑 Received %s signal, shutting down immediately...", sig)
 
 	if fetchInProgress {
-		log.Printf("⚠️ Data fetch in progress, waiting for completion...")
-		for fetchInProgress {
-			time.Sleep(1 * time.Second)
+		log.Printf("⚠️ Data fetch in progress - canceling and exiting...")
+		// Cancel the fetch to stop it gracefully
+		if fetchCancel != nil {
+			fetchCancel()
 		}
+		// Give it 2 seconds to clean up, then force exit
+		time.Sleep(2 * time.Second)
 	}
 
 	log.Printf("✅ Shutdown complete")
