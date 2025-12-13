@@ -79,7 +79,14 @@ func startBackgroundDataLoading(apiServer *server.APIServer) {
 			}
 		}
 
-		tracks := internal.LoadAllTrackDataWithCallback(fetchContext, progressCallback)
+		// Callback when cache loading is complete - build index immediately
+		cacheCompleteCallback := func(cachedTracks []internal.TrackInfo) {
+			apiServer.UpdateData(cachedTracks)
+			searchEngine := apiServer.GetSearchEngine()
+			searchEngine.BuildIndex(cachedTracks)
+		}
+
+		tracks := internal.LoadAllTrackDataWithCallback(fetchContext, progressCallback, cacheCompleteCallback)
 
 		log.Println("🔄 Building final search index...")
 		searchEngine := apiServer.GetSearchEngine()
@@ -109,7 +116,7 @@ func startScheduledRefresh(apiServer *server.APIServer) {
 
 		// Perform incremental refresh - updates API progressively
 		currentTracks := apiServer.GetTracks()
-		internal.PerformIncrementalRefresh(currentTracks, func(updatedTracks []internal.TrackInfo) {
+		internal.PerformIncrementalRefresh(currentTracks, "", func(updatedTracks []internal.TrackInfo) {
 			searchEngine := apiServer.GetSearchEngine()
 			searchEngine.BuildIndex(updatedTracks)
 			apiServer.UpdateData(updatedTracks)

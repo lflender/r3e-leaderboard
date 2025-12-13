@@ -89,21 +89,41 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Println("🔄 API triggered data refresh")
+	// Check for trackID parameter (can be in query string or form data)
+	trackID := r.URL.Query().Get("trackID")
+	if trackID == "" {
+		// Try form data for POST body
+		r.ParseForm()
+		trackID = r.Form.Get("trackID")
+	}
+
+	if trackID != "" {
+		log.Printf("🔄 API triggered single track refresh: %s", trackID)
+	} else {
+		log.Println("🔄 API triggered full data refresh")
+	}
 
 	// Start refresh in background using the internal refresh system
 	go func() {
 		currentTracks := h.server.GetTracks()
-		internal.PerformIncrementalRefresh(currentTracks, func(updatedTracks []internal.TrackInfo) {
+		internal.PerformIncrementalRefresh(currentTracks, trackID, func(updatedTracks []internal.TrackInfo) {
 			searchEngine := h.server.GetSearchEngine()
 			searchEngine.BuildIndex(updatedTracks)
 			h.server.UpdateData(updatedTracks)
 		})
 	}()
 
+	var message string
+	if trackID != "" {
+		message = "Single track refresh started in background for track: " + trackID
+	} else {
+		message = "Full refresh started in background"
+	}
+
 	response := map[string]interface{}{
-		"message": "Manual refresh started in background",
+		"message": message,
 		"status":  "in_progress",
+		"trackID": trackID,
 	}
 
 	writeJSONResponse(w, response)

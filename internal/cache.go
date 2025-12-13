@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -62,16 +63,16 @@ func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	}
 
 	// Check if file is not too old
-	return time.Since(info.ModTime()) < dc.maxAge
-}
+	age := time.Since(info.ModTime())
+	isValid := age < dc.maxAge
 
-// InvalidateCache removes a specific cache file to force refresh
-func (dc *DataCache) InvalidateCache(trackID, classID string) error {
-	filename := dc.GetCacheFileName(trackID, classID)
-	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
-		return err
+	// Debug logging for cache validity (can be removed later)
+	if !isValid {
+		log.Printf("🕰️ Cache expired: %s + %s (%.1f hours old)",
+			trackID, classID, age.Hours())
 	}
-	return nil
+
+	return isValid
 }
 
 // SaveTrackData saves track data to cache
@@ -136,15 +137,14 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, verbose bool) (TrackInfo, bool, error) {
-	// Try to load from cache first
-	if dc.IsCacheValid(trackID, classID) {
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, error) {
+	// Try to load from cache first (unless forced to refresh)
+	if !force && dc.IsCacheValid(trackID, classID) {
 		trackInfo, err := dc.LoadTrackData(trackID, classID)
 		if err == nil {
-			if verbose {
-				fmt.Printf("📂 %s + %s: cached (%d entries)\n", trackName, className, len(trackInfo.Data))
-			}
 			return trackInfo, true, nil // true = loaded from cache
+		} else {
+			log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
 		}
 	}
 

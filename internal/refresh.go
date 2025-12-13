@@ -4,13 +4,31 @@ import (
 	"log"
 )
 
-// PerformIncrementalRefresh refreshes all track data progressively without API downtime
-func PerformIncrementalRefresh(currentTracks []TrackInfo, updateCallback func([]TrackInfo)) {
+// PerformIncrementalRefresh refreshes track data progressively without API downtime
+// If trackID is provided, only refreshes combinations for that specific track
+func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, updateCallback func([]TrackInfo)) {
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
 
-	log.Printf("🔄 Incremental refresh: %d tracks × %d classes = %d combinations",
-		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
+	// Filter tracks if trackID is specified
+	if trackID != "" {
+		filteredTracks := []TrackConfig{}
+		for _, track := range trackConfigs {
+			if track.TrackID == trackID {
+				filteredTracks = append(filteredTracks, track)
+			}
+		}
+		trackConfigs = filteredTracks
+		if len(trackConfigs) == 0 {
+			log.Printf("❌ No track found with ID: %s", trackID)
+			return
+		}
+		log.Printf("🎯 Single track refresh: %s (%d classes = %d combinations)",
+			trackConfigs[0].Name, len(classConfigs), len(trackConfigs)*len(classConfigs))
+	} else {
+		log.Printf("🔄 Full incremental refresh: %d tracks × %d classes = %d combinations",
+			len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
+	}
 
 	apiClient := NewAPIClient()
 	dataCache := NewDataCache()
@@ -39,13 +57,10 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, updateCallback func([]
 				log.Printf("🔄 Refresh progress: %d/%d combinations (%d tracks updated)",
 					processedCount, totalCombinations, updatedCount)
 			}
-			// Force refresh by clearing this specific cache entry first
-			dataCache.InvalidateCache(trackConfig.TrackID, classConfig.ClassID)
-
-			// Now fetch fresh data from API
+			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
 			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
-				classConfig.Name, classConfig.ClassID, false)
+				classConfig.Name, classConfig.ClassID, true) // true = force refresh
 
 			if err != nil {
 				log.Printf("❌ Failed to refresh %s - %s: %v", trackConfig.Name, classConfig.Name, err)

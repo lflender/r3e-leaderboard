@@ -8,11 +8,11 @@ import (
 
 // LoadAllTrackData loads leaderboard data for all track+class combinations
 func LoadAllTrackData(ctx context.Context) []TrackInfo {
-	return LoadAllTrackDataWithCallback(ctx, nil)
+	return LoadAllTrackDataWithCallback(ctx, nil, nil)
 }
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
-func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo)) []TrackInfo {
+func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo)) []TrackInfo {
 	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
@@ -41,6 +41,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		}
 	}
 	hasFetchedFromAPI := false
+	cacheLoadingComplete := false
 
 	for _, track := range trackConfigs {
 		// Track per-track cache statistics
@@ -63,10 +64,18 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			// Check if this will be fetched (not cached)
 			willFetch := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
 
-			// Show progress every 50 combinations ONLY if this specific combination requires API fetching
-			if (currentCombination%50 == 0 || currentCombination == 1) && willFetch {
-				log.Printf("🔄 Progress: %d/%d (%d with data)",
-					currentCombination, totalCombinations, len(allTrackData))
+			// If this is the first fetch and we have cache data, trigger cache complete callback
+			if willFetch && !cacheLoadingComplete && len(allTrackData) > 0 {
+				cacheLoadingComplete = true
+				if cacheCompleteCallback != nil {
+					log.Printf("📊 Cache loading complete - %d tracks loaded, building initial index...", len(allTrackData))
+					cacheCompleteCallback(allTrackData)
+					log.Println("✅ Initial index ready - API is now searchable while fetching continues")
+				}
+			}
+
+			// Show progress every 50 combinations if ANY fetching is needed
+			if (currentCombination%50 == 0 || currentCombination == 1) && needsAPIFetching {
 
 				// Update progress callback every 50 combinations
 				if progressCallback != nil {
