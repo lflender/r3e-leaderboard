@@ -2,6 +2,7 @@ package internal
 
 import (
 	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,10 +12,13 @@ type DriverResult struct {
 	Name         string
 	Position     int
 	LapTime      string
+	TimeDiff     float64 // Time difference from leader in seconds
 	Country      string
 	Car          string
 	CarClass     string
 	Team         string
+	Rank         string
+	Difficulty   string
 	Track        string
 	TrackID      string
 	ClassID      string
@@ -192,6 +196,19 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
 			}
+
+			// Extract time difference from relative_laptime (e.g., "+00.068s" or empty for leader)
+			if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
+				// Parse "+00.068s" to extract numeric value
+				// Remove "+" prefix and "s" suffix, then parse as float
+				timeStr := strings.TrimPrefix(relativeLaptime, "+")
+				timeStr = strings.TrimSuffix(timeStr, "s")
+				if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
+					result.TimeDiff = timeDiff
+				}
+			}
+			// If no relative_laptime or empty, TimeDiff stays 0.0 (leader)
+
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
 					if countryName, nameOk := countryMap["name"].(string); nameOk {
@@ -219,6 +236,16 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 			// Extract team information (direct string field)
 			if teamStr, teamOk := entry["team"].(string); teamOk && teamStr != "" {
 				result.Team = teamStr
+			}
+
+			// Extract rank (direct string: A, B, C, D, or empty/nil)
+			if rankStr, rankOk := entry["rank"].(string); rankOk && rankStr != "" {
+				result.Rank = rankStr
+			}
+
+			// Extract difficulty from driving_model (direct string)
+			if drivingModel, dmOk := entry["driving_model"].(string); dmOk && drivingModel != "" {
+				result.Difficulty = drivingModel
 			}
 
 			// Add to index (case-insensitive)

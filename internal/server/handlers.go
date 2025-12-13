@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"r3e-leaderboard/internal"
+	"sort"
 )
 
 // Handlers manages API request handlers
@@ -32,6 +33,12 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitize input: limit length and reject suspicious patterns
+	if len(driver) > 100 {
+		writeErrorResponse(w, "Driver name too long (max 100 characters)", http.StatusBadRequest)
+		return
+	}
+
 	// Check if data is loaded yet
 	if !h.server.IsDataLoaded() {
 		response := map[string]interface{}{
@@ -52,6 +59,11 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	searchEngine := h.server.GetSearchEngine()
 	results := searchEngine.SearchByIndex(driver)
 
+	// Sort results by time difference (ascending - fastest first)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].TimeDiff < results[j].TimeDiff
+	})
+
 	// Add class names to results
 	enhancedResults := make([]map[string]interface{}, len(results))
 	for i, result := range results {
@@ -63,6 +75,8 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 			"car":           result.Car,
 			"car_class":     result.CarClass,
 			"team":          result.Team,
+			"rank":          result.Rank,
+			"difficulty":    result.Difficulty,
 			"track":         result.Track,
 			"track_id":      result.TrackID,
 			"class_id":      result.ClassID,
@@ -96,6 +110,21 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 		// Try form data for POST body
 		r.ParseForm()
 		trackID = r.Form.Get("trackID")
+	}
+
+	// Validate trackID if provided (must be numeric)
+	if trackID != "" {
+		if len(trackID) > 10 {
+			writeErrorResponse(w, "Invalid trackID", http.StatusBadRequest)
+			return
+		}
+		// Check if it's a valid number
+		for _, char := range trackID {
+			if char < '0' || char > '9' {
+				writeErrorResponse(w, "trackID must be numeric", http.StatusBadRequest)
+				return
+			}
+		}
 	}
 
 	if trackID != "" {
