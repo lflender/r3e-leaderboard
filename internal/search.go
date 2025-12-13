@@ -14,6 +14,7 @@ type DriverResult struct {
 	Country      string
 	Car          string
 	CarClass     string
+	Team         string
 	Track        string
 	TrackID      string
 	ClassID      string
@@ -213,6 +214,11 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 						}
 					}
 				}
+			}
+
+			// Extract team information (direct string field)
+			if teamStr, teamOk := entry["team"].(string); teamOk && teamStr != "" {
+				result.Team = teamStr
 			}
 
 			// Add to index (case-insensitive)
