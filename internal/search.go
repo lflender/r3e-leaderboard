@@ -15,6 +15,8 @@ type DriverResult struct {
 	Car          string
 	CarClass     string
 	Team         string
+	Rank         string
+	Difficulty   string
 	Track        string
 	TrackID      string
 	ClassID      string
@@ -219,6 +221,16 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 			// Extract team information (direct string field)
 			if teamStr, teamOk := entry["team"].(string); teamOk && teamStr != "" {
 				result.Team = teamStr
+			}
+
+			// Extract rank (direct string: A, B, C, D, or empty/nil)
+			if rankStr, rankOk := entry["rank"].(string); rankOk && rankStr != "" {
+				result.Rank = rankStr
+			}
+
+			// Extract difficulty from driving_model (direct string)
+			if drivingModel, dmOk := entry["driving_model"].(string); dmOk && drivingModel != "" {
+				result.Difficulty = drivingModel
 			}
 
 			// Add to index (case-insensitive)

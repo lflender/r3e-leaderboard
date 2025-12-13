@@ -63,6 +63,8 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 			"car":           result.Car,
 			"car_class":     result.CarClass,
 			"team":          result.Team,
+			"rank":          result.Rank,
+			"difficulty":    result.Difficulty,
 			"track":         result.Track,
 			"track_id":      result.TrackID,
 			"class_id":      result.ClassID,

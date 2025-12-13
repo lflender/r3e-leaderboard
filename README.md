@@ -6,25 +6,25 @@ Disclaimer: all code was written by AI.
 
 ## Core Features:
 
-⚡ Fast cache loading (~2 seconds)
-🔄 Progressive data fetching with full pagination
-🔍 Instant search (< 1ms) with complete driver info (including team)
-🛡️ Rate limiting (60 req/min)
-📅 Automatic nightly refresh
-🗂️ Smart cache management (24h validity)
+- ⚡ Fast cache loading (~2 seconds)
+- 🔄 Progressive data fetching with full pagination
+- 🔍 Instant search (< 1ms) with complete driver info (including team)
+- 🛡️ Rate limiting (60 req/min)
+- 📅 Automatic nightly refresh
+- 🗂️ Smart cache management (24h validity)
 
 ## API Coverage:
 
-169 tracks × 83 classes = 14,027 combinations
-45,000+ drivers searchable
-200,000+ leaderboard entries
+- 169 tracks × 83 classes = 14,027 combinations
+- 45,000+ drivers searchable
+- 200,000+ leaderboard entries
 
 ## Clean Architecture:
 
-Modular design ready for auth
-Proper error handling
-Production-grade logging
-Resource leak-free
+- Modular design ready for auth
+- Proper error handling
+- Production-grade logging
+- Resource leak-free
 
 ## 🚀 Quick Start
 
