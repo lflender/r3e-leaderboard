@@ -19,12 +19,19 @@ type DriverResult struct {
 	TotalEntries int
 }
 
+// DriverIndex maps driver names to all their results across tracks/classes
+type DriverIndex map[string][]DriverResult
+
 // SearchEngine handles searching through leaderboard data
-type SearchEngine struct{}
+type SearchEngine struct {
+	index DriverIndex
+}
 
 // NewSearchEngine creates a new search engine
 func NewSearchEngine() *SearchEngine {
-	return &SearchEngine{}
+	return &SearchEngine{
+		index: make(DriverIndex),
+	}
 }
 
 // FindDriver searches for a driver in the leaderboard data
@@ -88,27 +95,21 @@ func (se *SearchEngine) FindDriver(driverName string, data []map[string]interfac
 	return DriverResult{Found: false, TotalEntries: len(data)}, duration
 }
 
-// SearchAllTracks searches for a driver across all loaded track+class combinations
+// SearchAllTracks searches for a driver using the fast index
 func (se *SearchEngine) SearchAllTracks(driverName string, tracks []TrackInfo) {
-	log.Printf("\n🔍 Searching for '%s' across %d track+class combinations...", driverName, len(tracks))
+	log.Printf("\n🔍 Searching for '%s' using indexed lookup...", driverName)
 
 	searchStart := time.Now()
-	var allResults []DriverResult
+	allResults := se.SearchByIndex(driverName)
+
+	// Calculate total entries for stats
 	totalEntries := 0
-
 	for _, track := range tracks {
-		result, _ := se.FindDriver(driverName, track.Data, track.TrackID, track.ClassID)
 		totalEntries += len(track.Data)
-
-		if result.Found {
-			// Override track name with our defined name and add class info
-			result.Track = track.Name
-			allResults = append(allResults, result)
-		}
 	}
 
 	searchDuration := time.Since(searchStart)
-	log.Printf("🔍 Search completed in %.3f seconds (%d total entries)", searchDuration.Seconds(), totalEntries)
+	log.Printf("⚡ Search completed in %.6f seconds (%d total entries)", searchDuration.Seconds(), totalEntries)
 
 	// Display results
 	if len(allResults) == 0 {
@@ -127,4 +128,115 @@ func (se *SearchEngine) SearchAllTracks(driverName string, tracks []TrackInfo) {
 	}
 
 	log.Println() // Empty line for readability
+}
+
+// BuildIndex creates an in-memory index of all drivers for fast searching
+func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
+	indexStart := time.Now()
+
+	// Clear existing index
+	se.index = make(DriverIndex)
+	totalEntries := 0
+
+	log.Printf("🔄 Building driver index from %d track combinations...", len(tracks))
+
+	for _, track := range tracks {
+		totalEntries += len(track.Data)
+		log.Printf("🔍 DEBUG: Indexing track %s (ID: %s, Class: %s) with %d entries",
+			track.Name, track.TrackID, track.ClassID, len(track.Data))
+
+		for i, entry := range track.Data {
+			// DEBUG: Show first entry structure for each track
+			if i == 0 {
+				log.Printf("🔍 DEBUG: First entry structure for %s: %+v", track.Name, entry)
+			}
+
+			// Extract driver name from nested structure: entry["driver"]["name"]
+			driverInterface, driverExists := entry["driver"]
+			if !driverExists {
+				continue
+			}
+
+			driverMap, driverOk := driverInterface.(map[string]interface{})
+			if !driverOk {
+				continue
+			}
+
+			nameInterface, nameExists := driverMap["name"]
+			if !nameExists {
+				continue
+			}
+
+			name, nameOk := nameInterface.(string)
+			if !nameOk || name == "" {
+				continue
+			}
+
+			// Create driver result
+			result := DriverResult{
+				Name:         name,
+				Position:     i + 1,
+				TrackID:      track.TrackID,
+				ClassID:      track.ClassID,
+				Track:        track.Name,
+				Found:        true,
+				TotalEntries: len(track.Data),
+			}
+
+			// Extract additional details
+			if lapTime, ok := entry["laptime"].(string); ok {
+				result.LapTime = lapTime
+			}
+			if countryInterface, countryExists := entry["country"]; countryExists {
+				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
+					if countryName, nameOk := countryMap["name"].(string); nameOk {
+						result.Country = countryName
+					}
+				}
+			}
+
+			// Add to index (case-insensitive)
+			lowerName := strings.ToLower(name)
+			se.index[lowerName] = append(se.index[lowerName], result)
+		}
+	}
+
+	indexDuration := time.Since(indexStart)
+	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries)",
+		indexDuration.Seconds(), len(se.index), totalEntries)
+	// DEBUG: Show sample of indexed names
+	count := 0
+	log.Printf("🔍 DEBUG: Sample indexed drivers:")
+	for name := range se.index {
+		if count < 10 {
+			log.Printf("  - '%s'", name)
+			count++
+		} else {
+			break
+		}
+	}
+}
+
+// SearchByIndex performs fast indexed search for a driver
+func (se *SearchEngine) SearchByIndex(driverName string) []DriverResult {
+	lowerName := strings.ToLower(driverName)
+	log.Printf("🔍 DEBUG: Searching for '%s' (normalized: '%s') in index with %d drivers",
+		driverName, lowerName, len(se.index))
+
+	// Exact match first
+	if results, exists := se.index[lowerName]; exists {
+		log.Printf("🎯 DEBUG: Found exact match with %d results", len(results))
+		return results
+	}
+
+	// Partial match fallback
+	log.Printf("🔍 DEBUG: No exact match, trying partial match...")
+	var partialResults []DriverResult
+	for indexedName, results := range se.index {
+		if strings.Contains(indexedName, lowerName) {
+			partialResults = append(partialResults, results...)
+		}
+	}
+
+	return partialResults
 }

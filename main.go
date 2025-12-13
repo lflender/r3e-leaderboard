@@ -26,6 +26,11 @@ func main() {
 	// Load all track data at startup
 	tracks := internal.LoadAllTrackData(fetchContext)
 
+	// Create search engine and build initial index
+	searchEngine := internal.NewSearchEngine()
+	log.Printf("🔍 DEBUG: About to build index with %d tracks", len(tracks))
+	searchEngine.BuildIndex(tracks)
+
 	// Start background scheduler for automatic refresh
 	scheduler := internal.NewScheduler()
 	scheduler.Start(func() {
@@ -33,6 +38,7 @@ func main() {
 		newCtx, newCancel := context.WithCancel(context.Background())
 		fetchContext, fetchCancel = newCtx, newCancel
 		tracks = internal.LoadAllTrackData(fetchContext)
+		searchEngine.BuildIndex(tracks)
 		log.Println("✅ Automatic refresh completed")
 	})
 
@@ -40,12 +46,11 @@ func main() {
 	log.Println("Type a driver name to search, 'fetch' to refresh data, 'stop' to stop fetching, 'clear' to clear cache, or 'quit' to exit")
 
 	// Interactive search loop
-	runInteractiveSearch(tracks)
+	runInteractiveSearch(tracks, searchEngine)
 }
 
 // runInteractiveSearch runs the interactive search loop
-func runInteractiveSearch(tracks []internal.TrackInfo) {
-	searchEngine := internal.NewSearchEngine()
+func runInteractiveSearch(tracks []internal.TrackInfo, searchEngine *internal.SearchEngine) {
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
@@ -80,6 +85,7 @@ func runInteractiveSearch(tracks []internal.TrackInfo) {
 
 			fetchInProgress = true
 			tracks = internal.ForceRefreshAllTracks(context.Background())
+			searchEngine.BuildIndex(tracks)
 			fetchInProgress = false
 			log.Printf("✅ Refresh complete! Data updated for %d combinations", len(tracks))
 			continue
