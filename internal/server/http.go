@@ -1,4 +1,4 @@
-package http
+package server
 
 import (
 	"encoding/json"
@@ -7,26 +7,24 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"r3e-leaderboard/internal/api"
-	"r3e-leaderboard/internal/apiserver"
 )
 
-// Server manages the HTTP server and routing
-type Server struct {
-	apiServer *apiserver.APIServer
+// HTTPServer manages the HTTP server and routing
+type HTTPServer struct {
+	apiServer *APIServer
 	port      int
 }
 
-// New creates a new HTTP server instance
-func New(apiServer *apiserver.APIServer, port int) *Server {
-	return &Server{
+// NewHTTPServer creates a new HTTP server instance
+func NewHTTPServer(apiServer *APIServer, port int) *HTTPServer {
+	return &HTTPServer{
 		apiServer: apiServer,
 		port:      port,
 	}
 }
 
 // Start begins the HTTP server
-func (h *Server) Start() {
+func (h *HTTPServer) Start() {
 	log.Printf("🚀 Starting API server on http://localhost:%d", h.port)
 	h.logEndpoints()
 
@@ -38,7 +36,7 @@ func (h *Server) Start() {
 }
 
 // logEndpoints prints available API endpoints
-func (h *Server) logEndpoints() {
+func (h *HTTPServer) logEndpoints() {
 	log.Printf("📖 API Documentation:")
 	log.Printf("   GET  /api/search?driver=name  - Search for driver")
 	log.Printf("   GET  /api/tracks              - List tracks info")
@@ -47,12 +45,12 @@ func (h *Server) logEndpoints() {
 }
 
 // setupRoutes configures HTTP routes
-func (h *Server) setupRoutes() {
+func (h *HTTPServer) setupRoutes() {
 	// Health check route
 	http.HandleFunc("/", h.handleHealthCheck)
 
 	// Create API handlers with the server
-	handlers := api.New(h.apiServer)
+	handlers := NewHandlers(h.apiServer)
 
 	// API routes
 	http.HandleFunc("/api/search", handlers.HandleSearch)
@@ -62,7 +60,7 @@ func (h *Server) setupRoutes() {
 }
 
 // startWithErrorHandling starts the server with proper error handling
-func (h *Server) startWithErrorHandling() {
+func (h *HTTPServer) startWithErrorHandling() {
 	serverStarted := make(chan error, 1)
 
 	go func() {
@@ -95,7 +93,7 @@ func (h *Server) startWithErrorHandling() {
 }
 
 // handleHealthCheck provides a simple health check endpoint
-func (h *Server) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
+func (h *HTTPServer) handleHealthCheck(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 

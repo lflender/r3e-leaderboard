@@ -4,13 +4,12 @@ import (
 	"context"
 	"log"
 	"r3e-leaderboard/internal"
-	"r3e-leaderboard/internal/apiserver"
-	"r3e-leaderboard/internal/http"
+	"r3e-leaderboard/internal/server"
+	"time"
 )
 
 var (
 	fetchContext    context.Context
-	fetchCancel     context.CancelFunc
 	fetchInProgress bool
 )
 
@@ -18,19 +17,22 @@ func main() {
 	log.Println("🏎️  RaceRoom Leaderboard API Server")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 
-	// Initialize cancellation context
-	fetchContext, fetchCancel = context.WithCancel(context.Background())
+	// Initialize context
+	fetchContext = context.Background()
 
 	// Create API server
 	searchEngine := internal.NewSearchEngine()
-	apiServer := apiserver.New(searchEngine)
+	apiServer := server.New(searchEngine)
 
 	// Start HTTP server
-	httpServer := http.New(apiServer, 8080)
+	httpServer := server.NewHTTPServer(apiServer, 8080)
 	httpServer.Start()
 
 	// Start background data loading
 	startBackgroundDataLoading(apiServer)
+
+	// Start periodic indexing (every hour during data loading)
+	startPeriodicIndexing(apiServer)
 
 	// Start scheduled refresh
 	startScheduledRefresh(apiServer)
@@ -39,7 +41,7 @@ func main() {
 	select {}
 }
 
-func startBackgroundDataLoading(apiServer *apiserver.APIServer) {
+func startBackgroundDataLoading(apiServer *server.APIServer) {
 	go func() {
 		log.Println("🔄 Starting background data loading...")
 		fetchInProgress = true
@@ -59,7 +61,7 @@ func startBackgroundDataLoading(apiServer *apiserver.APIServer) {
 	}()
 }
 
-func startScheduledRefresh(apiServer *apiserver.APIServer) {
+func startScheduledRefresh(apiServer *server.APIServer) {
 	scheduler := internal.NewScheduler()
 	scheduler.Start(func() {
 		// Skip scheduled refresh if manual fetch is already in progress
@@ -68,21 +70,45 @@ func startScheduledRefresh(apiServer *apiserver.APIServer) {
 			return
 		}
 
-		log.Println("🔄 Starting scheduled refresh...")
+		log.Println("🔄 Starting scheduled incremental refresh...")
 		fetchInProgress = true
 
-		newCtx, newCancel := context.WithCancel(context.Background())
-		fetchContext, fetchCancel = newCtx, newCancel
-		tracks := internal.LoadAllTrackData(fetchContext)
-
-		log.Println("🔄 Rebuilding search index after scheduled refresh...")
-		searchEngine := apiServer.GetSearchEngine()
-		searchEngine.BuildIndex(tracks)
-		log.Println("✅ Search index rebuilt successfully")
-
-		apiServer.UpdateData(tracks)
+		// Perform incremental refresh - updates API progressively
+		currentTracks := apiServer.GetTracks()
+		internal.PerformIncrementalRefresh(currentTracks, func(updatedTracks []internal.TrackInfo) {
+			searchEngine := apiServer.GetSearchEngine()
+			searchEngine.BuildIndex(updatedTracks)
+			apiServer.UpdateData(updatedTracks)
+		})
 
 		fetchInProgress = false
-		log.Println("✅ Scheduled refresh completed")
+		log.Println("✅ Scheduled incremental refresh completed")
 	})
+}
+
+func startPeriodicIndexing(apiServer *server.APIServer) {
+	go func() {
+		// Wait 1 hour before first indexing to let some data accumulate
+		time.Sleep(1 * time.Hour)
+
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			// Only index if we're still fetching and have some data
+			if fetchInProgress && apiServer.GetTrackCount() > 0 {
+				log.Printf("🔄 Performing hourly indexing with %d tracks loaded so far...", apiServer.GetTrackCount())
+
+				tracks := apiServer.GetTracks()
+				if len(tracks) > 0 {
+					searchEngine := apiServer.GetSearchEngine()
+					searchEngine.BuildIndex(tracks)
+					log.Printf("✅ Hourly indexing complete - %d tracks indexed", len(tracks))
+				}
+			} else if !fetchInProgress {
+				log.Println("⏹️ Stopping periodic indexing - data loading completed")
+				return
+			}
+		}
+	}()
 }

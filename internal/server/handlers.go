@@ -1,20 +1,19 @@
-package api
+package server
 
 import (
 	"encoding/json"
 	"log"
 	"net/http"
 	"r3e-leaderboard/internal"
-	"r3e-leaderboard/internal/apiserver"
 )
 
 // Handlers manages API request handlers
 type Handlers struct {
-	server *apiserver.APIServer
+	server *APIServer
 }
 
-// New creates a new API handlers instance
-func New(apiServer *apiserver.APIServer) *Handlers {
+// NewHandlers creates a new API handlers instance
+func NewHandlers(apiServer *APIServer) *Handlers {
 	return &Handlers{
 		server: apiServer,
 	}

@@ -1,4 +1,4 @@
-package apiserver
+package server
 
 import (
 	"r3e-leaderboard/internal"
