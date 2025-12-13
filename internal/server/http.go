@@ -41,11 +41,12 @@ func (h *HTTPServer) Start() {
 // logEndpoints prints available API endpoints
 func (h *HTTPServer) logEndpoints() {
 	log.Printf("📖 API Documentation:")
-	log.Printf("   GET  /api/search?driver=name       - Search for driver")
-	log.Printf("   GET  /api/status                   - Server status & metrics")
-	log.Printf("   POST /api/refresh                  - Refresh all data")
-	log.Printf("   POST /api/refresh?trackID=id       - Refresh single track")
-	log.Printf("   POST /api/clear                    - Clear cache")
+	log.Printf("   GET  /api/search?driver=name             - Search for driver")
+	log.Printf("   GET  /api/leaderboard?track=ID&class=ID  - Get leaderboard for track/class")
+	log.Printf("   GET  /api/status                         - Server status & metrics")
+	log.Printf("   POST /api/refresh                        - Refresh all data")
+	log.Printf("   POST /api/refresh?trackID=id             - Refresh single track")
+	log.Printf("   POST /api/clear                          - Clear cache")
 }
 
 // setupRoutes configures HTTP routes
@@ -56,8 +57,9 @@ func (h *HTTPServer) setupRoutes() {
 	// Create API handlers with the server
 	handlers := NewHandlers(h.apiServer)
 
-	// API routes with rate limiting on search endpoint
+	// API routes with rate limiting on search and leaderboard endpoints
 	http.HandleFunc("/api/search", h.rateLimiter.Middleware(handlers.HandleSearch))
+	http.HandleFunc("/api/leaderboard", h.rateLimiter.Middleware(handlers.HandleLeaderboard))
 	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
 	http.HandleFunc("/api/clear", handlers.HandleClear)
 	http.HandleFunc("/api/status", h.rateLimiter.Middleware(handlers.HandleStatus))

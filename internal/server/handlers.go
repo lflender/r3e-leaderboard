@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"r3e-leaderboard/internal"
 	"sort"
+	"strconv"
+	"strings"
 )
 
 // Handlers manages API request handlers
@@ -216,6 +218,132 @@ func (h *Handlers) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSONResponse(w, response)
+}
+
+// HandleLeaderboard returns leaderboard data for a single track/class combination
+func (h *Handlers) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	trackID := r.URL.Query().Get("track")
+	classID := r.URL.Query().Get("class")
+	if trackID == "" || classID == "" {
+		writeErrorResponse(w, "Missing 'track' or 'class' parameter", http.StatusBadRequest)
+		return
+	}
+	if len(trackID) > 10 || len(classID) > 10 {
+		writeErrorResponse(w, "track/class parameter too long", http.StatusBadRequest)
+		return
+	}
+	for _, c := range trackID {
+		if c < '0' || c > '9' {
+			writeErrorResponse(w, "track must be numeric", http.StatusBadRequest)
+			return
+		}
+	}
+	for _, c := range classID {
+		if c < '0' || c > '9' {
+			writeErrorResponse(w, "class must be numeric", http.StatusBadRequest)
+			return
+		}
+	}
+
+	tracks := h.server.GetTracks()
+	var found *internal.TrackInfo
+	for i := range tracks {
+		if tracks[i].TrackID == trackID && tracks[i].ClassID == classID {
+			found = &tracks[i]
+			break
+		}
+	}
+	if found == nil {
+		writeErrorResponse(w, "Leaderboard not found for given track/class", http.StatusNotFound)
+		return
+	}
+
+	// Convert []map[string]interface{} to []internal.DriverResult for sorting
+	var driverResults []internal.DriverResult
+	for _, entry := range found.Data {
+		// Use the same extraction logic as in BuildIndex
+		name := ""
+		if driver, ok := entry["driver"].(map[string]interface{}); ok {
+			if n, ok := driver["name"].(string); ok {
+				name = n
+			}
+		}
+		if name == "" {
+			continue
+		}
+		position := 1
+		if posFloat, ok := entry["index"].(float64); ok {
+			position = int(posFloat) + 1
+		}
+		dr := internal.DriverResult{
+			Name:         name,
+			Position:     position,
+			TrackID:      found.TrackID,
+			ClassID:      found.ClassID,
+			Track:        found.Name,
+			Found:        true,
+			TotalEntries: len(found.Data),
+		}
+		if lapTime, ok := entry["laptime"].(string); ok {
+			dr.LapTime = lapTime
+		}
+		if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
+			timeStr := strings.TrimPrefix(relativeLaptime, "+")
+			timeStr = strings.TrimSuffix(timeStr, "s")
+			if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
+				dr.TimeDiff = timeDiff
+			}
+		}
+		if countryInterface, countryExists := entry["country"]; countryExists {
+			if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
+				if countryName, nameOk := countryMap["name"].(string); nameOk {
+					dr.Country = countryName
+				}
+			}
+		}
+		if carClassInterface, carClassExists := entry["car_class"]; carClassExists {
+			if carClassMap, carClassOk := carClassInterface.(map[string]interface{}); carClassOk {
+				if carInterface, carExists := carClassMap["car"]; carExists {
+					if carMap, carOk := carInterface.(map[string]interface{}); carOk {
+						if carName, carNameOk := carMap["name"].(string); carNameOk {
+							dr.Car = carName
+						}
+						if className, classNameOk := carMap["class-name"].(string); classNameOk {
+							dr.CarClass = className
+						}
+					}
+				}
+			}
+		}
+		if teamStr, teamOk := entry["team"].(string); teamOk && teamStr != "" {
+			dr.Team = teamStr
+		}
+		if rankStr, rankOk := entry["rank"].(string); rankOk && rankStr != "" {
+			dr.Rank = rankStr
+		}
+		if drivingModel, dmOk := entry["driving_model"].(string); dmOk && drivingModel != "" {
+			dr.Difficulty = drivingModel
+		}
+		driverResults = append(driverResults, dr)
+	}
+	// Sort by TimeDiff ascending (fastest first)
+	sort.Slice(driverResults, func(i, j int) bool {
+		return driverResults[i].TimeDiff < driverResults[j].TimeDiff
+	})
+
+	writeJSONResponse(w, map[string]interface{}{
+		"track":         found.Name,
+		"track_id":      found.TrackID,
+		"class_id":      found.ClassID,
+		"class_name":    internal.GetCarClassName(found.ClassID),
+		"total_entries": len(driverResults),
+		"results":       driverResults,
+	})
 }
 
 // writeJSONResponse writes a JSON response with proper headers

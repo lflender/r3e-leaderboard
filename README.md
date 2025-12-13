@@ -162,6 +162,49 @@ Removes all cached data. Next startup will fetch everything fresh (~6 hours).
 
 **Note:** This endpoint will be admin-only in production (API key required).
 
+### Get Leaderboard for Track/Class
+```
+GET /api/leaderboard?track=<trackID>&class=<classID>
+```
+Returns the full leaderboard for a single track/class combination, sorted by performance (fastest first).
+
+**Rate Limit:** 60 requests per minute per IP address.
+
+**Example:**
+```
+http://localhost:8080/api/leaderboard?track=9473&class=8600
+```
+
+**Response:**
+```json
+{
+  "track": "Brands Hatch Grand Prix - Grand Prix",
+  "track_id": "9473",
+  "class_id": "8600",
+  "class_name": "GTE",
+  "total_entries": 25,
+  "results": [
+    {
+      "name": "Ludo Flender",
+      "position": 8,
+      "lap_time": "1m 23.414s, +01.887s",
+      "time_diff": 1.887,
+      "country": "Belgium",
+      "car": "Porsche 911 RSR 2019",
+      "car_class": "GTE",
+      "team": "Porsche Motorsport",
+      "rank": "",
+      "difficulty": "Get Real",
+      "track": "Brands Hatch Grand Prix - Grand Prix",
+      "track_id": "9473",
+      "class_id": "8600",
+      "total_entries": 25
+    }
+    // ... more entries ...
+  ]
+}
+```
+
 ## 📊 Data Coverage
 
 - **169 Tracks** - All RaceRoom circuits and layouts
