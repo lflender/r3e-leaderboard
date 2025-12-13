@@ -191,6 +191,17 @@ func (h *Handlers) HandleStatus(w http.ResponseWriter, r *http.Request) {
 
 	detailedStatus := h.server.GetDetailedStatus()
 
+	// Add total indexed drivers (from search engine) inside data after unique_tracks
+	searchEngine := h.server.GetSearchEngine()
+	totalDrivers := 0
+	if searchEngine != nil {
+		totalDrivers = len(searchEngine.Index())
+	}
+
+	// Insert total_indexed_drivers into the data map
+	dataMap := detailedStatus
+	dataMap["total_indexed_drivers"] = totalDrivers
+
 	response := map[string]interface{}{
 		"server": map[string]interface{}{
 			"status":      "running",

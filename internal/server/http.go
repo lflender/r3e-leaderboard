@@ -60,7 +60,7 @@ func (h *HTTPServer) setupRoutes() {
 	http.HandleFunc("/api/search", h.rateLimiter.Middleware(handlers.HandleSearch))
 	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
 	http.HandleFunc("/api/clear", handlers.HandleClear)
-	http.HandleFunc("/api/status", handlers.HandleStatus)
+	http.HandleFunc("/api/status", h.rateLimiter.Middleware(handlers.HandleStatus))
 }
 
 // startWithErrorHandling starts the server with proper error handling

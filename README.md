@@ -121,12 +121,19 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 ```
 GET /api/status
 ```
-Shows server health, data statistics, and fetch timing.
+Shows server health, data statistics, **total indexed drivers**, and fetch timing.
+
+**Rate Limit:** 60 requests per minute per IP address.
 
 **Example:**
 ```
 http://localhost:8080/api/status
 ```
+
+**Response fields include:**
+- `server` - status, version, data_loaded
+- `data` - tracks loaded, entries, progress, etc. (now includes `total_indexed_drivers` after `unique_tracks`)
+- `cache` - cache status
 
 ### Refresh Data
 ```

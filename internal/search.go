@@ -34,6 +34,11 @@ type SearchEngine struct {
 	index DriverIndex
 }
 
+// Index returns the internal driver index map
+func (se *SearchEngine) Index() DriverIndex {
+	return se.index
+}
+
 // NewSearchEngine creates a new search engine
 func NewSearchEngine() *SearchEngine {
 	return &SearchEngine{
