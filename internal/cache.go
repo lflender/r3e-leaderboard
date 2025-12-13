@@ -65,6 +65,15 @@ func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	return time.Since(info.ModTime()) < dc.maxAge
 }
 
+// InvalidateCache removes a specific cache file to force refresh
+func (dc *DataCache) InvalidateCache(trackID, classID string) error {
+	filename := dc.GetCacheFileName(trackID, classID)
+	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 // SaveTrackData saves track data to cache
 func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	if err := dc.EnsureCacheDir(); err != nil {
@@ -158,9 +167,9 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	}
 
 	if len(data) > 0 {
-		fmt.Printf("✅ %s + %s: %.2fs (%d entries)\n", trackName, className, duration.Seconds(), len(data))
+		fmt.Printf("🌐 %s + %s: %.2fs → %d entries\n", trackName, className, duration.Seconds(), len(data))
 	} else {
-		fmt.Printf("⚪ %s + %s: no data\n", trackName, className)
+		fmt.Printf("🌐 %s + %s: %.2fs → no data\n", trackName, className, duration.Seconds())
 	}
 	return trackInfo, false, nil // false = fetched fresh
 }

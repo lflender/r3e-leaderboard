@@ -25,7 +25,7 @@ func GetDefaultConfig() Config {
 		},
 		Schedule: ScheduleConfig{
 			RefreshHour:     4, // 4 AM
-			IndexingMinutes: 5, // Every 5 minutes
+			IndexingMinutes: 2, // Every 2 minutes
 		},
 	}
 }

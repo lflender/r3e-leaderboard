@@ -26,16 +26,26 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, updateCallback func([]
 	updatedCount := 0
 
 	// Process each track+class combination
+	totalCombinations := len(trackConfigs) * len(classConfigs)
+	processedCount := 0
+
 	for _, trackConfig := range trackConfigs {
 		for _, classConfig := range classConfigs {
+			processedCount++
 			key := trackConfig.TrackID + "_" + classConfig.ClassID
 
-			// Force refresh this specific track+class from API (bypass cache)
-			log.Printf("🔄 Refreshing %s - %s", trackConfig.Name, classConfig.Name)
+			// Show progress every 50 combinations
+			if processedCount%50 == 0 || processedCount == 1 {
+				log.Printf("🔄 Refresh progress: %d/%d combinations (%d tracks updated)",
+					processedCount, totalCombinations, updatedCount)
+			}
+			// Force refresh by clearing this specific cache entry first
+			dataCache.InvalidateCache(trackConfig.TrackID, classConfig.ClassID)
 
+			// Now fetch fresh data from API
 			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
-				classConfig.Name, classConfig.ClassID, true) // true = force refresh
+				classConfig.Name, classConfig.ClassID, false)
 
 			if err != nil {
 				log.Printf("❌ Failed to refresh %s - %s: %v", trackConfig.Name, classConfig.Name, err)
@@ -52,11 +62,11 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, updateCallback func([]
 				updatedCount++
 			}
 
-			// Update API every 10 tracks to keep it responsive
-			if updatedCount%10 == 0 {
-				log.Printf("🔄 Intermediate update: %d tracks refreshed, updating API...", updatedCount)
+			// Update API every 100 tracks to keep it responsive (less spam)
+			if updatedCount%100 == 0 && updatedCount > 0 {
+				log.Printf("🔄 Updating API with %d fresh tracks...", updatedCount)
 				updateCallback(updatedTracks)
-				log.Printf("✅ API updated with %d fresh tracks", updatedCount)
+				log.Printf("✅ API updated (%d/%d combinations processed)", processedCount, totalCombinations)
 			}
 		}
 	}
