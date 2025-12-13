@@ -2,6 +2,28 @@
 
 A fast, searchable API for RaceRoom Racing Experience leaderboard data. Scrapes and caches leaderboards for all 169 tracks and 83 car classes, providing instant search across 45,000+ drivers and 200,000+ entries.
 
+## Core Features:
+
+⚡ Fast cache loading (~2 seconds)
+🔄 Progressive data fetching with full pagination
+🔍 Instant search (< 1ms) with complete driver info (including team)
+🛡️ Rate limiting (60 req/min)
+📅 Automatic nightly refresh
+🗂️ Smart cache management (24h validity)
+
+## API Coverage:
+
+169 tracks × 83 classes = 14,027 combinations
+45,000+ drivers searchable
+200,000+ leaderboard entries
+
+## Clean Architecture:
+
+Modular design ready for auth
+Proper error handling
+Production-grade logging
+Resource leak-free
+
 ## 🚀 Quick Start
 
 ### 1. Build the Application
