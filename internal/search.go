@@ -228,7 +228,7 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 	count := 0
 	log.Printf("🔍 DEBUG: Sample indexed drivers:")
 	for name := range se.index {
-		if count < 10 {
+		if count < 3 {
 			log.Printf("  - '%s'", name)
 			count++
 		} else {

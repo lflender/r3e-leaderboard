@@ -167,9 +167,9 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	}
 
 	if len(data) > 0 {
-		fmt.Printf("🌐 %s + %s: %.2fs → %d entries\n", trackName, className, duration.Seconds(), len(data))
+		fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
 	} else {
-		fmt.Printf("🌐 %s + %s: %.2fs → no data\n", trackName, className, duration.Seconds())
+		fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
 	}
 	return trackInfo, false, nil // false = fetched fresh
 }
