@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"r3e-leaderboard/internal"
+	"sort"
 )
 
 // Handlers manages API request handlers
@@ -51,6 +52,11 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 
 	searchEngine := h.server.GetSearchEngine()
 	results := searchEngine.SearchByIndex(driver)
+
+	// Sort results by time difference (ascending - fastest first)
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].TimeDiff < results[j].TimeDiff
+	})
 
 	// Add class names to results
 	enhancedResults := make([]map[string]interface{}, len(results))

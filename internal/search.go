@@ -2,6 +2,7 @@ package internal
 
 import (
 	"log"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -11,6 +12,7 @@ type DriverResult struct {
 	Name         string
 	Position     int
 	LapTime      string
+	TimeDiff     float64 // Time difference from leader in seconds
 	Country      string
 	Car          string
 	CarClass     string
@@ -194,6 +196,19 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
 			}
+
+			// Extract time difference from relative_laptime (e.g., "+00.068s" or empty for leader)
+			if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
+				// Parse "+00.068s" to extract numeric value
+				// Remove "+" prefix and "s" suffix, then parse as float
+				timeStr := strings.TrimPrefix(relativeLaptime, "+")
+				timeStr = strings.TrimSuffix(timeStr, "s")
+				if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
+					result.TimeDiff = timeDiff
+				}
+			}
+			// If no relative_laptime or empty, TimeDiff stays 0.0 (leader)
+
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
 					if countryName, nameOk := countryMap["name"].(string); nameOk {
