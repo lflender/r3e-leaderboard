@@ -22,6 +22,12 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 	currentCombination := 0
 
 	for _, track := range trackConfigs {
+		// Track per-track cache statistics
+		trackCachedClasses := 0
+		trackCachedEntries := 0
+		trackHasData := false
+		cacheSummaryShown := false
+
 		for _, class := range classConfigs {
 			currentCombination++
 
@@ -33,14 +39,23 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 			default:
 			}
 
-			// Show progress every 25 combinations
-			if currentCombination%25 == 0 || currentCombination == 1 {
+			// Show progress every 50 combinations
+			if currentCombination%50 == 0 || currentCombination == 1 {
 				log.Printf("🔄 Progress: %d/%d (%d with data)",
 					currentCombination, totalCombinations, len(allTrackData))
 			}
 
-			trackInfo, err := dataCache.LoadOrFetchTrackData(
-				apiClient, track.Name, track.TrackID, class.Name, class.ClassID)
+			// Check if this will be fetched (not cached)
+			willFetch := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
+
+			// If we have cached data and we're about to fetch, show cache summary first
+			if willFetch && trackCachedClasses > 0 && !cacheSummaryShown {
+				log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
+				cacheSummaryShown = true
+			}
+
+			trackInfo, fromCache, err := dataCache.LoadOrFetchTrackData(
+				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false)
 
 			if err != nil {
 				continue // Skip logging errors to reduce spam
@@ -49,6 +64,13 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 			// Only keep combinations that have data
 			if len(trackInfo.Data) > 0 {
 				allTrackData = append(allTrackData, trackInfo)
+				trackHasData = true
+
+				// Track per-track cache statistics
+				if fromCache {
+					trackCachedClasses++
+					trackCachedEntries += len(trackInfo.Data)
+				}
 			}
 
 			// Rate limiting with frequent cancellation checks
@@ -67,6 +89,11 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 				}
 				time.Sleep(100 * time.Millisecond)
 			}
+		}
+
+		// Show per-track cache summary if we haven't shown it yet and track had cached data
+		if trackCachedClasses > 0 && trackHasData && !cacheSummaryShown {
+			log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
 		}
 	}
 

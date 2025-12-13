@@ -108,20 +108,22 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string) (TrackInfo, error) {
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, verbose bool) (TrackInfo, bool, error) {
 	// Try to load from cache first
 	if dc.IsCacheValid(trackID, classID) {
 		trackInfo, err := dc.LoadTrackData(trackID, classID)
 		if err == nil {
-			fmt.Printf("📂 %s + %s: cached (%d entries)\n", trackName, className, len(trackInfo.Data))
-			return trackInfo, nil
+			if verbose {
+				fmt.Printf("📂 %s + %s: cached (%d entries)\n", trackName, className, len(trackInfo.Data))
+			}
+			return trackInfo, true, nil // true = loaded from cache
 		}
 	}
 
 	// Cache miss or expired - fetch fresh data
 	data, duration, err := apiClient.FetchLeaderboardData(trackID, classID)
 	if err != nil {
-		return TrackInfo{}, err
+		return TrackInfo{}, false, err
 	}
 
 	trackInfo := TrackInfo{
@@ -141,7 +143,7 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	} else {
 		fmt.Printf("⚪ %s + %s: no data\n", trackName, className)
 	}
-	return trackInfo, nil
+	return trackInfo, false, nil // false = fetched fresh
 }
 
 // ClearCache removes all cached files
