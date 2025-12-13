@@ -224,33 +224,18 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 	indexDuration := time.Since(indexStart)
 	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries)",
 		indexDuration.Seconds(), len(se.index), totalEntries)
-	// DEBUG: Show sample of indexed names
-	count := 0
-	log.Printf("🔍 DEBUG: Sample indexed drivers:")
-	for name := range se.index {
-		if count < 3 {
-			log.Printf("  - '%s'", name)
-			count++
-		} else {
-			break
-		}
-	}
 }
 
 // SearchByIndex performs fast indexed search for a driver
 func (se *SearchEngine) SearchByIndex(driverName string) []DriverResult {
 	lowerName := strings.ToLower(driverName)
-	log.Printf("🔍 DEBUG: Searching for '%s' (normalized: '%s') in index with %d drivers",
-		driverName, lowerName, len(se.index))
 
 	// Exact match first
 	if results, exists := se.index[lowerName]; exists {
-		log.Printf("🎯 DEBUG: Found exact match with %d results", len(results))
 		return results
 	}
 
 	// Partial match fallback
-	log.Printf("🔍 DEBUG: No exact match, trying partial match...")
 	var partialResults []DriverResult
 	for indexedName, results := range se.index {
 		if strings.Contains(indexedName, lowerName) {

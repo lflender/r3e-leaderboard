@@ -47,9 +47,9 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 		// Create a callback to update server incrementally during loading
 		progressCallback := func(currentTracks []internal.TrackInfo) {
 			o.apiServer.UpdateData(currentTracks)
-			// Reduced logging - only show major milestones
-			if len(currentTracks)%500 == 0 {
-				log.Printf("📊 %d tracks/class combinations loaded", len(currentTracks))
+			// Reduced logging - only show major milestones (skip initial 0)
+			if len(currentTracks)%500 == 0 && len(currentTracks) > 0 {
+				log.Printf("📊 %d track/class combinations loaded", len(currentTracks))
 			}
 		}
 
@@ -120,7 +120,7 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 				if len(tracks) > 0 {
 					searchEngine := o.apiServer.GetSearchEngine()
 					searchEngine.BuildIndex(tracks)
-					log.Printf("🔍 Index updated: %d tracks searchable", len(tracks))
+					log.Printf("🔍 Index updated: %d track/class combinations searchable", len(tracks))
 				}
 			} else if !o.fetchInProgress {
 				log.Println("⏹️ Stopping periodic indexing - data loading completed")

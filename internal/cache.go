@@ -63,16 +63,7 @@ func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	}
 
 	// Check if file is not too old
-	age := time.Since(info.ModTime())
-	isValid := age < dc.maxAge
-
-	// Debug logging for cache validity (can be removed later)
-	if !isValid {
-		log.Printf("🕰️ Cache expired: %s + %s (%.1f hours old)",
-			trackID, classID, age.Hours())
-	}
-
-	return isValid
+	return time.Since(info.ModTime()) < dc.maxAge
 }
 
 // SaveTrackData saves track data to cache

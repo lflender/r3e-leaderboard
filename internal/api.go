@@ -2,6 +2,7 @@ package internal
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"time"
@@ -43,7 +44,7 @@ func NewAPIClient() *APIClient {
 	}
 }
 
-// FetchLeaderboardData retrieves leaderboard data from RaceRoom API
+// FetchLeaderboardData retrieves leaderboard data from RaceRoom API with pagination
 func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[string]interface{}, time.Duration, error) {
 	startTime := time.Now()
 
@@ -64,34 +65,57 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 	}
 	resp.Body.Close()
 
-	// API call for leaderboard data
-	apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=0&count=1500"
+	// Fetch data with pagination (API limits to 1500 per request)
+	allResults := []map[string]interface{}{}
+	pageSize := 1500
+	start := 0
 
-	apiReq, err := http.NewRequest("GET", apiURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	apiReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	apiReq.Header.Set("Accept", "application/json")
-	apiReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	apiReq.Header.Set("Referer", mainURL)
+	for {
+		// API call for leaderboard data
+		apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=" + fmt.Sprintf("%d", start) + "&count=" + fmt.Sprintf("%d", pageSize)
 
-	apiResp, err := api.client.Do(apiReq)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer apiResp.Body.Close()
+		apiReq, err := http.NewRequest("GET", apiURL, nil)
+		if err != nil {
+			return nil, 0, err
+		}
+		apiReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		apiReq.Header.Set("Accept", "application/json")
+		apiReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+		apiReq.Header.Set("Referer", mainURL)
 
-	if apiResp.StatusCode != 200 {
-		return nil, 0, err
-	}
+		apiResp, err := api.client.Do(apiReq)
+		if err != nil {
+			return nil, 0, err
+		}
 
-	// Parse JSON response
-	var response APIResponse
-	if err := json.NewDecoder(apiResp.Body).Decode(&response); err != nil {
-		return nil, 0, err
+		if apiResp.StatusCode != 200 {
+			apiResp.Body.Close()
+			return nil, 0, err
+		}
+
+		// Parse JSON response
+		var response APIResponse
+		if err := json.NewDecoder(apiResp.Body).Decode(&response); err != nil {
+			apiResp.Body.Close()
+			return nil, 0, err
+		}
+		apiResp.Body.Close() // Close immediately after reading
+
+		results := response.Context.C.Results
+		if len(results) == 0 {
+			break // No more results
+		}
+
+		allResults = append(allResults, results...)
+
+		// If we got fewer results than the page size, we're done
+		if len(results) < pageSize {
+			break
+		}
+
+		start += pageSize
 	}
 
 	duration := time.Since(startTime)
-	return response.Context.C.Results, duration, nil
+	return allResults, duration, nil
 }
