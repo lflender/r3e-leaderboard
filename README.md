@@ -60,7 +60,9 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 ```
 GET /api/search?driver=name
 ```
-Returns all leaderboard entries for a driver across all tracks and classes.
+Returns all leaderboard entries for a driver across all tracks and classes, **sorted by performance** (fastest first).
+
+**Rate Limit:** 60 requests per minute per IP address.
 
 **Example:**
 ```powershell
@@ -76,18 +78,43 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
   "results": [
     {
       "name": "Ludo Flender",
-      "track": "Brands Hatch Grand Prix - Grand Prix",
-      "track_id": "9473",
-      "class_name": "GTE",
-      "car": "Porsche 911 RSR 2019",
       "position": 8,
       "lap_time": "1m 23.414s, +01.887s",
+      "time_diff": 1.887,
+      "country": "Belgium",
+      "car": "Porsche 911 RSR 2019",
+      "car_class": "GTE",
+      "class_name": "GTE",
+      "team": "Porsche Motorsport",
+      "rank": "",
+      "difficulty": "Get Real",
+      "track": "Brands Hatch Grand Prix - Grand Prix",
+      "track_id": "9473",
+      "class_id": "8600",
       "total_entries": 25
     }
   ],
   "search_time": "< 1ms",
   "status": "ready"
 }
+```
+
+**Response Fields:**
+- `name` - Driver name
+- `position` - Position in leaderboard (1-based)
+- `lap_time` - Formatted lap time with gap to leader
+- `time_diff` - Time difference from leader in seconds (0.0 = leader)
+- `country` - Driver's country
+- `car` - Car model used
+- `car_class` - Car class abbreviation
+- `class_name` - Full car class name
+- `team` - Team/livery name (empty if none)
+- `rank` - Driver rank: A, B, C, D, or empty (no rank)
+- `difficulty` - Difficulty setting: "Get Real", "Amateur", or "Novice"
+- `track` - Track name and layout
+- `track_id` - RaceRoom track ID
+- `class_id` - RaceRoom class ID
+- `total_entries` - Total number of entries in that leaderboard
 ```
 
 ### Server Status
@@ -109,6 +136,8 @@ POST /api/refresh?trackID=9473    # Refresh single track
 
 Triggers background refresh of leaderboard data from RaceRoom API.
 
+**Note:** This endpoint will be admin-only in production (API key required).
+
 **Example:**
 ```powershell
 # Refresh all data (nightly automatic refresh)
@@ -124,22 +153,34 @@ POST /api/clear
 ```
 Removes all cached data. Next startup will fetch everything fresh (~6 hours).
 
+**Note:** This endpoint will be admin-only in production (API key required).
+
 ## 📊 Data Coverage
 
 - **169 Tracks** - All RaceRoom circuits and layouts
 - **83 Car Classes** - DTM, WTCC, GT3, Formula, Historic, etc.
 - **14,027 Combinations** - Every track + class pairing
 - **45,000+ Drivers** - Searchable by name
-- **200,000+ Entries** - Complete leaderboard data
+- **200,000+ Entries** - Complete leaderboard data with full pagination support
+
+## 🛡️ Security Features
+
+- **Rate Limiting**: 60 requests/minute per IP on search endpoint
+- **Input Validation**: 
+  - Driver names limited to 100 characters
+  - Track IDs validated (numeric only, max 10 digits)
+- **JSON Sanitization**: All outputs properly escaped
+- **Future**: Admin endpoints will require API key authentication
 
 ## ⚙️ How It Works
 
 ### Initial Startup (First Run)
 1. Server starts immediately on port 8080
 2. Fetches all 14,027 track/class combinations from RaceRoom API (~6 hours)
-3. Saves data to local cache (`cache/` directory)
-4. Updates search index every 5 minutes during fetch
-5. API is searchable throughout the entire process
+3. Uses pagination to get complete results (handles 1500+ entry leaderboards)
+4. Saves data to local cache (`cache/` directory)
+5. Updates search index every 5 minutes during fetch
+6. API is searchable throughout the entire process
 
 ### Subsequent Startups (With Cache)
 1. Loads cached data in ~2 seconds
@@ -147,8 +188,15 @@ Removes all cached data. Next startup will fetch everything fresh (~6 hours).
 3. **API is ready to search in ~3 seconds**
 4. Fetches missing/expired data in background
 
+### Search Results
+- **Instant search** (< 1ms) using in-memory index
+- **Sorted by performance** - fastest times first
+- **Complete driver data** - team, rank, difficulty, time gaps
+- **Case-insensitive** - finds "ludo flender" or "LUDO FLENDER"
+- **Partial matches** - searches for partial names
+
 ### Automatic Refresh
-- Runs daily at 4:00 AM
+- Runs daily at 4:00 AM (configurable)
 - Updates data progressively (no downtime)
 - Refreshes index every 100 tracks
 - API stays responsive throughout
@@ -230,6 +278,13 @@ Edit `config.json` to customize:
 
 ### Missing Data After Interrupted Refresh
 **No data lost!** The refresh system preserves existing cache. Just restart and it will continue from where it left off.
+
+### Rate Limit Exceeded
+```
+❌ Rate limit exceeded. Please try again later.
+```
+**Cause:** More than 60 search requests in 1 minute from your IP.  
+**Solution:** Wait 1 minute and try again. Consider caching results on your end if making frequent searches.
 
 ### Slow Search Results
 **Normal on first search.** Index builds on startup. Subsequent searches are instant (< 1ms).
