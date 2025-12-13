@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -46,7 +47,8 @@ func (dc *DataCache) EnsureCacheDir() error {
 
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
-	return filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s_class_%s.json", trackID, classID))
+	trackDir := filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s", trackID))
+	return filepath.Join(trackDir, fmt.Sprintf("class_%s.json.gz", classID))
 }
 
 // IsCacheValid checks if cached data exists and is not expired
@@ -69,6 +71,12 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 		return err
 	}
 
+	// Ensure track-specific directory exists
+	trackDir := filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s", trackInfo.TrackID))
+	if err := os.MkdirAll(trackDir, 0755); err != nil {
+		return err
+	}
+
 	cached := CachedTrackData{
 		TrackInfo:  trackInfo,
 		CachedAt:   time.Now(),
@@ -84,7 +92,11 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	}
 	defer file.Close()
 
-	encoder := json.NewEncoder(file)
+	// Create gzip writer
+	gzWriter := gzip.NewWriter(file)
+	defer gzWriter.Close()
+
+	encoder := json.NewEncoder(gzWriter)
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(cached)
 }
@@ -99,8 +111,15 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 	}
 	defer file.Close()
 
+	// Create gzip reader
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return TrackInfo{}, err
+	}
+	defer gzReader.Close()
+
 	var cached CachedTrackData
-	if err := json.NewDecoder(file).Decode(&cached); err != nil {
+	if err := json.NewDecoder(gzReader).Decode(&cached); err != nil {
 		return TrackInfo{}, err
 	}
 
@@ -155,7 +174,7 @@ func (dc *DataCache) ClearCache() error {
 func (dc *DataCache) GetCacheInfo() []string {
 	var info []string
 
-	files, err := filepath.Glob(filepath.Join(dc.cacheDir, "track_*_class_*.json"))
+	files, err := filepath.Glob(filepath.Join(dc.cacheDir, "track_*", "class_*.json.gz"))
 	if err != nil {
 		return info
 	}
