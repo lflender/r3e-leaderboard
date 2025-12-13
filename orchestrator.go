@@ -49,7 +49,7 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 			o.apiServer.UpdateData(currentTracks)
 			// Reduced logging - only show major milestones
 			if len(currentTracks)%500 == 0 {
-				log.Printf("📊 %d tracks loaded", len(currentTracks))
+				log.Printf("📊 %d tracks/class combinations loaded", len(currentTracks))
 			}
 		}
 

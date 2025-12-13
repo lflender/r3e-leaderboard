@@ -68,7 +68,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			if willFetch && !cacheLoadingComplete && len(allTrackData) > 0 {
 				cacheLoadingComplete = true
 				if cacheCompleteCallback != nil {
-					log.Printf("📊 Cache loading complete - %d tracks loaded, building initial index...", len(allTrackData))
+					log.Printf("📊 Cache loading complete - %d tracks/class combinations loaded, building initial index...", len(allTrackData))
 					cacheCompleteCallback(allTrackData)
 					log.Println("✅ Initial index ready - API is now searchable while fetching continues")
 				}
@@ -100,6 +100,11 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			if len(trackInfo.Data) > 0 {
 				allTrackData = append(allTrackData, trackInfo)
 				trackHasData = true
+
+				// Update server every 10 new tracks for more responsive periodic indexing
+				if progressCallback != nil && len(allTrackData)%10 == 0 {
+					progressCallback(allTrackData)
+				}
 
 				// Track per-track cache statistics
 				if fromCache {

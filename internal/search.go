@@ -140,7 +140,7 @@ func (se *SearchEngine) BuildIndex(tracks []TrackInfo) {
 	se.index = make(DriverIndex)
 	totalEntries := 0
 
-	log.Printf("🔄 Building driver index from %d track combinations...", len(tracks))
+	log.Printf("🔄 Building driver index from %d track/class combinations...", len(tracks))
 
 	for _, track := range tracks {
 		totalEntries += len(track.Data)
