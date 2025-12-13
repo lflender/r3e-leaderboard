@@ -1,13 +1,11 @@
 package main
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"log"
-	"os"
 	"r3e-leaderboard/internal"
-	"strings"
+	"r3e-leaderboard/internal/apiserver"
+	"r3e-leaderboard/internal/http"
 )
 
 var (
@@ -17,96 +15,74 @@ var (
 )
 
 func main() {
-	log.Println("🏎️  RaceRoom Leaderboard Search System")
+	log.Println("🏎️  RaceRoom Leaderboard API Server")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 
 	// Initialize cancellation context
 	fetchContext, fetchCancel = context.WithCancel(context.Background())
 
-	// Load all track data at startup
-	tracks := internal.LoadAllTrackData(fetchContext)
-
-	// Create search engine and build initial index
+	// Create API server
 	searchEngine := internal.NewSearchEngine()
-	log.Printf("🔍 DEBUG: About to build index with %d tracks", len(tracks))
-	searchEngine.BuildIndex(tracks)
+	apiServer := apiserver.New(searchEngine)
 
-	// Start background scheduler for automatic refresh
-	scheduler := internal.NewScheduler()
-	scheduler.Start(func() {
-		log.Println("🔄 Refreshing all track data...")
-		newCtx, newCancel := context.WithCancel(context.Background())
-		fetchContext, fetchCancel = newCtx, newCancel
-		tracks = internal.LoadAllTrackData(fetchContext)
-		searchEngine.BuildIndex(tracks)
-		log.Println("✅ Automatic refresh completed")
-	})
+	// Start HTTP server
+	httpServer := http.New(apiServer, 8080)
+	httpServer.Start()
 
-	log.Printf("✅ Ready! Loaded data for %d tracks", len(tracks))
-	log.Println("Type a driver name to search, 'fetch' to refresh data, 'stop' to stop fetching, 'clear' to clear cache, or 'quit' to exit")
+	// Start background data loading
+	startBackgroundDataLoading(apiServer)
 
-	// Interactive search loop
-	runInteractiveSearch(tracks, searchEngine)
+	// Start scheduled refresh
+	startScheduledRefresh(apiServer)
+
+	// Keep main goroutine alive
+	select {}
 }
 
-// runInteractiveSearch runs the interactive search loop
-func runInteractiveSearch(tracks []internal.TrackInfo, searchEngine *internal.SearchEngine) {
-	scanner := bufio.NewScanner(os.Stdin)
+func startBackgroundDataLoading(apiServer *apiserver.APIServer) {
+	go func() {
+		log.Println("🔄 Starting background data loading...")
+		fetchInProgress = true
 
-	for {
-		statusText := ""
+		tracks := internal.LoadAllTrackData(fetchContext)
+
+		log.Println("🔄 Building search index...")
+		searchEngine := apiServer.GetSearchEngine()
+		searchEngine.BuildIndex(tracks)
+		log.Println("✅ Search index built successfully")
+
+		// Update server state with loaded data
+		apiServer.UpdateData(tracks)
+
+		fetchInProgress = false
+		log.Printf("✅ Data loading complete! API fully operational with %d tracks", len(tracks))
+	}()
+}
+
+func startScheduledRefresh(apiServer *apiserver.APIServer) {
+	scheduler := internal.NewScheduler()
+	scheduler.Start(func() {
+		// Skip scheduled refresh if manual fetch is already in progress
 		if fetchInProgress {
-			statusText = " (FETCHING - cannot stop during Windows terminal limitations)"
-		}
-		fmt.Printf("🔍 Enter driver name ('fetch', 'clear', 'quit')%s: ", statusText)
-
-		if !scanner.Scan() {
-			break
+			log.Println("⏭️ Skipping scheduled refresh - manual fetch already in progress")
+			return
 		}
 
-		input := strings.TrimSpace(scanner.Text())
+		log.Println("🔄 Starting scheduled refresh...")
+		fetchInProgress = true
 
-		if strings.ToLower(input) == "quit" {
-			if fetchInProgress {
-				fetchCancel()
-			}
-			log.Println("👋 Goodbye!")
-			break
-		}
+		newCtx, newCancel := context.WithCancel(context.Background())
+		fetchContext, fetchCancel = newCtx, newCancel
+		tracks := internal.LoadAllTrackData(fetchContext)
 
-		if strings.ToLower(input) == "fetch" {
-			if fetchInProgress {
-				log.Println("⚠️  Fetch already in progress. Wait for it to complete.")
-				continue
-			}
-			log.Println("🔄 Manual refresh triggered...")
-			log.Println("⚠️  Note: Due to Windows terminal limitations, you cannot stop fetch once started.")
-			log.Println("    The process will continue until completion or you close the terminal.")
+		log.Println("🔄 Rebuilding search index after scheduled refresh...")
+		searchEngine := apiServer.GetSearchEngine()
+		searchEngine.BuildIndex(tracks)
+		log.Println("✅ Search index rebuilt successfully")
 
-			fetchInProgress = true
-			tracks = internal.ForceRefreshAllTracks(context.Background())
-			searchEngine.BuildIndex(tracks)
-			fetchInProgress = false
-			log.Printf("✅ Refresh complete! Data updated for %d combinations", len(tracks))
-			continue
-		}
+		apiServer.UpdateData(tracks)
 
-		if strings.ToLower(input) == "clear" {
-			log.Println("🗑️  Clearing cache...")
-			dataCache := internal.NewDataCache()
-			if err := dataCache.ClearCache(); err != nil {
-				log.Printf("❌ Failed to clear cache: %v", err)
-			} else {
-				log.Println("✅ Cache cleared successfully! All JSON files removed.")
-			}
-			continue
-		}
-
-		if input == "" {
-			continue
-		}
-
-		// Search across all tracks
-		searchEngine.SearchAllTracks(input, tracks)
-	}
+		fetchInProgress = false
+		log.Println("✅ Scheduled refresh completed")
+	})
 }
