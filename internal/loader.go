@@ -3,7 +3,6 @@ package internal
 import (
 	"context"
 	"log"
-	"sync"
 	"time"
 )
 
@@ -21,18 +20,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	log.Printf("📊 Loading data for %d tracks × %d classes = %d combinations...",
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
-	// First, try to load all cached data in parallel (much faster)
-	log.Println("🚀 Fast-loading cached data in parallel...")
-	cachedData := loadCachedDataParallel(ctx, trackConfigs, classConfigs)
-	log.Printf("📂 Loaded %d cached combinations in parallel", len(cachedData))
-
-	// Update progress immediately with cached data
-	if progressCallback != nil && len(cachedData) > 0 {
-		progressCallback(cachedData)
-	}
-
 	apiClient := NewAPIClient()
-	allTrackData := cachedData
+	var allTrackData []TrackInfo
 	dataCache := NewDataCache()
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
@@ -172,77 +161,4 @@ func ForceRefreshAllTracks(ctx context.Context) []TrackInfo {
 
 	fetchTracker.SaveFetchEnd()
 	return result
-}
-
-// loadCachedDataParallel loads all cached data in parallel for much faster startup
-func loadCachedDataParallel(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig) []TrackInfo {
-	dataCache := NewDataCache()
-
-	type cacheJob struct {
-		track TrackConfig
-		class CarClassConfig
-	}
-
-	// Create jobs for all combinations
-	jobs := make(chan cacheJob, len(trackConfigs)*len(classConfigs))
-	results := make(chan TrackInfo, len(trackConfigs)*len(classConfigs))
-
-	// Start 10 workers for parallel cache loading
-	var wg sync.WaitGroup
-	numWorkers := 10
-
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobs {
-				// Check cancellation
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-
-				// Only load if cached (no API calls here)
-				if dataCache.IsCacheValid(job.track.TrackID, job.class.ClassID) {
-					trackInfo, fromCache, err := dataCache.LoadOrFetchTrackData(
-						nil, job.track.Name, job.track.TrackID,
-						job.class.Name, job.class.ClassID, false)
-
-					if err == nil && fromCache && len(trackInfo.Data) > 0 {
-						results <- trackInfo
-					}
-				}
-			}
-		}()
-	}
-
-	// Send all jobs
-	for _, track := range trackConfigs {
-		for _, class := range classConfigs {
-			select {
-			case <-ctx.Done():
-				close(jobs)
-				wg.Wait()
-				close(results)
-				return nil
-			case jobs <- cacheJob{track, class}:
-			}
-		}
-	}
-	close(jobs)
-
-	// Wait for workers to finish
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect results
-	var cachedData []TrackInfo
-	for trackInfo := range results {
-		cachedData = append(cachedData, trackInfo)
-	}
-
-	return cachedData
 }
