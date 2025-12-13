@@ -37,6 +37,20 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 	currentCombination := 0
+
+	// Check if we'll need any API fetching (for progress display)
+	needsAPIFetching := false
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			if !dataCache.IsCacheValid(track.TrackID, class.ClassID) {
+				needsAPIFetching = true
+				break
+			}
+		}
+		if needsAPIFetching {
+			break
+		}
+	}
 	hasFetchedFromAPI := false
 
 	for _, track := range trackConfigs {
@@ -57,8 +71,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			default:
 			}
 
-			// Show progress every 50 combinations and update callback
-			if currentCombination%50 == 0 || currentCombination == 1 {
+			// Show progress every 50 combinations ONLY if we need API fetching
+			if (currentCombination%50 == 0 || currentCombination == 1) && needsAPIFetching {
 				log.Printf("🔄 Progress: %d/%d (%d with data)",
 					currentCombination, totalCombinations, len(allTrackData))
 
