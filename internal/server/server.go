@@ -3,12 +3,15 @@ package server
 import (
 	"r3e-leaderboard/internal"
 	"sync"
+	"time"
 )
 
 // APIServer holds the application state for API endpoints
 type APIServer struct {
 	tracks       []internal.TrackInfo
 	searchEngine *internal.SearchEngine
+	fetchTracker *internal.FetchTracker
+	isFetching   bool
 	mutex        sync.RWMutex
 }
 
@@ -16,8 +19,8 @@ type APIServer struct {
 func New(searchEngine *internal.SearchEngine) *APIServer {
 	return &APIServer{
 		tracks:       []internal.TrackInfo{},
-		searchEngine: searchEngine,
-	}
+		searchEngine: searchEngine, fetchTracker: internal.NewFetchTracker(),
+		isFetching: false}
 }
 
 // UpdateData safely updates the server's data and search engine
@@ -63,6 +66,24 @@ func (s *APIServer) GetSearchEngine() *internal.SearchEngine {
 	return s.searchEngine
 }
 
+// SetFetchStart marks the start of an API fetch operation
+func (s *APIServer) SetFetchStart() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	s.isFetching = true
+	s.fetchTracker.SaveFetchStart()
+}
+
+// SetFetchEnd marks the end of an API fetch operation
+func (s *APIServer) SetFetchEnd() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+
+	s.isFetching = false
+	s.fetchTracker.SaveFetchEnd()
+}
+
 // GetDetailedStatus returns detailed server status for monitoring
 func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 	s.mutex.RLock()
@@ -93,6 +114,16 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 		progressPercent = (float64(len(tracks)) / float64(expectedCombinations)) * 100.0
 	}
 
+	// Get fetch timestamps from persistent storage
+	fetchTimestamps, _ := s.fetchTracker.LoadTimestamps()
+
+	// Calculate fetch duration if both times are set
+	var fetchDuration *time.Duration
+	if !fetchTimestamps.LastFetchStart.IsZero() && !fetchTimestamps.LastFetchEnd.IsZero() {
+		duration := fetchTimestamps.LastFetchEnd.Sub(fetchTimestamps.LastFetchStart)
+		fetchDuration = &duration
+	}
+
 	return map[string]interface{}{
 		"status":                loadingStatus,
 		"tracks_loaded":         len(tracks),
@@ -101,5 +132,11 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 		"progress_percent":      progressPercent,
 		"unique_tracks":         len(tracksByName),
 		"tracks_by_name":        tracksByName,
+		"fetching": map[string]interface{}{
+			"currently_fetching":  s.isFetching,
+			"last_fetch_start":    fetchTimestamps.LastFetchStart,
+			"last_fetch_end":      fetchTimestamps.LastFetchEnd,
+			"last_fetch_duration": fetchDuration,
+		},
 	}
 }

@@ -14,6 +14,7 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
 func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo)) []TrackInfo {
+	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
 
@@ -36,6 +37,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 	currentCombination := 0
+	hasFetchedFromAPI := false
 
 	for _, track := range trackConfigs {
 		// Track per-track cache statistics
@@ -91,6 +93,12 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				if fromCache {
 					trackCachedClasses++
 					trackCachedEntries += len(trackInfo.Data)
+				} else {
+					// This was fetched from API - track fetch timing
+					if !hasFetchedFromAPI {
+						fetchTracker.SaveFetchStart()
+						hasFetchedFromAPI = true
+					}
 				}
 			}
 
@@ -124,6 +132,11 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		}
 	}
 
+	// Save fetch end time if we did any API fetching
+	if hasFetchedFromAPI {
+		fetchTracker.SaveFetchEnd()
+	}
+
 	log.Printf("✅ Loaded %d combinations with data (out of %d total)",
 		len(allTrackData), totalCombinations)
 	return allTrackData
@@ -131,6 +144,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 // ForceRefreshAllTracks forces a refresh of all track data, bypassing cache
 func ForceRefreshAllTracks(ctx context.Context) []TrackInfo {
+	fetchTracker := NewFetchTracker()
+	fetchTracker.SaveFetchStart()
+
 	// Clear existing cache to force fresh downloads
 	dataCache := NewDataCache()
 	if err := dataCache.ClearCache(); err != nil {
@@ -138,7 +154,10 @@ func ForceRefreshAllTracks(ctx context.Context) []TrackInfo {
 	}
 
 	// Reload all track data (this will fetch fresh data since cache is cleared)
-	return LoadAllTrackData(ctx)
+	result := LoadAllTrackData(ctx)
+
+	fetchTracker.SaveFetchEnd()
+	return result
 }
 
 // loadCachedDataParallel loads all cached data in parallel for much faster startup

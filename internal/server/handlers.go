@@ -82,40 +82,6 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, response)
 }
 
-// HandleTracks returns information about loaded tracks
-func (h *Handlers) HandleTracks(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" {
-		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	tracks := h.server.GetTracks()
-
-	totalEntries := 0
-	trackMap := make(map[string][]string)
-
-	for _, track := range tracks {
-		totalEntries += len(track.Data)
-		trackMap[track.Name] = append(trackMap[track.Name], internal.GetCarClassName(track.ClassID))
-	}
-
-	response := map[string]interface{}{
-		"total_combinations": len(tracks),
-		"total_entries":      totalEntries,
-		"tracks":             trackMap,
-	}
-
-	// Add loading status if no data yet
-	if len(tracks) == 0 {
-		response["status"] = "loading"
-		response["message"] = "Data is still loading from cache/API..."
-	} else {
-		response["status"] = "ready"
-	}
-
-	writeJSONResponse(w, response)
-}
-
 // HandleRefresh triggers a data refresh
 func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {

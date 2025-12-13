@@ -19,6 +19,8 @@ var (
 		current int
 		total   int
 	}
+	lastScrapeStart time.Time
+	lastScrapeEnd   time.Time
 )
 
 func main() {
@@ -57,9 +59,15 @@ func GetFetchProgress() (bool, int, int) {
 	return fetchInProgress, fetchProgress.current, fetchProgress.total
 }
 
+// GetScrapeTimestamps returns the last scraping start and end times
+func GetScrapeTimestamps() (time.Time, time.Time, bool) {
+	return lastScrapeStart, lastScrapeEnd, fetchInProgress
+}
+
 func startBackgroundDataLoading(apiServer *server.APIServer) {
 	go func() {
 		log.Println("🔄 Starting background data loading...")
+		lastScrapeStart = time.Now()
 		fetchInProgress = true
 
 		// Create a callback to update server incrementally during loading
@@ -81,6 +89,7 @@ func startBackgroundDataLoading(apiServer *server.APIServer) {
 		// Final update with all data
 		apiServer.UpdateData(tracks)
 
+		lastScrapeEnd = time.Now()
 		fetchInProgress = false
 		log.Printf("✅ Data loading complete! API fully operational with %d tracks", len(tracks))
 	}()

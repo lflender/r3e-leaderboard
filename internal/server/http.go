@@ -39,7 +39,7 @@ func (h *HTTPServer) Start() {
 func (h *HTTPServer) logEndpoints() {
 	log.Printf("📖 API Documentation:")
 	log.Printf("   GET  /api/search?driver=name  - Search for driver")
-	log.Printf("   GET  /api/tracks              - List tracks info")
+
 	log.Printf("   GET  /api/status              - Server status & metrics")
 	log.Printf("   POST /api/refresh             - Refresh data")
 	log.Printf("   POST /api/clear               - Clear cache")
@@ -55,7 +55,6 @@ func (h *HTTPServer) setupRoutes() {
 
 	// API routes
 	http.HandleFunc("/api/search", handlers.HandleSearch)
-	http.HandleFunc("/api/tracks", handlers.HandleTracks)
 	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
 	http.HandleFunc("/api/clear", handlers.HandleClear)
 	http.HandleFunc("/api/status", handlers.HandleStatus)
