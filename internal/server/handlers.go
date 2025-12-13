@@ -22,13 +22,13 @@ func NewHandlers(apiServer *APIServer) *Handlers {
 // HandleSearch handles driver search requests
 func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	driver := r.URL.Query().Get("driver")
 	if driver == "" {
-		http.Error(w, "Missing 'driver' parameter", http.StatusBadRequest)
+		writeErrorResponse(w, "Missing 'driver' parameter", http.StatusBadRequest)
 		return
 	}
 
@@ -83,7 +83,7 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 // HandleTracks returns information about loaded tracks
 func (h *Handlers) HandleTracks(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "GET" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -117,17 +117,25 @@ func (h *Handlers) HandleTracks(w http.ResponseWriter, r *http.Request) {
 // HandleRefresh triggers a data refresh
 func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// This needs to be handled at the main level since fetchInProgress is global
-	// For now, we'll return a simple response
 	log.Println("🔄 API triggered data refresh")
 
+	// Start refresh in background using the internal refresh system
+	go func() {
+		currentTracks := h.server.GetTracks()
+		internal.PerformIncrementalRefresh(currentTracks, func(updatedTracks []internal.TrackInfo) {
+			searchEngine := h.server.GetSearchEngine()
+			searchEngine.BuildIndex(updatedTracks)
+			h.server.UpdateData(updatedTracks)
+		})
+	}()
+
 	response := map[string]interface{}{
-		"message": "Manual refresh functionality needs to be implemented at main level",
-		"status":  "not_implemented",
+		"message": "Manual refresh started in background",
+		"status":  "in_progress",
 	}
 
 	writeJSONResponse(w, response)
@@ -136,7 +144,7 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 // HandleClear clears the cache
 func (h *Handlers) HandleClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -144,7 +152,7 @@ func (h *Handlers) HandleClear(w http.ResponseWriter, r *http.Request) {
 
 	dataCache := internal.NewDataCache()
 	if err := dataCache.ClearCache(); err != nil {
-		http.Error(w, "Failed to clear cache: "+err.Error(), http.StatusInternalServerError)
+		writeErrorResponse(w, "Failed to clear cache: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -156,9 +164,51 @@ func (h *Handlers) HandleClear(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, response)
 }
 
+// HandleStatus returns server status and metrics
+func (h *Handlers) HandleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	detailedStatus := h.server.GetDetailedStatus()
+
+	response := map[string]interface{}{
+		"server": map[string]interface{}{
+			"status":      "running",
+			"version":     "1.0.0",
+			"data_loaded": h.server.IsDataLoaded(),
+		},
+		"data": detailedStatus,
+		"cache": map[string]interface{}{
+			"enabled": true,
+			"type":    "compressed_json",
+		},
+	}
+
+	writeJSONResponse(w, response)
+}
+
 // writeJSONResponse writes a JSON response with proper headers
 func writeJSONResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(data)
+}
+
+// writeErrorResponse writes an error response with proper HTTP status
+func writeErrorResponse(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(statusCode)
+
+	response := map[string]interface{}{
+		"error":  message,
+		"status": "error",
+		"code":   statusCode,
+	}
+
+	json.NewEncoder(w).Encode(response)
 }

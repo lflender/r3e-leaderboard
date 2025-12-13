@@ -3,19 +3,29 @@ package main
 import (
 	"context"
 	"log"
+	"os"
+	"os/signal"
 	"r3e-leaderboard/internal"
 	"r3e-leaderboard/internal/server"
+	"syscall"
 	"time"
 )
 
 var (
 	fetchContext    context.Context
 	fetchInProgress bool
+	fetchProgress   struct {
+		current int
+		total   int
+	}
 )
 
 func main() {
 	log.Println("🏎️  RaceRoom Leaderboard API Server")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
+
+	// Load configuration
+	config := internal.GetDefaultConfig()
 
 	// Initialize context
 	fetchContext = context.Background()
@@ -25,20 +35,25 @@ func main() {
 	apiServer := server.New(searchEngine)
 
 	// Start HTTP server
-	httpServer := server.NewHTTPServer(apiServer, 8080)
+	httpServer := server.NewHTTPServer(apiServer, config.Server.Port)
 	httpServer.Start()
 
 	// Start background data loading
 	startBackgroundDataLoading(apiServer)
 
-	// Start periodic indexing (every hour during data loading)
-	startPeriodicIndexing(apiServer)
+	// Start periodic indexing (configurable frequency during data loading)
+	startPeriodicIndexing(apiServer, config.Schedule.IndexingMinutes)
 
 	// Start scheduled refresh
 	startScheduledRefresh(apiServer)
 
-	// Keep main goroutine alive
-	select {}
+	// Wait for shutdown signal
+	waitForShutdown()
+}
+
+// GetFetchProgress returns current fetch progress for status endpoint
+func GetFetchProgress() (bool, int, int) {
+	return fetchInProgress, fetchProgress.current, fetchProgress.total
 }
 
 func startBackgroundDataLoading(apiServer *server.APIServer) {
@@ -86,24 +101,26 @@ func startScheduledRefresh(apiServer *server.APIServer) {
 	})
 }
 
-func startPeriodicIndexing(apiServer *server.APIServer) {
+func startPeriodicIndexing(apiServer *server.APIServer, intervalMinutes int) {
 	go func() {
-		// Wait 1 hour before first indexing to let some data accumulate
-		time.Sleep(1 * time.Hour)
+		interval := time.Duration(intervalMinutes) * time.Minute
 
-		ticker := time.NewTicker(1 * time.Hour)
+		// Wait one interval before first indexing to let some data accumulate
+		time.Sleep(interval)
+
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for range ticker.C {
 			// Only index if we're still fetching and have some data
 			if fetchInProgress && apiServer.GetTrackCount() > 0 {
-				log.Printf("🔄 Performing hourly indexing with %d tracks loaded so far...", apiServer.GetTrackCount())
+				log.Printf("🔄 Performing periodic indexing (%dm interval) with %d tracks loaded so far...", intervalMinutes, apiServer.GetTrackCount())
 
 				tracks := apiServer.GetTracks()
 				if len(tracks) > 0 {
 					searchEngine := apiServer.GetSearchEngine()
 					searchEngine.BuildIndex(tracks)
-					log.Printf("✅ Hourly indexing complete - %d tracks indexed", len(tracks))
+					log.Printf("✅ Periodic indexing complete - %d tracks indexed", len(tracks))
 				}
 			} else if !fetchInProgress {
 				log.Println("⏹️ Stopping periodic indexing - data loading completed")
@@ -111,4 +128,22 @@ func startPeriodicIndexing(apiServer *server.APIServer) {
 			}
 		}
 	}()
+}
+
+func waitForShutdown() {
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	sig := <-sigChan
+	log.Printf("🛑 Received %s signal, shutting down gracefully...", sig)
+
+	if fetchInProgress {
+		log.Printf("⚠️ Data fetch in progress, waiting for completion...")
+		for fetchInProgress {
+			time.Sleep(1 * time.Second)
+		}
+	}
+
+	log.Printf("✅ Shutdown complete")
+	os.Exit(0)
 }

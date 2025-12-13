@@ -62,3 +62,44 @@ func (s *APIServer) GetSearchEngine() *internal.SearchEngine {
 
 	return s.searchEngine
 }
+
+// GetDetailedStatus returns detailed server status for monitoring
+func (s *APIServer) GetDetailedStatus() map[string]interface{} {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	tracks := s.tracks
+	totalEntries := 0
+	tracksByName := make(map[string]int)
+
+	for _, track := range tracks {
+		totalEntries += len(track.Data)
+		tracksByName[track.Name]++
+	}
+
+	// Calculate expected total combinations
+	trackConfigs := internal.GetTracks()
+	classConfigs := internal.GetCarClasses()
+	expectedCombinations := len(trackConfigs) * len(classConfigs)
+
+	// Determine loading status
+	loadingStatus := "ready"
+	progressPercent := 100.0
+	if len(tracks) == 0 {
+		loadingStatus = "initializing"
+		progressPercent = 0.0
+	} else if len(tracks) < expectedCombinations {
+		loadingStatus = "loading"
+		progressPercent = (float64(len(tracks)) / float64(expectedCombinations)) * 100.0
+	}
+
+	return map[string]interface{}{
+		"status":                loadingStatus,
+		"tracks_loaded":         len(tracks),
+		"total_entries":         totalEntries,
+		"expected_combinations": expectedCombinations,
+		"progress_percent":      progressPercent,
+		"unique_tracks":         len(tracksByName),
+		"tracks_by_name":        tracksByName,
+	}
+}
