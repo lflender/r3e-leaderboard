@@ -79,15 +79,43 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 
 			// Update API every 100 tracks to keep it responsive (less spam)
 			if updatedCount%100 == 0 && updatedCount > 0 {
-				log.Printf("🔄 Updating API with %d fresh tracks...", updatedCount)
-				updateCallback(updatedTracks)
+				// Merge updatedTracks over existingTracks so the API/index sees the full dataset
+				merged := make(map[string]TrackInfo)
+				for k, v := range existingTracks {
+					merged[k] = v
+				}
+				for _, t := range updatedTracks {
+					key2 := t.TrackID + "_" + t.ClassID
+					merged[key2] = t
+				}
+				// Build slice
+				mergedSlice := make([]TrackInfo, 0, len(merged))
+				for _, v := range merged {
+					mergedSlice = append(mergedSlice, v)
+				}
+
+				log.Printf("🔄 Updating API with %d combined tracks (fresh+existing)...", len(mergedSlice))
+				updateCallback(mergedSlice)
 				log.Printf("✅ API updated (%d/%d combinations processed)", processedCount, totalCombinations)
 			}
 		}
 	}
 
-	// Final update with all refreshed data
-	log.Printf("🔄 Final update: updating API with %d total tracks...", len(updatedTracks))
-	updateCallback(updatedTracks)
+	// Final update with all refreshed data merged with any remaining existing tracks
+	merged := make(map[string]TrackInfo)
+	for k, v := range existingTracks {
+		merged[k] = v
+	}
+	for _, t := range updatedTracks {
+		key2 := t.TrackID + "_" + t.ClassID
+		merged[key2] = t
+	}
+	mergedSlice := make([]TrackInfo, 0, len(merged))
+	for _, v := range merged {
+		mergedSlice = append(mergedSlice, v)
+	}
+
+	log.Printf("🔄 Final update: updating API with %d total tracks (merged)", len(mergedSlice))
+	updateCallback(mergedSlice)
 	log.Printf("✅ Incremental refresh complete: %d tracks updated", updatedCount)
 }
