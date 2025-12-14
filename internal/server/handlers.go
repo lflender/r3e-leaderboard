@@ -61,37 +61,61 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	searchEngine := h.server.GetSearchEngine()
 	results := searchEngine.SearchByIndex(driver)
 
-	// Sort results by time difference (ascending - fastest first)
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].TimeDiff < results[j].TimeDiff
-	})
-
-	// Add class names to results
-	enhancedResults := make([]map[string]interface{}, len(results))
-	for i, result := range results {
-		enhancedResults[i] = map[string]interface{}{
-			"name":          result.Name,
-			"position":      result.Position,
-			"lap_time":      result.LapTime,
-			"country":       result.Country,
-			"car":           result.Car,
-			"car_class":     result.CarClass,
-			"team":          result.Team,
-			"rank":          result.Rank,
-			"difficulty":    result.Difficulty,
-			"track":         result.Track,
-			"track_id":      result.TrackID,
-			"class_id":      result.ClassID,
-			"class_name":    internal.GetCarClassName(result.ClassID),
-			"total_entries": result.TotalEntries,
+	// Group results by driver name
+	groups := make(map[string][]internal.DriverResult)
+	var groupOrder []string
+	for _, r := range results {
+		lname := strings.ToLower(r.Name)
+		if _, exists := groups[lname]; !exists {
+			groupOrder = append(groupOrder, lname)
 		}
+		groups[lname] = append(groups[lname], r)
+	}
+
+	// Sort entries inside each group: TimeDiff asc (0 is best), tie-breaker TotalEntries desc
+	groupedResults := make([]map[string]interface{}, 0, len(groups))
+	for _, nameKey := range groupOrder {
+		entries := groups[nameKey]
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].TimeDiff != entries[j].TimeDiff {
+				return entries[i].TimeDiff < entries[j].TimeDiff
+			}
+			return entries[i].TotalEntries > entries[j].TotalEntries
+		})
+
+		// Build JSON-friendly entries
+		jsonEntries := make([]map[string]interface{}, len(entries))
+		for i, e := range entries {
+			jsonEntries[i] = map[string]interface{}{
+				"name":          e.Name,
+				"position":      e.Position,
+				"lap_time":      e.LapTime,
+				"time_diff":     e.TimeDiff,
+				"country":       e.Country,
+				"car":           e.Car,
+				"car_class":     e.CarClass,
+				"team":          e.Team,
+				"rank":          e.Rank,
+				"difficulty":    e.Difficulty,
+				"track":         e.Track,
+				"track_id":      e.TrackID,
+				"class_id":      e.ClassID,
+				"class_name":    internal.GetCarClassName(e.ClassID),
+				"total_entries": e.TotalEntries,
+			}
+		}
+
+		groupedResults = append(groupedResults, map[string]interface{}{
+			"driver":  nameKey,
+			"entries": jsonEntries,
+		})
 	}
 
 	response := map[string]interface{}{
 		"query":       driver,
 		"found":       len(results) > 0,
-		"count":       len(results),
-		"results":     enhancedResults,
+		"count":       len(groups),
+		"results":     groupedResults,
 		"search_time": "< 1ms",
 		"status":      "ready",
 	}

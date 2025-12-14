@@ -109,7 +109,7 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 	if len(tracks) == 0 {
 		loadingStatus = "initializing"
 		progressPercent = 0.0
-	} else if len(tracks) < expectedCombinations {
+	} else if s.isFetching {
 		loadingStatus = "loading"
 		progressPercent = (float64(len(tracks)) / float64(expectedCombinations)) * 100.0
 	}

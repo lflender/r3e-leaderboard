@@ -60,7 +60,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 ```
 GET /api/search?driver=name
 ```
-Returns all leaderboard entries for a driver across all tracks and classes, **sorted by performance** (fastest first).
+Returns all leaderboard entries for a driver across all tracks and classes, grouped by driver name. Each group is sorted by performance (fastest gap time first, 0 is best), with ties broken by the highest total_entries.
 
 **Rate Limit:** 60 requests per minute per IP address.
 
@@ -72,27 +72,34 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 **Response:**
 ```json
 {
-  "count": 4,
+  "count": 1,
   "found": true,
   "query": "Ludo Flender",
   "results": [
     {
-      "name": "Ludo Flender",
-      "position": 8,
-      "lap_time": "1m 23.414s, +01.887s",
-      "time_diff": 1.887,
-      "country": "Belgium",
-      "car": "Porsche 911 RSR 2019",
-      "car_class": "GTE",
-      "class_name": "GTE",
-      "team": "Porsche Motorsport",
-      "rank": "",
-      "difficulty": "Get Real",
-      "track": "Brands Hatch Grand Prix - Grand Prix",
-      "track_id": "9473",
-      "class_id": "8600",
-      "total_entries": 25
+      "driver": "ludo flender",
+      "entries": [
+        {
+          "name": "Ludo Flender",
+          "position": 8,
+          "lap_time": "1m 23.414s, +01.887s",
+          "time_diff": 1.887,
+          "country": "Belgium",
+          "car": "Porsche 911 RSR 2019",
+          "car_class": "GTE",
+          "class_name": "GTE",
+          "team": "Porsche Motorsport",
+          "rank": "",
+          "difficulty": "Get Real",
+          "track": "Brands Hatch Grand Prix - Grand Prix",
+          "track_id": "9473",
+          "class_id": "8600",
+          "total_entries": 25
+        }
+        // ... more entries for this driver ...
+      ]
     }
+    // ... more driver groups if multiple matches ...
   ],
   "search_time": "< 1ms",
   "status": "ready"

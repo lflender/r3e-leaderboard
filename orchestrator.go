@@ -72,7 +72,7 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 
 		o.lastScrapeEnd = time.Now()
 		o.fetchInProgress = false
-		log.Printf("✅ Data loading complete! API fully operational with %d tracks", len(tracks))
+		log.Printf("✅ Data loading complete! API fully operational with %d track/class combinations", len(tracks))
 	}()
 }
 
