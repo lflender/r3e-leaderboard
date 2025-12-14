@@ -2,6 +2,7 @@ package server
 
 import (
 	"r3e-leaderboard/internal"
+	"sort"
 	"sync"
 	"time"
 )
@@ -13,6 +14,9 @@ type APIServer struct {
 	fetchTracker *internal.FetchTracker
 	isFetching   bool
 	mutex        sync.RWMutex
+
+	topCombinations        []internal.TrackInfo
+	topCombinationsByTrack map[string][]internal.TrackInfo
 }
 
 // New creates a new API server instance
@@ -29,6 +33,45 @@ func (s *APIServer) UpdateData(tracks []internal.TrackInfo) {
 	defer s.mutex.Unlock()
 
 	s.tracks = tracks
+
+	// Update top 1000 combinations by entry count (descending)
+	sorted := make([]internal.TrackInfo, len(tracks))
+	copy(sorted, tracks)
+	sort.Slice(sorted, func(i, j int) bool {
+		return len(sorted[i].Data) > len(sorted[j].Data)
+	})
+	if len(sorted) > 1000 {
+		s.topCombinations = sorted[:1000]
+	} else {
+		s.topCombinations = sorted
+	}
+
+	// Update top combinations per track
+	byTrack := make(map[string][]internal.TrackInfo)
+	for _, t := range tracks {
+		byTrack[t.TrackID] = append(byTrack[t.TrackID], t)
+	}
+	for trackID, arr := range byTrack {
+		sort.Slice(arr, func(i, j int) bool {
+			return len(arr[i].Data) > len(arr[j].Data)
+		})
+		byTrack[trackID] = arr
+	}
+	s.topCombinationsByTrack = byTrack
+}
+
+// GetTopCombinations returns the top 1000 combinations by entry count
+func (s *APIServer) GetTopCombinations() []internal.TrackInfo {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.topCombinations
+}
+
+// GetTopCombinationsForTrack returns the top combinations for a given track ID
+func (s *APIServer) GetTopCombinationsForTrack(trackID string) []internal.TrackInfo {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+	return s.topCombinationsByTrack[trackID]
 }
 
 // GetTracks safely retrieves the current tracks data

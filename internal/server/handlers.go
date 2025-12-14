@@ -387,6 +387,36 @@ func (h *Handlers) HandleLeaderboard(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// HandleTopCombinations returns the top 1000 combinations or top for a track
+func (h *Handlers) HandleTopCombinations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "GET" {
+		writeErrorResponse(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	trackID := r.URL.Query().Get("track")
+	var combos []internal.TrackInfo
+	if trackID != "" {
+		combos = h.server.GetTopCombinationsForTrack(trackID)
+	} else {
+		combos = h.server.GetTopCombinations()
+	}
+	// Build response
+	resp := make([]map[string]interface{}, 0, len(combos))
+	for _, t := range combos {
+		resp = append(resp, map[string]interface{}{
+			"track":       t.Name,
+			"track_id":    t.TrackID,
+			"class_id":    t.ClassID,
+			"class_name":  internal.GetCarClassName(t.ClassID),
+			"entry_count": len(t.Data),
+		})
+	}
+	writeJSONResponse(w, map[string]interface{}{
+		"count":   len(resp),
+		"results": resp,
+	})
+}
+
 // writeJSONResponse writes a JSON response with proper headers
 func writeJSONResponse(w http.ResponseWriter, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")

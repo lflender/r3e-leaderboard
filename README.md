@@ -217,6 +217,38 @@ http://localhost:8080/api/leaderboard?track=9473&class=8600
 }
 ```
 
+### Top Track/Class Combinations
+```
+GET /api/top-combinations
+GET /api/top-combinations?track=<trackID>
+```
+Returns the top 1000 track/class combinations by entry count (descending), or the top combinations for a specific track.
+
+**Rate Limit:** 60 requests per minute per IP address.
+
+**Example:**
+```
+http://localhost:8080/api/top-combinations
+http://localhost:8080/api/top-combinations?track=9473
+```
+
+**Response:**
+```json
+{
+  "count": 1000,
+  "results": [
+    {
+      "track": "Brands Hatch Grand Prix - Grand Prix",
+      "track_id": "9473",
+      "class_id": "8600",
+      "class_name": "GTE",
+      "entry_count": 25
+    }
+    // ... more combinations ...
+  ]
+}
+```
+
 ## 📊 Data Coverage
 
 - **169 Tracks** - All RaceRoom circuits and layouts
