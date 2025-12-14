@@ -87,6 +87,8 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		groups[lname] = append(groups[lname], r)
 	}
 
+	// Sort groupOrder alphabetically by driver name
+	sort.Strings(groupOrder)
 	// Sort entries inside each group: TimeDiff asc (0 is best), tie-breaker TotalEntries desc
 	groupedResults := make([]map[string]interface{}, 0, len(groups))
 	for _, nameKey := range groupOrder {
