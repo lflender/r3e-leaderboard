@@ -394,15 +394,79 @@ func (h *Handlers) HandleTopCombinations(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	trackID := r.URL.Query().Get("track")
-	var combos []internal.TrackInfo
+	classID := r.URL.Query().Get("class")
+
+	// Validate inputs
 	if trackID != "" {
-		combos = h.server.GetTopCombinationsForTrack(trackID)
-	} else {
-		combos = h.server.GetTopCombinations()
+		if len(trackID) > 10 {
+			writeErrorResponse(w, "track parameter too long", http.StatusBadRequest)
+			return
+		}
+		for _, c := range trackID {
+			if c < '0' || c > '9' {
+				writeErrorResponse(w, "track must be numeric", http.StatusBadRequest)
+				return
+			}
+		}
 	}
+	if classID != "" {
+		if len(classID) > 10 {
+			writeErrorResponse(w, "class parameter too long", http.StatusBadRequest)
+			return
+		}
+		for _, c := range classID {
+			if c < '0' || c > '9' {
+				writeErrorResponse(w, "class must be numeric", http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	var combos []internal.TrackInfo
+
+	// If a track is provided and no class filter, use optimized per-track list
+	if trackID != "" && classID == "" {
+		combos = h.server.GetTopCombinationsForTrack(trackID)
+	} else if trackID != "" && classID != "" {
+		// Exact track+class requested: find the exact pairing and return only it
+		all := h.server.GetTracks()
+		for _, t := range all {
+			if t.TrackID == trackID && t.ClassID == classID {
+				combos = []internal.TrackInfo{t}
+				break
+			}
+		}
+	} else {
+		// Build filtered list from all tracks (supports class-only)
+		all := h.server.GetTracks()
+		filtered := make([]internal.TrackInfo, 0, len(all))
+		for _, t := range all {
+			if classID != "" && t.ClassID != classID {
+				continue
+			}
+			filtered = append(filtered, t)
+		}
+
+		// Sort by entry count descending
+		sort.Slice(filtered, func(i, j int) bool {
+			return len(filtered[i].Data) > len(filtered[j].Data)
+		})
+
+		// If no specific track requested, limit to top 1000 combinations
+		if len(filtered) > 1000 {
+			combos = filtered[:1000]
+		} else {
+			combos = filtered
+		}
+	}
+
 	// Build response
 	resp := make([]map[string]interface{}, 0, len(combos))
 	for _, t := range combos {
+		// Defensive: ensure we don't accidentally include other classes when class filter is set
+		if classID != "" && t.ClassID != classID {
+			continue
+		}
 		resp = append(resp, map[string]interface{}{
 			"track":       t.Name,
 			"track_id":    t.TrackID,
@@ -411,6 +475,7 @@ func (h *Handlers) HandleTopCombinations(w http.ResponseWriter, r *http.Request)
 			"entry_count": len(t.Data),
 		})
 	}
+
 	writeJSONResponse(w, map[string]interface{}{
 		"count":   len(resp),
 		"results": resp,
