@@ -30,6 +30,7 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	driver := r.URL.Query().Get("driver")
+	classID := r.URL.Query().Get("class")
 	if driver == "" {
 		writeErrorResponse(w, "Missing 'driver' parameter", http.StatusBadRequest)
 		return
@@ -38,6 +39,10 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	// Sanitize input: limit length and reject suspicious patterns
 	if len(driver) > 100 {
 		writeErrorResponse(w, "Driver name too long (max 100 characters)", http.StatusBadRequest)
+		return
+	}
+	if classID != "" && len(classID) > 10 {
+		writeErrorResponse(w, "Class ID too long (max 10 characters)", http.StatusBadRequest)
 		return
 	}
 
@@ -60,6 +65,16 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 
 	searchEngine := h.server.GetSearchEngine()
 	results := searchEngine.SearchByIndex(driver)
+	// If classID is provided, filter results
+	if classID != "" {
+		filtered := results[:0]
+		for _, r := range results {
+			if r.ClassID == classID {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
 
 	// Group results by driver name
 	groups := make(map[string][]internal.DriverResult)

@@ -58,15 +58,15 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 
 ### Search for Driver
 ```
-GET /api/search?driver=name
+GET /api/search?driver=name[&class=classID]
 ```
-Returns all leaderboard entries for a driver across all tracks and classes, grouped by driver name. Each group is sorted by performance (fastest gap time first, 0 is best), with ties broken by the highest total_entries.
+Returns all leaderboard entries for a driver across all tracks and classes, grouped by driver name. Optionally, filter results by car class ID using the `class` parameter.
 
 **Rate Limit:** 60 requests per minute per IP address.
 
 **Example:**
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
+Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender&class=8600"
 ```
 
 **Response:**
@@ -122,7 +122,12 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender"
 - `track_id` - RaceRoom track ID
 - `class_id` - RaceRoom class ID
 - `total_entries` - Total number of entries in that leaderboard
-```
+
+**Grouping and Sorting:**
+- Results are grouped by driver name (case-insensitive).
+- Each group is sorted by `time_diff` ascending (0 = best/lap leader).
+- If two entries have the same `time_diff`, the one with higher `total_entries` comes first.
+- If `class` is provided, only results for that class ID are included.
 
 ### Server Status
 ```
