@@ -181,5 +181,20 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 			"last_fetch_end":      fetchTimestamps.LastFetchEnd,
 			"last_fetch_duration": fetchDuration,
 		},
+		"per_track_status": func() map[string]interface{} {
+			mgr := internal.NewTrackStatusManager()
+			mgr.Load()
+			out := make(map[string]interface{})
+			for _, ts := range mgr.GetAll() {
+				t := map[string]interface{}{
+					"status": ts.Status,
+				}
+				if !ts.LastUpdated.IsZero() {
+					t["last_updated"] = ts.LastUpdated
+				}
+				out[ts.TrackID] = t
+			}
+			return out
+		}(),
 	}
 }

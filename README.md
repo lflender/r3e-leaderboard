@@ -2,16 +2,15 @@
 
 A fast, searchable API for RaceRoom Racing Experience leaderboard data. Scrapes and caches leaderboards for all 169 tracks and 83 car classes, providing instant search across 45,000+ drivers and 200,000+ entries.
 
-Disclaimer: all code was written by AI.
+A fast, searchable API for RaceRoom Racing Experience leaderboard data.
 
-## Core Features:
+## Core Features
 
-- ⚡ Fast cache loading (~2 seconds)
-- 🔄 Progressive data fetching with full pagination
-- 🔍 Instant search (< 1ms) with complete driver info (including team)
-- 🛡️ Rate limiting (60 req/min)
-- 📅 Automatic nightly refresh
-- 🗂️ Smart cache management (24h validity)
+- Fast cache loading (~2 seconds)
+- Progressive data fetching with incremental cache updates
+- Instant search using in-memory index
+- Automatic scheduled nightly refresh (configurable)
+- Per-track refresh status and resume-capable refreshes after restart
 
 ## API Coverage:
 
@@ -26,23 +25,21 @@ Disclaimer: all code was written by AI.
 - Production-grade logging
 - Resource leak-free
 
-## 🚀 Quick Start
+## Quick Start
 
-### 1. Build the Application
+1. Build (PowerShell)
+
 ```powershell
 go build -o bin/r3e-leaderboard.exe .
 ```
 
-### 2. Run the Server
+2. Run
+
 ```powershell
 .\bin\r3e-leaderboard.exe
 ```
 
-The server will:
-- Start on `http://localhost:8080`
-- Load cached data in ~2 seconds
-- Build searchable index immediately
-- Fetch missing/updated data in background
+By default the server listens on `http://localhost:8080` and will load cached data quickly, build a searchable index, and continue fetching/refreshing data in background.
 
 ### 3. Search for Drivers
 Open in browser or use PowerShell:
@@ -130,10 +127,10 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/search?driver=Ludo Flender&cla
 - If `class` is provided, only results for that class ID are included.
 
 ### Server Status
-```
+
 GET /api/status
-```
-Shows server health, data statistics, **total indexed drivers**, and fetch timing.
+
+Shows server health, data statistics, total indexed drivers, fetch timing, and per-track refresh statuses.
 
 **Rate Limit:** 60 requests per minute per IP address.
 
@@ -148,23 +145,14 @@ http://localhost:8080/api/status
 - `cache` - cache status
 
 ### Refresh Data
-```
-POST /api/refresh                 # Refresh all tracks
-POST /api/refresh?trackID=9473    # Refresh single track
-```
 
-Triggers background refresh of leaderboard data from RaceRoom API.
+POST /api/refresh
 
-**Note:** This endpoint will be admin-only in production (API key required).
+POST /api/refresh?trackID=9473
 
-**Example:**
-```powershell
-# Refresh all data (nightly automatic refresh)
-Invoke-RestMethod -Uri "http://localhost:8080/api/refresh" -Method POST
+Starts a background refresh. Without `trackID` it refreshes all tracks; with `trackID` it refreshes only that track. The endpoint immediately returns a JSON response indicating that the refresh started in background.
 
-# Refresh specific track (Brands Hatch)
-Invoke-RestMethod -Uri "http://localhost:8080/api/refresh?trackID=9473" -Method POST
-```
+Note: In production you should secure this endpoint (API key / auth). The server writes per-track statuses to `cache/track_status.json` and logs to `./log/`.
 
 ### Clear Cache
 ```
@@ -301,7 +289,7 @@ http://localhost:8080/api/top-combinations?track=9473&class=8600  # specific tra
 - Refreshes index every 100 tracks
 - API stays responsive throughout
 
-## 🗂️ Cache Management
+## Cache & Logs
 
 ### Cache Location
 ```
@@ -316,12 +304,18 @@ cache/
 ```
 
 ### Cache Validity
-- Cache expires after **24 hours**
-- Refresh updates cache progressively
-- Interrupted refresh keeps existing cache
-- Never deletes cache without replacement
+- Cache files are compressed JSON under `cache/track_<id>/class_<id>.json.gz` and expire after 24 hours by default.
+- During refresh the cache is updated incrementally so an interrupted run will not lose already-fetched data. On restart the refresh resumes from previously-created cache files.
 
-## 🛠️ Common Commands
+### Logs
+- Refresh and server events are appended to daily files in `./log/YYYY-MM-DD.log`. Important events and errors are written there.
+
+### Emails
+- The server can send emails for refresh start/end, but email sending is optional. If SMTP is not configured via environment variables, the server will skip sending emails and only log the intent to send.
+
+Environment variables for SMTP (optional): `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`.
+
+## Common Commands
 
 ### Development
 ```powershell
@@ -351,6 +345,12 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/refresh?trackID=9473" -Method 
 
 # Clear cache
 Invoke-RestMethod -Uri "http://localhost:8080/api/clear" -Method POST
+
+# Top combinations
+Invoke-RestMethod -Uri "http://localhost:8080/api/top-combinations"
+Invoke-RestMethod -Uri "http://localhost:8080/api/top-combinations?track=9473"
+Invoke-RestMethod -Uri "http://localhost:8080/api/top-combinations?class=8600"
+Invoke-RestMethod -Uri "http://localhost:8080/api/top-combinations?track=9473&class=8600"
 ```
 
 ## 📝 Configuration

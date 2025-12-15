@@ -178,12 +178,17 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	// Start refresh in background using the internal refresh system
 	go func() {
+		// Mark fetch in server and notify
+		h.server.SetFetchStart()
 		currentTracks := h.server.GetTracks()
+		// Start refresh
 		internal.PerformIncrementalRefresh(currentTracks, trackID, func(updatedTracks []internal.TrackInfo) {
 			searchEngine := h.server.GetSearchEngine()
 			searchEngine.BuildIndex(updatedTracks)
 			h.server.UpdateData(updatedTracks)
 		})
+		// End fetch
+		h.server.SetFetchEnd()
 	}()
 
 	var message string

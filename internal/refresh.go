@@ -1,7 +1,9 @@
 package internal
 
 import (
+	"fmt"
 	"log"
+	"time"
 )
 
 // PerformIncrementalRefresh refreshes track data progressively without API downtime
@@ -9,6 +11,11 @@ import (
 func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, updateCallback func([]TrackInfo)) {
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
+	// Initialize status manager and notifier
+	statusMgr := NewTrackStatusManager()
+	statusMgr.Load()
+	AppendLog("REFRESH", fmt.Sprintf("Starting incremental refresh (track=%s)", trackID))
+	AppendLog("REFRESH", "--- REFRESH START ---")
 
 	// Filter tracks if trackID is specified
 	if trackID != "" {
@@ -32,6 +39,11 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 
 	apiClient := NewAPIClient()
 	dataCache := NewDataCache()
+	fetchTracker := NewFetchTracker()
+	// Load previous timestamps to support resuming interrupted refreshes
+	prevTs, _ := fetchTracker.LoadTimestamps()
+	resumeSince := prevTs.LastFetchStart
+	fetchTracker.SaveFetchStart()
 
 	// Create a map for quick lookup of existing tracks
 	existingTracks := make(map[string]TrackInfo)
@@ -57,13 +69,17 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 				log.Printf("🔄 Refresh progress: %d/%d combinations (%d tracks updated)",
 					processedCount, totalCombinations, updatedCount)
 			}
+			// Mark track updating when we start first class for that track
+			_ = statusMgr.SetUpdating(trackConfig.TrackID)
 			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
-			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
+			trackInfo, _, err := dataCache.LoadOrFetchTrackDataWithResume(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
-				classConfig.Name, classConfig.ClassID, true) // true = force refresh
+				classConfig.Name, classConfig.ClassID, true, resumeSince) // true = force refresh
 
 			if err != nil {
-				log.Printf("❌ Failed to refresh %s - %s: %v", trackConfig.Name, classConfig.Name, err)
+				msg := fmt.Sprintf("Failed to refresh %s - %s: %v", trackConfig.Name, classConfig.Name, err)
+				AppendLog("REFRESH_ERR", msg)
+				log.Printf("❌ %s", msg)
 				// Keep existing data if refresh fails
 				if existing, exists := existingTracks[key]; exists {
 					updatedTracks = append(updatedTracks, existing)
@@ -114,8 +130,31 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 	for _, v := range merged {
 		mergedSlice = append(mergedSlice, v)
 	}
+	// Mark per-track last-updated for any tracks we completed
+	now := time.Now()
+	// Collect unique track IDs from updatedTracks
+	seen := make(map[string]struct{})
+	for _, t := range updatedTracks {
+		if _, ok := seen[t.TrackID]; !ok {
+			seen[t.TrackID] = struct{}{}
+			_ = statusMgr.SetUpdated(t.TrackID, now)
+		}
+	}
 
 	log.Printf("🔄 Final update: updating API with %d total tracks (merged)", len(mergedSlice))
 	updateCallback(mergedSlice)
+	fetchTracker.SaveFetchEnd()
 	log.Printf("✅ Incremental refresh complete: %d tracks updated", updatedCount)
+	AppendLog("REFRESH", fmt.Sprintf("Incremental refresh complete, %d updated", updatedCount))
+	// Write a clear status summary into logs
+	statuses := statusMgr.GetAll()
+	AppendLog("REFRESH", "--- REFRESH SUMMARY ---")
+	for _, s := range statuses {
+		last := "(never)"
+		if !s.LastUpdated.IsZero() {
+			last = s.LastUpdated.Format(time.RFC3339)
+		}
+		AppendLog("REFRESH", fmt.Sprintf("track=%s status=%s last_updated=%s", s.TrackID, s.Status, last))
+	}
+	AppendLog("REFRESH", "--- REFRESH END ---")
 }

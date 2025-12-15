@@ -14,6 +14,8 @@ import (
 var orchestrator *Orchestrator
 
 func main() {
+	// Ensure log directory and start a daily log file
+	internal.AppendLog("START", "Server starting")
 	log.Println("🏎️  RaceRoom Leaderboard API Server")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 

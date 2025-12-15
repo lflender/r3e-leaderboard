@@ -165,6 +165,28 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	return trackInfo, false, nil // false = fetched fresh
 }
 
+// LoadOrFetchTrackDataWithResume loads from cache or fetches fresh data, but allows resuming
+// by treating cache files newer than resumeSince as fresh even if force==true.
+func (dc *DataCache) LoadOrFetchTrackDataWithResume(apiClient *APIClient, trackName, trackID, className, classID string, force bool, resumeSince time.Time) (TrackInfo, bool, error) {
+	filename := dc.GetCacheFileName(trackID, classID)
+
+	// If resumeSince is set and cache exists and is newer than resumeSince, treat as valid
+	if !resumeSince.IsZero() {
+		if info, err := os.Stat(filename); err == nil {
+			if info.ModTime().After(resumeSince) {
+				// Load from cache
+				ti, err := dc.LoadTrackData(trackID, classID)
+				if err == nil {
+					return ti, true, nil
+				}
+			}
+		}
+	}
+
+	// Fallback to existing behavior
+	return dc.LoadOrFetchTrackData(apiClient, trackName, trackID, className, classID, force)
+}
+
 // ClearCache removes all cached files
 func (dc *DataCache) ClearCache() error {
 	return os.RemoveAll(dc.cacheDir)

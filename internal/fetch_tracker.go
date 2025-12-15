@@ -42,7 +42,9 @@ func (ft *FetchTracker) LoadTimestamps() (FetchTimestamps, error) {
 // SaveFetchStart records when a fetch operation started
 func (ft *FetchTracker) SaveFetchStart() error {
 	timestamps, _ := ft.LoadTimestamps()
+	// Record start and clear previous end so that an interrupted run is visible
 	timestamps.LastFetchStart = time.Now()
+	timestamps.LastFetchEnd = time.Time{}
 
 	return ft.saveTimestamps(timestamps)
 }

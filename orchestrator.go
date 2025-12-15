@@ -43,6 +43,7 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 		log.Println("🔄 Starting background data loading...")
 		o.lastScrapeStart = time.Now()
 		o.fetchInProgress = true
+		o.apiServer.SetFetchStart()
 
 		// Create a callback to update server incrementally during loading
 		progressCallback := func(currentTracks []internal.TrackInfo) {
@@ -72,6 +73,7 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 
 		o.lastScrapeEnd = time.Now()
 		o.fetchInProgress = false
+		o.apiServer.SetFetchEnd()
 		log.Printf("✅ Data loading complete! API fully operational with %d track/class combinations", len(tracks))
 	}()
 }
@@ -88,6 +90,7 @@ func (o *Orchestrator) StartScheduledRefresh() {
 
 		log.Println("🔄 Starting scheduled incremental refresh...")
 		o.fetchInProgress = true
+		o.apiServer.SetFetchStart()
 
 		// Perform incremental refresh - updates API progressively
 		currentTracks := o.apiServer.GetTracks()
@@ -98,6 +101,7 @@ func (o *Orchestrator) StartScheduledRefresh() {
 		})
 
 		o.fetchInProgress = false
+		o.apiServer.SetFetchEnd()
 		log.Println("✅ Scheduled incremental refresh completed")
 	})
 }
