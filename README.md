@@ -355,7 +355,14 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/top-combinations?track=9473&cl
 
 ## 📝 Configuration
 
-Edit `config.json` to customize:
+This project does not currently read a `config.json` file from disk. Instead, default configuration values are provided by the code in `internal.GetDefaultConfig()` (see `internal/config.go`). To change runtime settings, modify `internal/config.go` or adapt the code to read configuration from a file or environment variables.
+
+Default values:
+ - Server port: `8080`
+ - Scheduled refresh hour: `4` (4:00 AM)
+ - Indexing frequency: `2` minutes
+
+If you prefer a file-based config, you can add a small loader that reads JSON and merges with defaults.
 ```json
 {
   "server": {
@@ -374,7 +381,7 @@ Edit `config.json` to customize:
 ```
 ❌ Failed to start HTTP server: listen tcp :8080: bind: Only one usage of each socket address
 ```
-**Solution:** Change port in `config.json` or stop other application using port 8080.
+**Solution:** Change port by editing `internal.GetDefaultConfig()` (or set up a proper config loader), or stop other application using port 8080.
 
 ### Missing Data After Interrupted Refresh
 **No data lost!** The refresh system preserves existing cache. Just restart and it will continue from where it left off.

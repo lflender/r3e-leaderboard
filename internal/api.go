@@ -90,7 +90,7 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 
 		if apiResp.StatusCode != 200 {
 			apiResp.Body.Close()
-			return nil, 0, err
+			return nil, 0, fmt.Errorf("unexpected status code from leaderboard API: %d", apiResp.StatusCode)
 		}
 
 		// Parse JSON response

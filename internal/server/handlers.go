@@ -76,13 +76,15 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		results = filtered
 	}
 
-	// Group results by driver name
+	// Group results by driver name (case-insensitive) but preserve original casing
 	groups := make(map[string][]internal.DriverResult)
+	originalNames := make(map[string]string)
 	var groupOrder []string
 	for _, r := range results {
 		lname := strings.ToLower(r.Name)
 		if _, exists := groups[lname]; !exists {
 			groupOrder = append(groupOrder, lname)
+			originalNames[lname] = r.Name
 		}
 		groups[lname] = append(groups[lname], r)
 	}
@@ -123,7 +125,7 @@ func (h *Handlers) HandleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 
 		groupedResults = append(groupedResults, map[string]interface{}{
-			"driver":  nameKey,
+			"driver":  originalNames[nameKey],
 			"entries": jsonEntries,
 		})
 	}

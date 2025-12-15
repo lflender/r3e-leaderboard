@@ -269,8 +269,14 @@ func (se *SearchEngine) SearchByIndex(driverName string) []DriverResult {
 	lowerName := strings.ToLower(driverName)
 
 	// Exact match first
+	if se == nil {
+		return nil
+	}
 	if results, exists := se.index[lowerName]; exists {
-		return results
+		// return a copy to avoid caller mutating internal state
+		out := make([]DriverResult, len(results))
+		copy(out, results)
+		return out
 	}
 
 	// Partial match fallback
