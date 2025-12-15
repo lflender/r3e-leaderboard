@@ -52,6 +52,16 @@ func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
 	return filepath.Join(trackDir, fmt.Sprintf("class_%s.json.gz", classID))
 }
 
+// GetCacheAge returns the age of the cache file and whether it exists.
+func (dc *DataCache) GetCacheAge(trackID, classID string) (time.Duration, bool) {
+	filename := dc.GetCacheFileName(trackID, classID)
+	info, err := os.Stat(filename)
+	if err != nil {
+		return 0, false
+	}
+	return time.Since(info.ModTime()), true
+}
+
 // IsCacheValid checks if cached data exists and is not expired
 func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	filename := dc.GetCacheFileName(trackID, classID)
@@ -129,13 +139,25 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
 func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, error) {
+	// Determine if a cache file exists and its age for logging
+	cacheAge, cacheExists := dc.GetCacheAge(trackID, classID)
+
 	// Try to load from cache first (unless forced to refresh)
 	if !force && dc.IsCacheValid(trackID, classID) {
 		trackInfo, err := dc.LoadTrackData(trackID, classID)
 		if err == nil {
+			if cacheExists {
+				log.Printf("📂 Loaded from cache: %s + %s (age=%s, entries=%d)", trackName, className, cacheAge.Round(time.Second), len(trackInfo.Data))
+			} else {
+				log.Printf("📂 Loaded from cache: %s + %s (entries=%d)", trackName, className, len(trackInfo.Data))
+			}
 			return trackInfo, true, nil // true = loaded from cache
 		} else {
-			log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+			if cacheExists {
+				log.Printf("⚠️ Cache file exists but failed to load: %s + %s (age=%s): %v", trackName, className, cacheAge.Round(time.Second), err)
+			} else {
+				log.Printf("⚠️ Cache file failed to load: %s + %s: %v", trackName, className, err)
+			}
 		}
 	}
 
@@ -154,13 +176,19 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 
 	// Save to cache
 	if err := dc.SaveTrackData(trackInfo); err != nil {
-		fmt.Printf("⚠️ Warning: Could not cache %s + %s: %v\n", trackName, className, err)
+		log.Printf("⚠️ Warning: Could not cache %s + %s: %v", trackName, className, err)
+	}
+
+	// Include cache age info in the fetch log if a cache file existed
+	cacheAgeMsg := "(no cache)"
+	if cacheExists {
+		cacheAgeMsg = fmt.Sprintf("(cache_age=%s)", cacheAge.Round(time.Second))
 	}
 
 	if len(data) > 0 {
-		fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
+		log.Printf("🌐 %s + %s: %.2fs → %d entries %s [track=%s, class=%s]", trackName, className, duration.Seconds(), len(data), cacheAgeMsg, trackID, classID)
 	} else {
-		fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
+		log.Printf("🌐 %s + %s: %.2fs → no data %s [track=%s, class=%s]", trackName, className, duration.Seconds(), cacheAgeMsg, trackID, classID)
 	}
 	return trackInfo, false, nil // false = fetched fresh
 }
@@ -173,12 +201,15 @@ func (dc *DataCache) LoadOrFetchTrackDataWithResume(apiClient *APIClient, trackN
 	// If resumeSince is set and cache exists and is newer than resumeSince, treat as valid
 	if !resumeSince.IsZero() {
 		if info, err := os.Stat(filename); err == nil {
+			cacheAge := time.Since(info.ModTime())
 			if info.ModTime().After(resumeSince) {
 				// Load from cache
 				ti, err := dc.LoadTrackData(trackID, classID)
 				if err == nil {
+					log.Printf("📂 Resumed from cache: %s + %s (age=%s, entries=%d)", trackName, className, cacheAge.Round(time.Second), len(ti.Data))
 					return ti, true, nil
 				}
+				log.Printf("⚠️ Failed to load cache while resuming: %s + %s (age=%s): %v", trackName, className, cacheAge.Round(time.Second), err)
 			}
 		}
 	}

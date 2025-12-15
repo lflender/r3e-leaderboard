@@ -72,6 +72,13 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 			// Mark track updating when we start first class for that track
 			_ = statusMgr.SetUpdating(trackConfig.TrackID)
 			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
+			// Log cache age for visibility
+			if age, ok := dataCache.GetCacheAge(trackConfig.TrackID, classConfig.ClassID); ok {
+				log.Printf("🔁 Refreshing %s + %s (cache_age=%s, forcing fetch)", trackConfig.Name, classConfig.Name, age.Round(time.Second))
+			} else {
+				log.Printf("🔁 Refreshing %s + %s (no existing cache, forcing fetch)", trackConfig.Name, classConfig.Name)
+			}
+
 			trackInfo, _, err := dataCache.LoadOrFetchTrackDataWithResume(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
 				classConfig.Name, classConfig.ClassID, true, resumeSince) // true = force refresh

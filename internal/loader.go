@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 )
@@ -47,6 +48,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		// Track per-track cache statistics
 		trackCachedClasses := 0
 		trackCachedEntries := 0
+		var trackMaxCacheAge time.Duration
 		trackHasData := false
 		cacheSummaryShown := false
 
@@ -110,6 +112,12 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				if fromCache {
 					trackCachedClasses++
 					trackCachedEntries += len(trackInfo.Data)
+					// Record cache age for per-track summary (if available)
+					if age, ok := dataCache.GetCacheAge(track.TrackID, class.ClassID); ok {
+						if age > trackMaxCacheAge {
+							trackMaxCacheAge = age
+						}
+					}
 				} else {
 					// This was fetched from API - track fetch timing
 					if !hasFetchedFromAPI {
@@ -145,7 +153,11 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 		// Show per-track cache summary if we haven't shown it yet and track had cached data
 		if trackCachedClasses > 0 && trackHasData && !cacheSummaryShown {
-			log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
+			ageMsg := ""
+			if trackMaxCacheAge > 0 {
+				ageMsg = fmt.Sprintf(" (max_cache_age=%s)", trackMaxCacheAge.Round(time.Second))
+			}
+			log.Printf("📂 %s: cached %d classes with %d entries%s", track.Name, trackCachedClasses, trackCachedEntries, ageMsg)
 		}
 	}
 
