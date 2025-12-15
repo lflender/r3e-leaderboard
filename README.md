@@ -217,6 +217,44 @@ http://localhost:8080/api/leaderboard?track=9473&class=8600
 }
 ```
 
+### Top Track/Class Combinations
+```
+GET /api/top-combinations
+GET /api/top-combinations?track=<trackID>
+GET /api/top-combinations?class=<classID>
+GET /api/top-combinations?track=<trackID>&class=<classID>
+```
+Returns the top 1000 track/class combinations by entry count (descending), or the top combinations for a specific track.
+
+You can now filter by `class` to get combinations only for a specific car class, and you can combine both `track` and `class` to get the exact pairing.
+
+**Rate Limit:** 60 requests per minute per IP address.
+
+**Examples:**
+```
+http://localhost:8080/api/top-combinations               # top 1000 combinations overall
+http://localhost:8080/api/top-combinations?track=9473     # top combinations for track 9473
+http://localhost:8080/api/top-combinations?class=8600     # top combinations for class 8600 across all tracks
+http://localhost:8080/api/top-combinations?track=9473&class=8600  # specific track+class pairing
+```
+
+**Response:**
+```json
+{
+  "count": 1000,
+  "results": [
+    {
+      "track": "Brands Hatch Grand Prix - Grand Prix",
+      "track_id": "9473",
+      "class_id": "8600",
+      "class_name": "GTE",
+      "entry_count": 25
+    }
+    // ... more combinations ...
+  ]
+}
+```
+
 ## 📊 Data Coverage
 
 - **169 Tracks** - All RaceRoom circuits and layouts

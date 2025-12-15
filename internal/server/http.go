@@ -60,6 +60,7 @@ func (h *HTTPServer) setupRoutes() {
 	// API routes with rate limiting on search and leaderboard endpoints
 	http.HandleFunc("/api/search", h.rateLimiter.Middleware(handlers.HandleSearch))
 	http.HandleFunc("/api/leaderboard", h.rateLimiter.Middleware(handlers.HandleLeaderboard))
+	http.HandleFunc("/api/top-combinations", h.rateLimiter.Middleware(handlers.HandleTopCombinations))
 	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
 	http.HandleFunc("/api/clear", handlers.HandleClear)
 	http.HandleFunc("/api/status", h.rateLimiter.Middleware(handlers.HandleStatus))
