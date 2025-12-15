@@ -208,20 +208,41 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 
 	if len(data) > 0 {
 		msg := fmt.Sprintf("🌐 %s + %s: %.2fs → %d entries %s [track=%s, class=%s]", trackName, className, duration.Seconds(), len(data), cacheAgeMsg, trackID, classID)
-		log.Printf(msg)
 		AppendLog("FETCH", msg)
 	} else {
 		msg := fmt.Sprintf("🌐 %s + %s: %.2fs → no data %s [track=%s, class=%s]", trackName, className, duration.Seconds(), cacheAgeMsg, trackID, classID)
-		log.Printf(msg)
 		AppendLog("FETCH", msg)
 	}
+
 	// Record that we fetched data from the API for this track (track-level timestamp)
-	// This ensures status endpoints show when data was last requested from the API (not cache loads)
+	// Update cache/track_status.json directly to avoid potential RWMutex deadlocks
 	func() {
-		mgr := NewTrackStatusManager()
-		_ = mgr.Load()
-		_ = mgr.SetUpdated(trackID, time.Now())
-		AppendLog("FETCH_TRACK", fmt.Sprintf("track=%s last_fetch=%s", trackID, time.Now().Format(time.RFC3339)))
+		// Ensure cache dir exists
+		statusPath := filepath.Join("cache", "track_status.json")
+		var arr []TrackStatus
+		// Read existing statuses if present
+		if data, err := os.ReadFile(statusPath); err == nil {
+			_ = json.Unmarshal(data, &arr)
+		}
+		found := false
+		now := time.Now()
+		for i := range arr {
+			if arr[i].TrackID == trackID {
+				arr[i].Status = "ready"
+				arr[i].LastUpdated = now
+				found = true
+				break
+			}
+		}
+		if !found {
+			arr = append(arr, TrackStatus{TrackID: trackID, Status: "ready", LastUpdated: now})
+		}
+		// Ensure directory
+		_ = os.MkdirAll(filepath.Dir(statusPath), 0755)
+		if out, err := json.MarshalIndent(arr, "", "  "); err == nil {
+			_ = os.WriteFile(statusPath, out, 0644)
+		}
+		AppendLog("FETCH_TRACK", fmt.Sprintf("track=%s last_fetch=%s", trackID, now.Format(time.RFC3339)))
 	}()
 	return trackInfo, false, nil // false = fetched fresh
 }
