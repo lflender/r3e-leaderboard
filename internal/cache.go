@@ -1,4 +1,4 @@
-package internal
+﻿package internal
 
 import (
 	"compress/gzip"
@@ -128,12 +128,21 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, error) {
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, time.Duration, error) {
+	// Determine cache file and age (if present)
+	filename := dc.GetCacheFileName(trackID, classID)
+	var cacheExists bool
+	var cacheAge time.Duration
+	if info, err := os.Stat(filename); err == nil {
+		cacheExists = true
+		cacheAge = time.Since(info.ModTime())
+	}
+
 	// Try to load from cache first (unless forced to refresh)
 	if !force && dc.IsCacheValid(trackID, classID) {
 		trackInfo, err := dc.LoadTrackData(trackID, classID)
 		if err == nil {
-			return trackInfo, true, nil // true = loaded from cache
+			return trackInfo, true, cacheAge, nil // true = loaded from cache
 		} else {
 			log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
 		}
@@ -142,7 +151,7 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	// Cache miss or expired - fetch fresh data
 	data, duration, err := apiClient.FetchLeaderboardData(trackID, classID)
 	if err != nil {
-		return TrackInfo{}, false, err
+		return TrackInfo{}, false, 0, err
 	}
 
 	trackInfo := TrackInfo{
@@ -156,13 +165,23 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	if err := dc.SaveTrackData(trackInfo); err != nil {
 		fmt.Printf("⚠️ Warning: Could not cache %s + %s: %v\n", trackName, className, err)
 	}
-
+	// Include cache age when cache existed but was stale
 	if len(data) > 0 {
-		fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
+		if cacheExists {
+			fmt.Printf("🌐 %s + %s: %.2fs (cache age: %s) → %d entries [track=%s, class=%s]\n",
+				trackName, className, duration.Seconds(), formatDurationShort(cacheAge), len(data), trackID, classID)
+		} else {
+			fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
+		}
 	} else {
-		fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
+		if cacheExists {
+			fmt.Printf("🌐 %s + %s: %.2fs (cache age: %s) → no data [track=%s, class=%s]\n",
+				trackName, className, duration.Seconds(), formatDurationShort(cacheAge), trackID, classID)
+		} else {
+			fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
+		}
 	}
-	return trackInfo, false, nil // false = fetched fresh
+	return trackInfo, false, 0, nil // false = fetched fresh; cacheAge not relevant for fresh
 }
 
 // ClearCache removes all cached files
@@ -190,4 +209,24 @@ func (dc *DataCache) GetCacheInfo() []string {
 	}
 
 	return info
+}
+
+// formatDurationShort returns a human-friendly duration string.
+// For durations >= 1 hour it returns hours and minutes (e.g. "27h45m").
+// For durations >= 1 minute it returns minutes and seconds (e.g. "12m30s").
+// For durations < 1 minute it returns seconds with 2 decimals (e.g. "3.25s").
+func formatDurationShort(d time.Duration) string {
+	if d >= time.Hour {
+		hours := int(d / time.Hour)
+		minutes := int((d % time.Hour) / time.Minute)
+		return fmt.Sprintf("%dh%02dm", hours, minutes)
+	}
+	if d >= time.Minute {
+		minutes := int(d / time.Minute)
+		seconds := int((d % time.Minute) / time.Second)
+		return fmt.Sprintf("%dm%02ds", minutes, seconds)
+	}
+	// Less than a minute: show seconds with 2 decimal precision
+	secs := float64(d) / float64(time.Second)
+	return fmt.Sprintf("%.2fs", secs)
 }

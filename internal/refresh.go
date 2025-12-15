@@ -58,7 +58,7 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 					processedCount, totalCombinations, updatedCount)
 			}
 			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
-			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
+			trackInfo, _, _, err := dataCache.LoadOrFetchTrackData(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
 				classConfig.Name, classConfig.ClassID, true) // true = force refresh
 
