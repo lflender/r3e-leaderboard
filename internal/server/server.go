@@ -1,6 +1,8 @@
 package server
 
 import (
+	"os"
+	"path/filepath"
 	"r3e-leaderboard/internal"
 	"sort"
 	"sync"
@@ -190,8 +192,11 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 					"status": ts.Status,
 				}
 				if !ts.LastUpdated.IsZero() {
+					// Expose last fetch time (when data was last requested from API for this track)
 					t["last_updated"] = ts.LastUpdated
+					t["last_fetch"] = ts.LastUpdated
 				}
+
 				out[ts.TrackID] = t
 			}
 			return out
