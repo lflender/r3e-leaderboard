@@ -76,11 +76,15 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			}
 
 			// Show progress every 50 combinations if ANY fetching is needed
+			// Use currentCombination (processed combinations) for reporting so
+			// progress advances even when many combinations have no data.
 			if (currentCombination%50 == 0 || currentCombination == 1) && needsAPIFetching {
-
-				// Update progress callback every 50 combinations
+				// Provide a snapshot copy to the callback to avoid races with
+				// the loader appending further items to allTrackData.
 				if progressCallback != nil {
-					progressCallback(allTrackData)
+					snapshot := make([]TrackInfo, len(allTrackData))
+					copy(snapshot, allTrackData)
+					progressCallback(snapshot)
 				}
 			}
 
@@ -94,7 +98,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false)
 
 			if err != nil {
-				continue // Skip logging errors to reduce spam
+				log.Printf("❌ Failed to load/fetch %s - %s: %v", track.Name, class.Name, err)
+				continue
 			}
 
 			// Only keep combinations that have data
@@ -104,7 +109,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 				// Update server every 10 new tracks for more responsive periodic indexing
 				if progressCallback != nil && len(allTrackData)%10 == 0 {
-					progressCallback(allTrackData)
+					snapshot := make([]TrackInfo, len(allTrackData))
+					copy(snapshot, allTrackData)
+					progressCallback(snapshot)
 				}
 
 				// Track per-track cache statistics

@@ -28,7 +28,7 @@ func NewHTTPServer(apiServer *APIServer, port int) *HTTPServer {
 
 // Start begins the HTTP server
 func (h *HTTPServer) Start() {
-	log.Printf("🚀 Starting API server on http://localhost:%d", h.port)
+	log.Printf("🚀 Starting API server on port %d (listening on all interfaces)", h.port)
 	h.logEndpoints()
 
 	// Setup routes
@@ -41,12 +41,13 @@ func (h *HTTPServer) Start() {
 // logEndpoints prints available API endpoints
 func (h *HTTPServer) logEndpoints() {
 	log.Printf("📖 API Documentation:")
-	log.Printf("   GET  /api/search?driver=name             - Search for driver")
-	log.Printf("   GET  /api/leaderboard?track=ID&class=ID  - Get leaderboard for track/class")
-	log.Printf("   GET  /api/status                         - Server status & metrics")
-	log.Printf("   POST /api/refresh                        - Refresh all data")
-	log.Printf("   POST /api/refresh?trackID=id             - Refresh single track")
-	log.Printf("   POST /api/clear                          - Clear cache")
+	log.Printf("   GET  /api/search?driver=name             	- Search for driver")
+	log.Printf("   GET  /api/leaderboard?track=ID&class=ID  	- Get leaderboard for track/class")
+	log.Printf("   GET  /api/top-combinations?track=ID&class=ID - Get top combinations (per track or global)")
+	log.Printf("   GET  /api/status                         	- Server status & metrics")
+	log.Printf("   POST /api/refresh                        	- Refresh all data (DISABLED)")
+	log.Printf("   POST /api/refresh?trackID=id             	- Refresh single track (DISABLED)")
+	log.Printf("   POST /api/clear                         		- Clear cache (DISABLED)")
 }
 
 // setupRoutes configures HTTP routes
@@ -61,8 +62,8 @@ func (h *HTTPServer) setupRoutes() {
 	http.HandleFunc("/api/search", h.rateLimiter.Middleware(handlers.HandleSearch))
 	http.HandleFunc("/api/leaderboard", h.rateLimiter.Middleware(handlers.HandleLeaderboard))
 	http.HandleFunc("/api/top-combinations", h.rateLimiter.Middleware(handlers.HandleTopCombinations))
-	http.HandleFunc("/api/refresh", handlers.HandleRefresh)
-	http.HandleFunc("/api/clear", handlers.HandleClear)
+	http.HandleFunc("/api/refresh", handlers.HandleDisabled)
+	http.HandleFunc("/api/clear", handlers.HandleDisabled)
 	http.HandleFunc("/api/status", h.rateLimiter.Middleware(handlers.HandleStatus))
 }
 
@@ -73,14 +74,15 @@ func (h *HTTPServer) startWithErrorHandling() {
 	go func() {
 		log.Printf("🌐 HTTP server attempting to bind to port %d...", h.port)
 
-		// Test if we can bind to the port first
-		listener, err := net.Listen("tcp", fmt.Sprintf(":%d", h.port))
+		// Bind explicitly on all interfaces so external hosts can reach the API
+		bindAddr := fmt.Sprintf("0.0.0.0:%d", h.port)
+		listener, err := net.Listen("tcp", bindAddr)
 		if err != nil {
 			serverStarted <- err
 			return
 		}
 
-		log.Printf("✅ Successfully bound to port %d", h.port)
+		log.Printf("✅ Successfully bound to %s", bindAddr)
 		serverStarted <- nil
 
 		// Start the actual HTTP server
@@ -96,7 +98,7 @@ func (h *HTTPServer) startWithErrorHandling() {
 		os.Exit(1)
 	}
 
-	log.Printf("✅ HTTP server running on http://localhost:%d", h.port)
+	log.Printf("✅ HTTP server running and reachable on all interfaces at port %d", h.port)
 }
 
 // handleHealthCheck provides a simple health check endpoint

@@ -202,6 +202,11 @@ func (h *Handlers) HandleRefresh(w http.ResponseWriter, r *http.Request) {
 	writeJSONResponse(w, response)
 }
 
+// HandleDisabled responds to disabled endpoints with 404 and a clear message
+func (h *Handlers) HandleDisabled(w http.ResponseWriter, r *http.Request) {
+	writeErrorResponse(w, "This endpoint is disabled on this deployment", http.StatusNotFound)
+}
+
 // HandleClear clears the cache
 func (h *Handlers) HandleClear(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {

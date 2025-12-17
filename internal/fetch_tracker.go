@@ -13,6 +13,11 @@ type FetchTimestamps struct {
 	LastFetchEnd   time.Time `json:"last_fetch_end"`
 }
 
+// CombinationTimestamps stores last fetch times per track_class key
+type CombinationTimestamps struct {
+	LastFetch map[string]time.Time `json:"last_fetch_per_combination"`
+}
+
 // FetchTracker manages fetch timestamp persistence
 type FetchTracker struct {
 	filePath string
@@ -35,8 +40,63 @@ func (ft *FetchTracker) LoadTimestamps() (FetchTimestamps, error) {
 		return timestamps, nil
 	}
 
-	err = json.Unmarshal(data, &timestamps)
-	return timestamps, err
+	// File may contain both global timestamps and combination timestamps
+	// Unmarshal only the global timestamps section
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return timestamps, err
+	}
+	if v, ok := raw["last_fetch_start"]; ok {
+		_ = json.Unmarshal(v, &timestamps.LastFetchStart)
+	}
+	if v, ok := raw["last_fetch_end"]; ok {
+		_ = json.Unmarshal(v, &timestamps.LastFetchEnd)
+	}
+
+	return timestamps, nil
+}
+
+// LoadCombinationTimestamps loads per-combination last fetch timestamps
+func (ft *FetchTracker) LoadCombinationTimestamps() (map[string]time.Time, error) {
+	data, err := os.ReadFile(ft.filePath)
+	if err != nil {
+		return map[string]time.Time{}, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return map[string]time.Time{}, err
+	}
+	result := map[string]time.Time{}
+	if v, ok := raw["last_fetch_per_combination"]; ok {
+		_ = json.Unmarshal(v, &result)
+	}
+	return result, nil
+}
+
+// SaveCombinationFetch records when a specific track+class combination was fetched
+func (ft *FetchTracker) SaveCombinationFetch(trackID, classID string) error {
+	timestamps, _ := ft.LoadTimestamps()
+	comb, _ := ft.LoadCombinationTimestamps()
+
+	key := trackID + "_" + classID
+	comb[key] = time.Now()
+
+	// Merge into a single JSON object and persist
+	obj := map[string]interface{}{
+		"last_fetch_start": timestamps.LastFetchStart,
+		"last_fetch_end":   timestamps.LastFetchEnd,
+		"last_fetch_per_combination": comb,
+	}
+
+	// Ensure cache directory exists
+	if err := os.MkdirAll(filepath.Dir(ft.filePath), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(obj, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(ft.filePath, data, 0644)
 }
 
 // SaveFetchStart records when a fetch operation started

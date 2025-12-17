@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"r3e-leaderboard/internal"
 	"r3e-leaderboard/internal/server"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -14,6 +17,7 @@ import (
 var orchestrator *Orchestrator
 
 func main() {
+	initLogging()
 	log.Println("🏎️  RaceRoom Leaderboard API Server")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 
@@ -78,4 +82,74 @@ func waitForShutdown() {
 
 	log.Printf("✅ Shutdown complete")
 	os.Exit(0)
+}
+
+var (
+	logFile     *os.File
+	logFileMux  sync.Mutex
+)
+
+// initLogging ensures standard library logging is written to both stdout
+// and a daily rotating log file under logs/. It starts a background
+// goroutine that rotates the file each midnight.
+func initLogging() {
+	logsDir := "logs"
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		// If we cannot create the logs directory, fall back to stdout only
+		log.Printf("⚠️ Could not create logs directory: %v", err)
+		return
+	}
+
+	openLogForToday := func() (*os.File, error) {
+		today := time.Now().Format("2006-01-02")
+		fname := filepath.Join(logsDir, today+".log")
+		f, err := os.OpenFile(fname, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
+
+	// Open initial logfile
+	f, err := openLogForToday()
+	if err != nil {
+		log.Printf("⚠️ Could not open logfile: %v", err)
+		return
+	}
+
+	logFileMux.Lock()
+	logFile = f
+	logFileMux.Unlock()
+
+	// Write to both stdout and the logfile
+	mw := io.MultiWriter(os.Stdout, logFile)
+	log.SetOutput(mw)
+
+	// Start rotation goroutine
+	go func() {
+		for {
+			// Calculate time until next midnight
+			now := time.Now()
+			next := time.Date(now.Year(), now.Month(), now.Day()+1, 0, 0, 1, 0, now.Location())
+			time.Sleep(time.Until(next))
+
+			// Rotate file
+			newF, err := openLogForToday()
+			if err != nil {
+				log.Printf("⚠️ Failed to rotate logfile: %v", err)
+				continue
+			}
+
+			logFileMux.Lock()
+			old := logFile
+			logFile = newF
+			// update the logger output to use the new file + stdout
+			log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+			logFileMux.Unlock()
+
+			if old != nil {
+				_ = old.Close()
+			}
+		}
+	}()
 }

@@ -34,3 +34,6 @@ go.work.sum
 # cache
 *.json
 *.gz
+
+# logs
+*.log

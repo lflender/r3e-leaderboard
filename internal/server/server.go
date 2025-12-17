@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"r3e-leaderboard/internal"
 	"sort"
 	"sync"
@@ -18,7 +19,6 @@ type APIServer struct {
 	topCombinations        []internal.TrackInfo
 	topCombinationsByTrack map[string][]internal.TrackInfo
 }
-
 // New creates a new API server instance
 func New(searchEngine *internal.SearchEngine) *APIServer {
 	return &APIServer{
@@ -32,7 +32,12 @@ func (s *APIServer) UpdateData(tracks []internal.TrackInfo) {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
-	s.tracks = tracks
+	// Make a copy of the incoming slice to avoid sharing the underlying
+	// array with the caller. The loader appends to its slice while
+	// reporting progress; storing a copy gives the server a stable
+	// snapshot for reporting and indexing.
+	s.tracks = make([]internal.TrackInfo, len(tracks))
+	copy(s.tracks, tracks)
 
 	// Update top 1000 combinations by entry count (descending)
 	sorted := make([]internal.TrackInfo, len(tracks))
@@ -135,7 +140,6 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 	tracks := s.tracks
 	totalEntries := 0
 	tracksByName := make(map[string]int)
-
 	for _, track := range tracks {
 		totalEntries += len(track.Data)
 		tracksByName[track.Name]++
@@ -146,19 +150,56 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 	classConfigs := internal.GetCarClasses()
 	expectedCombinations := len(trackConfigs) * len(classConfigs)
 
-	// Determine loading status
+	// Load fetch timestamps early and detect whether a fetch is in progress
+	fetchTimestamps, _ := s.fetchTracker.LoadTimestamps()
+	combinationTimestamps, _ := s.fetchTracker.LoadCombinationTimestamps()
+
+	currentlyFetching := s.isFetching || (!fetchTimestamps.LastFetchStart.IsZero() && (fetchTimestamps.LastFetchEnd.IsZero() || fetchTimestamps.LastFetchEnd.Before(fetchTimestamps.LastFetchStart)))
+
 	loadingStatus := "ready"
-	progressPercent := 100.0
-	if len(tracks) == 0 {
-		loadingStatus = "initializing"
-		progressPercent = 0.0
-	} else if s.isFetching {
-		loadingStatus = "loading"
-		progressPercent = (float64(len(tracks)) / float64(expectedCombinations)) * 100.0
+
+	// Build a mapping of trackID->trackName from configured tracks
+	trackMap := make(map[string]string)
+	for _, t := range internal.GetTracks() {
+		trackMap[t.TrackID] = t.Name
 	}
 
-	// Get fetch timestamps from persistent storage
-	fetchTimestamps, _ := s.fetchTracker.LoadTimestamps()
+	// Build a map: track name -> {count, last fetch}
+	lastFetchPerTrack := make(map[string]string)
+	type trackStat struct {
+		count int
+		last time.Time
+	}
+	stats := make(map[string]*trackStat)
+	for key, ts := range combinationTimestamps {
+		// key is trackID_classID
+		var trackID string
+		for i := len(key) - 1; i >= 0; i-- {
+			if key[i] == '_' {
+				trackID = key[:i]
+				break
+			}
+		}
+		if trackID == "" {
+			continue
+		}
+		trackName := trackMap[trackID]
+		if trackName == "" {
+			trackName = trackID
+		}
+		st, ok := stats[trackName]
+		if !ok {
+			stats[trackName] = &trackStat{count: 1, last: ts}
+		} else {
+			st.count++
+			if ts.After(st.last) {
+				st.last = ts
+			}
+		}
+	}
+	for name, st := range stats {
+		lastFetchPerTrack[name] = fmt.Sprintf("%d (last fetch: \"%s\")", st.count, st.last.Format(time.RFC3339Nano))
+	}
 
 	// Calculate fetch duration if both times are set
 	var fetchDuration *time.Duration
@@ -168,18 +209,18 @@ func (s *APIServer) GetDetailedStatus() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"status":                loadingStatus,
-		"tracks_loaded":         len(tracks),
-		"total_entries":         totalEntries,
-		"expected_combinations": expectedCombinations,
-		"progress_percent":      progressPercent,
-		"unique_tracks":         len(tracksByName),
-		"tracks_by_name":        tracksByName,
+		"status":                    loadingStatus,
+		"track_class_combination":   len(tracks),
+		"total_entries":             totalEntries,
+		"expected_combinations":     expectedCombinations,
+		"unique_tracks":             len(tracksByName),
+		"tracks_by_name":            tracksByName,
 		"fetching": map[string]interface{}{
-			"currently_fetching":  s.isFetching,
+			"currently_fetching":  currentlyFetching,
 			"last_fetch_start":    fetchTimestamps.LastFetchStart,
 			"last_fetch_end":      fetchTimestamps.LastFetchEnd,
 			"last_fetch_duration": fetchDuration,
+			"last_fetch_per_track": lastFetchPerTrack,
 		},
 	}
 }

@@ -163,22 +163,26 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 
 	// Save to cache
 	if err := dc.SaveTrackData(trackInfo); err != nil {
-		fmt.Printf("⚠️ Warning: Could not cache %s + %s: %v\n", trackName, className, err)
+		log.Printf("⚠️ Warning: Could not cache %s + %s: %v", trackName, className, err)
 	}
+
+	// Record per-combination fetch timestamp
+	fetchTracker := NewFetchTracker()
+	_ = fetchTracker.SaveCombinationFetch(trackID, classID)
 	// Include cache age when cache existed but was stale
 	if len(data) > 0 {
 		if cacheExists {
-			fmt.Printf("🌐 %s + %s: %.2fs (cache age: %s) → %d entries [track=%s, class=%s]\n",
+			log.Printf("🌐 %s + %s: %.2fs (cache age: %s) → %d entries [track=%s, class=%s]",
 				trackName, className, duration.Seconds(), formatDurationShort(cacheAge), len(data), trackID, classID)
 		} else {
-			fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
+			log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]", trackName, className, duration.Seconds(), len(data), trackID, classID)
 		}
 	} else {
 		if cacheExists {
-			fmt.Printf("🌐 %s + %s: %.2fs (cache age: %s) → no data [track=%s, class=%s]\n",
+			log.Printf("🌐 %s + %s: %.2fs (cache age: %s) → no data [track=%s, class=%s]",
 				trackName, className, duration.Seconds(), formatDurationShort(cacheAge), trackID, classID)
 		} else {
-			fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
+			log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]", trackName, className, duration.Seconds(), trackID, classID)
 		}
 	}
 	return trackInfo, false, 0, nil // false = fetched fresh; cacheAge not relevant for fresh
