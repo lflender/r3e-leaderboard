@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	DriverIndexFile = "cache/driver_index.json"
-	StatusFile      = "cache/status.json"
+	DriverIndexFile     = "cache/driver_index.json"
+	StatusFile          = "cache/status.json"
+	TopCombinationsFile = "cache/top_combinations.json"
 )
 
 // StatusData represents the status information to be exported to JSON
@@ -25,6 +26,21 @@ type StatusData struct {
 	TotalEntries     int       `json:"total_entries"`
 	LastIndexUpdate  time.Time `json:"last_index_update"`
 	IndexBuildTimeMs float64   `json:"index_build_time_ms"`
+}
+
+// TrackCombination represents a track/class combination with entry count
+type TrackCombination struct {
+	Track      string `json:"track"`
+	TrackID    string `json:"track_id"`
+	ClassID    string `json:"class_id"`
+	ClassName  string `json:"class_name"`
+	EntryCount int    `json:"entry_count"`
+}
+
+// TopCombinationsData represents the top combinations export
+type TopCombinationsData struct {
+	Count   int                `json:"count"`
+	Results []TrackCombination `json:"results"`
 }
 
 // ExportDriverIndex exports the driver index to a JSON file on disk
@@ -247,5 +263,96 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		buildDuration.Seconds(), len(index), totalEntries)
 
 	// Export the index to JSON
-	return ExportDriverIndex(index, buildDuration)
+	if err := ExportDriverIndex(index, buildDuration); err != nil {
+		return err
+	}
+
+	// Export top combinations
+	return ExportTopCombinations(tracks)
+}
+
+// ExportTopCombinations exports the top 1000 track/class combinations by entry count
+func ExportTopCombinations(tracks []TrackInfo) error {
+	log.Printf("🔄 Building top combinations from %d track/class combinations...", len(tracks))
+
+	// Build combinations list
+	combinations := make([]TrackCombination, 0, len(tracks))
+	for _, track := range tracks {
+		if len(track.Data) == 0 {
+			continue
+		}
+
+		// Get class name from the first entry
+		className := GetCarClassName(track.ClassID)
+
+		combination := TrackCombination{
+			Track:      track.Name,
+			TrackID:    track.TrackID,
+			ClassID:    track.ClassID,
+			ClassName:  className,
+			EntryCount: len(track.Data),
+		}
+		combinations = append(combinations, combination)
+	}
+
+	// Sort by entry count descending
+	for i := 0; i < len(combinations)-1; i++ {
+		for j := i + 1; j < len(combinations); j++ {
+			if combinations[j].EntryCount > combinations[i].EntryCount {
+				combinations[i], combinations[j] = combinations[j], combinations[i]
+			}
+		}
+	}
+
+	// Limit to top 1000
+	if len(combinations) > 1000 {
+		combinations = combinations[:1000]
+	}
+
+	topData := TopCombinationsData{
+		Count:   len(combinations),
+		Results: combinations,
+	}
+
+	// Convert to JSON
+	jsonData, err := json.MarshalIndent(topData, "", "  ")
+	if err != nil {
+		log.Printf("❌ Failed to marshal top combinations: %v", err)
+		return err
+	}
+
+	// Ensure cache directory exists
+	cacheDir := filepath.Dir(TopCombinationsFile)
+	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+		log.Printf("❌ Failed to create cache directory: %v", err)
+		return err
+	}
+
+	// Write to temporary file first (atomic write pattern)
+	tempFile := TopCombinationsFile + ".tmp"
+	if err := os.WriteFile(tempFile, jsonData, 0644); err != nil {
+		log.Printf("❌ Failed to write temporary top combinations file: %v", err)
+		return err
+	}
+
+	// Rename temp file to final file (atomic operation)
+	if err := os.Rename(tempFile, TopCombinationsFile); err != nil {
+		log.Printf("⚠️ WARNING: Atomic rename failed: %v", err)
+		log.Printf("   Attempting direct write as fallback")
+
+		// Fallback: try direct write
+		if directErr := os.WriteFile(TopCombinationsFile, jsonData, 0644); directErr != nil {
+			log.Printf("❌ ERROR: Direct write also failed: %v", directErr)
+			os.Remove(tempFile)
+			return directErr
+		}
+
+		log.Printf("✅ Fallback write successful")
+		os.Remove(tempFile)
+	}
+
+	log.Printf("💾 Top combinations exported to %s (%d combinations, %.2f KB)",
+		TopCombinationsFile, len(combinations), float64(len(jsonData))/1024)
+
+	return nil
 }

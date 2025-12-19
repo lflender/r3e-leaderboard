@@ -126,6 +126,59 @@ if (status.fetch_in_progress) {
 }
 ```
 
+### Top Combinations
+**File:** `cache/top_combinations.json`
+
+Contains the top 1000 track/class combinations by entry count, sorted in descending order.
+
+**Structure:**
+```json
+{
+  "count": 1000,
+  "results": [
+    {
+      "track": "Nürburgring - Grand Prix",
+      "track_id": "1693",
+      "class_id": "1703",
+      "class_name": "GTR 3",
+      "entry_count": 1523
+    },
+    {
+      "track": "Spa-Francorchamps - Grand Prix",
+      "track_id": "1778",
+      "class_id": "1703",
+      "class_name": "GTR 3",
+      "entry_count": 1456
+    }
+  ]
+}
+```
+
+**Front-end Usage:**
+```javascript
+// Load top combinations
+const topCombos = await fetch('cache/top_combinations.json').then(r => r.json());
+
+// Display most popular combinations
+console.log(`Top ${topCombos.count} combinations:`);
+topCombos.results.forEach((combo, index) => {
+  console.log(`${index + 1}. ${combo.track} (${combo.class_name}) - ${combo.entry_count} entries`);
+});
+
+// Filter by track
+const nurburgring = topCombos.results.filter(c => c.track.includes('Nürburgring'));
+
+// Filter by class
+const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
+```
+  console.log('Data is being updated...');
+  console.log(`Progress: ${status.track_count} tracks loaded`);
+} else {
+  console.log('All data up to date!');
+  console.log(`${status.total_drivers} drivers indexed`);
+}
+```
+
 ## 📊 Data Coverage
 
 - **169 Tracks** - All RaceRoom circuits and layouts
@@ -164,12 +217,14 @@ if (status.fetch_in_progress) {
 cache/
 ├── driver_index.json         # Searchable driver index
 ├── status.json               # Status and statistics
+├── top_combinations.json     # Top 1000 track/class combos by entries
 ├── fetch_timestamps.json     # Track fetch history
 ├── track_status.json         # Track status tracking
 ├── track_9473/
 │   ├── class_1703.json.gz   # Brands Hatch + GT3
 │   ├── class_1704.json.gz   # Brands Hatch + GT2
 │   └── ...
+```
 ├── track_10394/
 │   └── ...
 ```
