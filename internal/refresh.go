@@ -4,7 +4,7 @@ import (
 	"log"
 )
 
-// PerformIncrementalRefresh refreshes track data progressively without API downtime
+// PerformIncrementalRefresh refreshes track data progressively
 // If trackID is provided, only refreshes combinations for that specific track
 func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, updateCallback func([]TrackInfo)) {
 	trackConfigs := GetTracks()
@@ -60,7 +60,10 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
 			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
 				apiClient, trackConfig.Name, trackConfig.TrackID,
-				classConfig.Name, classConfig.ClassID, true) // true = force refresh
+				classConfig.Name, classConfig.ClassID,
+				true,  // force refresh
+				false, // don't load expired cache, fetch fresh
+			)
 
 			if err != nil {
 				log.Printf("❌ Failed to refresh %s - %s: %v", trackConfig.Name, classConfig.Name, err)
@@ -77,9 +80,9 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 				updatedCount++
 			}
 
-			// Update API every 100 tracks to keep it responsive (less spam)
+			// Update index every 100 tracks (less spam)
 			if updatedCount%100 == 0 && updatedCount > 0 {
-				// Merge updatedTracks over existingTracks so the API/index sees the full dataset
+				// Merge updatedTracks over existingTracks so the index sees the full dataset
 				merged := make(map[string]TrackInfo)
 				for k, v := range existingTracks {
 					merged[k] = v
@@ -94,9 +97,9 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 					mergedSlice = append(mergedSlice, v)
 				}
 
-				log.Printf("🔄 Updating API with %d combined tracks (fresh+existing)...", len(mergedSlice))
+				log.Printf("🔄 Updating index with %d combined tracks (fresh+existing)...", len(mergedSlice))
 				updateCallback(mergedSlice)
-				log.Printf("✅ API updated (%d/%d combinations processed)", processedCount, totalCombinations)
+				log.Printf("✅ Index updated (%d/%d combinations processed)", processedCount, totalCombinations)
 			}
 		}
 	}
@@ -115,7 +118,7 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 		mergedSlice = append(mergedSlice, v)
 	}
 
-	log.Printf("🔄 Final update: updating API with %d total tracks (merged)", len(mergedSlice))
+	log.Printf("🔄 Final update: updating index with %d total tracks (merged)", len(mergedSlice))
 	updateCallback(mergedSlice)
 	log.Printf("✅ Incremental refresh complete: %d tracks updated", updatedCount)
 }

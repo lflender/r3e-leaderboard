@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/signal"
 	"r3e-leaderboard/internal"
-	"r3e-leaderboard/internal/server"
 	"syscall"
 	"time"
 )
@@ -14,7 +13,7 @@ import (
 var orchestrator *Orchestrator
 
 func main() {
-	log.Println("🏎️  RaceRoom Leaderboard API Server")
+	log.Println("🏎️  RaceRoom Leaderboard Cache Generator")
 	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 
 	// Load configuration
@@ -23,16 +22,8 @@ func main() {
 	// Initialize cancelable context
 	fetchContext, fetchCancel := context.WithCancel(context.Background())
 
-	// Create API server
-	searchEngine := internal.NewSearchEngine()
-	apiServer := server.New(searchEngine)
-
 	// Create orchestrator to coordinate all operations
-	orchestrator = NewOrchestrator(apiServer, fetchContext, fetchCancel)
-
-	// Start HTTP server
-	httpServer := server.NewHTTPServer(apiServer, config.Server.Port)
-	httpServer.Start()
+	orchestrator = NewOrchestrator(fetchContext, fetchCancel)
 
 	// Start background operations
 	orchestrator.StartBackgroundDataLoading()
@@ -41,22 +32,6 @@ func main() {
 
 	// Wait for shutdown signal
 	waitForShutdown()
-}
-
-// GetFetchProgress returns current fetch progress for status endpoint
-func GetFetchProgress() (bool, int, int) {
-	if orchestrator != nil {
-		return orchestrator.GetFetchProgress()
-	}
-	return false, 0, 0
-}
-
-// GetScrapeTimestamps returns the last scraping start and end times
-func GetScrapeTimestamps() (time.Time, time.Time, bool) {
-	if orchestrator != nil {
-		return orchestrator.GetScrapeTimestamps()
-	}
-	return time.Time{}, time.Time{}, false
 }
 
 func waitForShutdown() {

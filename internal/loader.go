@@ -25,31 +25,73 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	dataCache := NewDataCache()
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
-	currentCombination := 0
 
-	// Check if we'll need any API fetching (for progress display)
-	needsAPIFetching := false
+	// PHASE 1: Load ALL existing cache (even if expired)
+	log.Println("🔄 Phase 1: Loading all cached data...")
+	cacheLoadCount := 0
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
-			if !dataCache.IsCacheValid(track.TrackID, class.ClassID) {
-				needsAPIFetching = true
+			// Check if cancellation was requested
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Cancelled during cache loading")
+				return allTrackData
+			default:
+			}
+
+			// Only load from cache, don't fetch
+			if dataCache.CacheExists(track.TrackID, class.ClassID) {
+				trackInfo, err := dataCache.LoadTrackData(track.TrackID, class.ClassID)
+				if err == nil && len(trackInfo.Data) > 0 {
+					allTrackData = append(allTrackData, trackInfo)
+					cacheLoadCount++
+				}
+			}
+		}
+	}
+
+	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
+
+	// Trigger cache complete callback with all loaded cache
+	if cacheCompleteCallback != nil && len(allTrackData) > 0 {
+		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
+		cacheCompleteCallback(allTrackData)
+		log.Println("✅ Initial index ready")
+	}
+
+	// PHASE 2: Fetch missing and expired data
+	needsFetching := false
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			if !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID) {
+				needsFetching = true
 				break
 			}
 		}
-		if needsAPIFetching {
+		if needsFetching {
 			break
 		}
 	}
-	hasFetchedFromAPI := false
-	cacheLoadingComplete := false
+
+	if !needsFetching {
+		log.Println("✅ All cache is fresh - no fetching needed")
+		return allTrackData
+	}
+
+	log.Println("🔄 Phase 2: Fetching missing and expired data...")
+	fetchTracker.SaveFetchStart()
+
+	currentCombination := 0
+	fetchedCount := 0
+
+	// Create a map of existing data for quick lookup
+	existingData := make(map[string]TrackInfo)
+	for _, track := range allTrackData {
+		key := track.TrackID + "_" + track.ClassID
+		existingData[key] = track
+	}
 
 	for _, track := range trackConfigs {
-		// Track per-track cache statistics
-		trackCachedClasses := 0
-		trackCachedEntries := 0
-		trackHasData := false
-		cacheSummaryShown := false
-
 		for _, class := range classConfigs {
 			currentCombination++
 
@@ -61,101 +103,76 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			default:
 			}
 
-			// Check if this will be fetched (not cached)
-			willFetch := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
+			key := track.TrackID + "_" + class.ClassID
+			needsRefresh := !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID)
 
-			// If this is the first fetch and we have cache data, trigger cache complete callback
-			if willFetch && !cacheLoadingComplete && len(allTrackData) > 0 {
-				cacheLoadingComplete = true
-				if cacheCompleteCallback != nil {
-					log.Printf("📊 Cache loading complete - %d tracks/class combinations loaded, building initial index...", len(allTrackData))
-					cacheCompleteCallback(allTrackData)
-					log.Println("✅ Initial index ready - API is now searchable while fetching continues")
-				}
+			if !needsRefresh {
+				// Already have fresh cache, skip
+				continue
 			}
 
-			// Show progress every 50 combinations if ANY fetching is needed
-			if (currentCombination%50 == 0 || currentCombination == 1) && needsAPIFetching {
-
-				// Update progress callback every 50 combinations
+			// Show progress every 50 combinations
+			if currentCombination%50 == 0 || currentCombination == 1 {
 				if progressCallback != nil {
 					progressCallback(allTrackData)
 				}
 			}
 
-			// If we have cached data and we're about to fetch, show cache summary first
-			if willFetch && trackCachedClasses > 0 && !cacheSummaryShown {
-				log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
-				cacheSummaryShown = true
-			}
-
+			// Fetch fresh data
 			trackInfo, fromCache, err := dataCache.LoadOrFetchTrackData(
-				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false)
+				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false, false)
 
 			if err != nil {
 				continue // Skip logging errors to reduce spam
 			}
 
-			// Only keep combinations that have data
+			// Update or add the track data
 			if len(trackInfo.Data) > 0 {
-				allTrackData = append(allTrackData, trackInfo)
-				trackHasData = true
+				existingData[key] = trackInfo
+				fetchedCount++
 
-				// Update server every 10 new tracks for more responsive periodic indexing
-				if progressCallback != nil && len(allTrackData)%10 == 0 {
-					progressCallback(allTrackData)
-				}
-
-				// Track per-track cache statistics
-				if fromCache {
-					trackCachedClasses++
-					trackCachedEntries += len(trackInfo.Data)
-				} else {
-					// This was fetched from API - track fetch timing
-					if !hasFetchedFromAPI {
-						fetchTracker.SaveFetchStart()
-						hasFetchedFromAPI = true
+				// Update progress callback periodically
+				if progressCallback != nil && fetchedCount%10 == 0 {
+					// Rebuild allTrackData from map
+					allTrackData = make([]TrackInfo, 0, len(existingData))
+					for _, v := range existingData {
+						allTrackData = append(allTrackData, v)
 					}
+					progressCallback(allTrackData)
 				}
 			}
 
-			// Rate limiting only for API calls, not cached files
+			// Rate limiting for API calls
 			if !fromCache {
-				// API rate limiting with frequent cancellation checks
 				sleepDuration := 1500 * time.Millisecond
 				for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
 					select {
 					case <-ctx.Done():
 						log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
+						// Rebuild final data from map
+						allTrackData = make([]TrackInfo, 0, len(existingData))
+						for _, v := range existingData {
+							allTrackData = append(allTrackData, v)
+						}
 						return allTrackData
 					default:
 					}
 					time.Sleep(100 * time.Millisecond)
 				}
-			} else {
-				// Quick cancellation check for cached files (no delay)
-				select {
-				case <-ctx.Done():
-					log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
-					return allTrackData
-				default:
-				}
 			}
 		}
-
-		// Show per-track cache summary if we haven't shown it yet and track had cached data
-		if trackCachedClasses > 0 && trackHasData && !cacheSummaryShown {
-			log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
-		}
 	}
 
-	// Save fetch end time if we did any API fetching
-	if hasFetchedFromAPI {
-		fetchTracker.SaveFetchEnd()
+	// Rebuild final allTrackData from map
+	allTrackData = make([]TrackInfo, 0, len(existingData))
+	for _, v := range existingData {
+		allTrackData = append(allTrackData, v)
 	}
 
-	log.Printf("✅ Loaded %d combinations with data (out of %d total)",
-		len(allTrackData), totalCombinations)
+	fetchTracker.SaveFetchEnd()
+
+	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
+		len(allTrackData), cacheLoadCount, fetchedCount)
 	return allTrackData
 }
 

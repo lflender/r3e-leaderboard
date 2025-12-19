@@ -66,6 +66,23 @@ func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	return time.Since(info.ModTime()) < dc.maxAge
 }
 
+// CacheExists checks if cached data exists (regardless of age)
+func (dc *DataCache) CacheExists(trackID, classID string) bool {
+	filename := dc.GetCacheFileName(trackID, classID)
+	_, err := os.Stat(filename)
+	return err == nil
+}
+
+// IsCacheExpired checks if cache exists but is older than maxAge
+func (dc *DataCache) IsCacheExpired(trackID, classID string) bool {
+	filename := dc.GetCacheFileName(trackID, classID)
+	info, err := os.Stat(filename)
+	if err != nil {
+		return false // doesn't exist, so not "expired"
+	}
+	return time.Since(info.ModTime()) >= dc.maxAge
+}
+
 // SaveTrackData saves track data to cache
 func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	if err := dc.EnsureCacheDir(); err != nil {
@@ -128,14 +145,26 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, error) {
+// If loadExpiredCache is true, will load even expired cache without fetching
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
 	// Try to load from cache first (unless forced to refresh)
-	if !force && dc.IsCacheValid(trackID, classID) {
-		trackInfo, err := dc.LoadTrackData(trackID, classID)
-		if err == nil {
-			return trackInfo, true, nil // true = loaded from cache
-		} else {
-			log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+	if !force {
+		// If loadExpiredCache is true, load any existing cache regardless of age
+		if loadExpiredCache && dc.CacheExists(trackID, classID) {
+			trackInfo, err := dc.LoadTrackData(trackID, classID)
+			if err == nil {
+				return trackInfo, true, nil // true = loaded from cache
+			} else {
+				log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+			}
+		} else if dc.IsCacheValid(trackID, classID) {
+			// Load only non-expired cache
+			trackInfo, err := dc.LoadTrackData(trackID, classID)
+			if err == nil {
+				return trackInfo, true, nil // true = loaded from cache
+			} else {
+				log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+			}
 		}
 	}
 

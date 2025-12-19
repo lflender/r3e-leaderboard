@@ -34,3 +34,9 @@ go.work.sum
 # cache
 *.json
 *.gz
+
+# front-end
+*.html
+*.css
+*.js
+robots.txt

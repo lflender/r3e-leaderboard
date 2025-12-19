@@ -4,26 +4,27 @@ import (
 	"context"
 	"log"
 	"r3e-leaderboard/internal"
-	"r3e-leaderboard/internal/server"
 	"time"
 )
 
 // Orchestrator coordinates data loading, refreshing, and indexing
 type Orchestrator struct {
-	apiServer       *server.APIServer
 	fetchContext    context.Context
 	fetchCancel     context.CancelFunc
 	fetchInProgress bool
 	lastScrapeStart time.Time
 	lastScrapeEnd   time.Time
+	tracks          []internal.TrackInfo
+	totalDrivers    int
+	totalEntries    int
 }
 
 // NewOrchestrator creates a new orchestrator instance
-func NewOrchestrator(apiServer *server.APIServer, ctx context.Context, cancel context.CancelFunc) *Orchestrator {
+func NewOrchestrator(ctx context.Context, cancel context.CancelFunc) *Orchestrator {
 	return &Orchestrator{
-		apiServer:    apiServer,
 		fetchContext: ctx,
 		fetchCancel:  cancel,
+		tracks:       make([]internal.TrackInfo, 0),
 	}
 }
 
@@ -44,9 +45,12 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 		o.lastScrapeStart = time.Now()
 		o.fetchInProgress = true
 
-		// Create a callback to update server incrementally during loading
+		// Export initial status
+		o.exportStatus()
+
+		// Create a callback to update status incrementally during loading
 		progressCallback := func(currentTracks []internal.TrackInfo) {
-			o.apiServer.UpdateData(currentTracks)
+			o.tracks = currentTracks
 			// Reduced logging - only show major milestones (skip initial 0)
 			if len(currentTracks)%500 == 0 && len(currentTracks) > 0 {
 				log.Printf("📊 %d track/class combinations loaded", len(currentTracks))
@@ -55,24 +59,31 @@ func (o *Orchestrator) StartBackgroundDataLoading() {
 
 		// Callback when cache loading is complete - build index immediately
 		cacheCompleteCallback := func(cachedTracks []internal.TrackInfo) {
-			o.apiServer.UpdateData(cachedTracks)
-			searchEngine := o.apiServer.GetSearchEngine()
-			searchEngine.BuildIndex(cachedTracks)
+			o.tracks = cachedTracks
+			log.Println("🔄 Building initial search index from cache...")
+			if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+				log.Printf("⚠️ Failed to export index: %v", err)
+			}
+			o.exportStatus()
 		}
 
 		tracks := internal.LoadAllTrackDataWithCallback(o.fetchContext, progressCallback, cacheCompleteCallback)
 
 		log.Println("🔄 Building final search index...")
-		searchEngine := o.apiServer.GetSearchEngine()
-		searchEngine.BuildIndex(tracks)
+		if err := internal.BuildAndExportIndex(tracks); err != nil {
+			log.Printf("⚠️ Failed to export index: %v", err)
+		}
 		log.Println("✅ Final index complete")
 
 		// Final update with all data
-		o.apiServer.UpdateData(tracks)
+		o.tracks = tracks
+		o.calculateStats()
 
 		o.lastScrapeEnd = time.Now()
 		o.fetchInProgress = false
-		log.Printf("✅ Data loading complete! API fully operational with %d track/class combinations", len(tracks))
+		o.exportStatus()
+
+		log.Printf("✅ Data loading complete! %d track/class combinations indexed", len(tracks))
 	}()
 }
 
@@ -88,16 +99,19 @@ func (o *Orchestrator) StartScheduledRefresh() {
 
 		log.Println("🔄 Starting scheduled incremental refresh...")
 		o.fetchInProgress = true
+		o.exportStatus()
 
-		// Perform incremental refresh - updates API progressively
-		currentTracks := o.apiServer.GetTracks()
-		internal.PerformIncrementalRefresh(currentTracks, "", func(updatedTracks []internal.TrackInfo) {
-			searchEngine := o.apiServer.GetSearchEngine()
-			searchEngine.BuildIndex(updatedTracks)
-			o.apiServer.UpdateData(updatedTracks)
+		// Perform incremental refresh
+		internal.PerformIncrementalRefresh(o.tracks, "", func(updatedTracks []internal.TrackInfo) {
+			o.tracks = updatedTracks
+			o.calculateStats()
+			if err := internal.BuildAndExportIndex(updatedTracks); err != nil {
+				log.Printf("⚠️ Failed to export index: %v", err)
+			}
 		})
 
 		o.fetchInProgress = false
+		o.exportStatus()
 		log.Println("✅ Scheduled incremental refresh completed")
 	})
 }
@@ -115,19 +129,59 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 
 		for range ticker.C {
 			// Only index if we're still fetching and have some data
-			if o.fetchInProgress && o.apiServer.GetTrackCount() > 0 {
-				tracks := o.apiServer.GetTracks()
-				if len(tracks) > 0 {
-					searchEngine := o.apiServer.GetSearchEngine()
-					searchEngine.BuildIndex(tracks)
-					log.Printf("🔍 Index updated: %d track/class combinations searchable", len(tracks))
+			if o.fetchInProgress && len(o.tracks) > 0 {
+				if err := internal.BuildAndExportIndex(o.tracks); err != nil {
+					log.Printf("⚠️ Failed to export index: %v", err)
+				} else {
+					log.Printf("🔍 Index updated: %d track/class combinations searchable", len(o.tracks))
 				}
+				o.exportStatus()
 			} else if !o.fetchInProgress {
 				log.Println("⏹️ Stopping periodic indexing - data loading completed")
 				return
 			}
 		}
 	}()
+}
+
+// calculateStats calculates statistics for status export
+func (o *Orchestrator) calculateStats() {
+	o.totalEntries = 0
+	driverSet := make(map[string]bool)
+
+	for _, track := range o.tracks {
+		o.totalEntries += len(track.Data)
+
+		// Count unique drivers
+		for _, entry := range track.Data {
+			if driverInterface, exists := entry["driver"]; exists {
+				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
+					if name, ok := driverMap["name"].(string); ok && name != "" {
+						driverSet[name] = true
+					}
+				}
+			}
+		}
+	}
+
+	o.totalDrivers = len(driverSet)
+}
+
+// exportStatus exports the current status to JSON
+func (o *Orchestrator) exportStatus() {
+	status := internal.StatusData{
+		FetchInProgress: o.fetchInProgress,
+		LastScrapeStart: o.lastScrapeStart,
+		LastScrapeEnd:   o.lastScrapeEnd,
+		TrackCount:      len(o.tracks),
+		TotalDrivers:    o.totalDrivers,
+		TotalEntries:    o.totalEntries,
+		LastIndexUpdate: time.Now(),
+	}
+
+	if err := internal.ExportStatusData(status); err != nil {
+		log.Printf("⚠️ Failed to export status: %v", err)
+	}
 }
 
 // CancelFetch cancels the ongoing fetch operation
