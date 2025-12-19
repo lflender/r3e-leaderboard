@@ -1,0 +1,16 @@
+[Unit]
+Description=RaceRoom Leaderboard API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/home/www/public
+ExecStart=/home/www/public/r3e-leaderboard-linux-arm64
+Restart=on-failure
+RestartSec=5s
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+[Install]
+WantedBy=multi-user.target

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -99,6 +100,29 @@ func (h *HTTPServer) startWithErrorHandling() {
 	}
 
 	log.Printf("✅ HTTP server running and reachable on all interfaces at port %d", h.port)
+
+	// Optionally listen on a Unix socket for environments where TCP localhost is not reachable from PHP/Apache
+	if sockPath := os.Getenv("R3E_UNIX_SOCKET"); sockPath != "" {
+		go func() {
+			// Ensure directory exists and remove any stale socket
+			dir := filepath.Dir(sockPath)
+			if err := os.MkdirAll(dir, 0o777); err != nil {
+				log.Printf("❌ Failed to create unix socket dir %s: %v", dir, err)
+				return
+			}
+			_ = os.Remove(sockPath)
+			ln, err := net.Listen("unix", sockPath)
+			if err != nil {
+				log.Printf("❌ Failed to bind unix socket %s: %v", sockPath, err)
+				return
+			}
+			_ = os.Chmod(sockPath, 0o777)
+			log.Printf("✅ Unix socket listening at %s", sockPath)
+			if err := http.Serve(ln, nil); err != nil {
+				log.Printf("❌ HTTP server (unix) error: %v", err)
+			}
+		}()
+	}
 }
 
 // handleHealthCheck provides a simple health check endpoint

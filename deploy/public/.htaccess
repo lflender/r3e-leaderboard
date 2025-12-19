@@ -1,0 +1,16 @@
+# Route /api/* to PHP proxy (fallback if mod_proxy isn't available)
+Options -MultiViews
+RewriteEngine On
+RewriteBase /
+
+# Serve existing files and directories as-is
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Forward /api/* to /api/index.php (the PHP proxy)
+RewriteRule ^api/.*$ api/index.php [QSA,L]
+
+# Optional: if your host allows it, set BACKEND_BASE override here
+# Example (uncomment and set your server IP):
+# SetEnv BACKEND_BASE http://217.160.0.97:8080
