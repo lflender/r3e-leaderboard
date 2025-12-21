@@ -31,6 +31,8 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 	}
 
 	apiClient := NewAPIClient()
+	defer apiClient.Close() // Ensure connections are cleaned up
+
 	dataCache := NewDataCache()
 
 	// Create a map for quick lookup of existing tracks
@@ -120,5 +122,11 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 
 	log.Printf("🔄 Final update: updating index with %d total tracks (merged)", len(mergedSlice))
 	updateCallback(mergedSlice)
+
+	// Clean up temporary maps to release memory
+	existingTracks = nil
+	updatedTracks = nil
+	merged = nil
+
 	log.Printf("✅ Incremental refresh complete: %d tracks updated", updatedCount)
 }

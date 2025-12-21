@@ -9,6 +9,7 @@ import (
 type Scheduler struct {
 	refreshTime string // Time in format "15:04" (24h format)
 	stopChan    chan bool
+	stopped     bool
 }
 
 // NewScheduler creates a new scheduler with default refresh time of 4:00 AM
@@ -16,6 +17,7 @@ func NewScheduler() *Scheduler {
 	return &Scheduler{
 		refreshTime: "04:00",
 		stopChan:    make(chan bool),
+		stopped:     false,
 	}
 }
 
@@ -26,11 +28,20 @@ func (s *Scheduler) Start(refreshCallback func()) {
 
 // Stop stops the background scheduler
 func (s *Scheduler) Stop() {
-	s.stopChan <- true
+	if !s.stopped {
+		s.stopped = true
+		close(s.stopChan)
+		log.Println("📅 Scheduler stop signal sent")
+	}
 }
 
 // runScheduler runs the background scheduling loop
 func (s *Scheduler) runScheduler(refreshCallback func()) {
+	defer func() {
+		// Clean up on exit
+		log.Println("📅 Scheduler goroutine exiting")
+	}()
+
 	for {
 		// Calculate time until next 4:00 AM
 		now := time.Now()
@@ -44,12 +55,16 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 		timeUntilRefresh := time.Until(next4AM)
 		log.Printf("📅 Next automatic refresh scheduled in %v (at %s)", timeUntilRefresh.Round(time.Minute), next4AM.Format("2006-01-02 15:04"))
 
+		// Use a timer instead of time.After to allow cleanup
+		timer := time.NewTimer(timeUntilRefresh)
+
 		// Wait until refresh time or stop signal
 		select {
-		case <-time.After(timeUntilRefresh):
+		case <-timer.C:
 			log.Println("🕓 Automatic refresh triggered at 4:00 AM")
 			refreshCallback()
 		case <-s.stopChan:
+			timer.Stop()
 			log.Println("📅 Scheduler stopped")
 			return
 		}

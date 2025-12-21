@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -89,6 +90,9 @@ func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
 	exportDuration := time.Since(indexStart)
 	log.Printf("💾 Driver index exported to %s (%.3f seconds, %.2f MB)",
 		DriverIndexFile, exportDuration.Seconds(), float64(len(jsonData))/(1024*1024))
+
+	// Release jsonData memory immediately
+	jsonData = nil
 
 	return nil
 }
@@ -259,15 +263,38 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	}
 
 	buildDuration := time.Since(indexStart)
+
+	// Log memory usage
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries)",
 		buildDuration.Seconds(), len(index), totalEntries)
+	log.Printf("💾 Memory usage: Alloc=%dMB, TotalAlloc=%dMB, Sys=%dMB, NumGC=%d",
+		m.Alloc/1024/1024, m.TotalAlloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 
-	// Export the index to JSON
+	// Export the driver index with build duration
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
 		return err
 	}
 
-	// Export top combinations
+	// Update status with index statistics
+	status := StatusData{
+		TotalDrivers:     len(index),
+		TotalEntries:     totalEntries,
+		LastIndexUpdate:  time.Now(),
+		IndexBuildTimeMs: buildDuration.Seconds() * 1000,
+	}
+	if err := ExportStatusData(status); err != nil {
+		log.Printf("⚠️ Failed to update status with index stats: %v", err)
+	}
+
+	// Clean up index variable after export to help GC
+	// The exported JSON files will persist the data
+	index = nil
+
+	// Suggest garbage collection after large index operations
+	runtime.GC()
+
 	return ExportTopCombinations(tracks)
 }
 

@@ -12,7 +12,7 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 }
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
-func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo)) []TrackInfo {
+func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool)) []TrackInfo {
 	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
@@ -21,6 +21,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
 	apiClient := NewAPIClient()
+	defer apiClient.Close() // Ensure connections are cleaned up
+
 	var allTrackData []TrackInfo
 	dataCache := NewDataCache()
 
@@ -29,6 +31,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	// PHASE 1: Load ALL existing cache (even if expired)
 	log.Println("🔄 Phase 1: Loading all cached data...")
 	cacheLoadCount := 0
+	// Pre-allocate with estimated capacity to avoid repeated allocations
+	allTrackData = make([]TrackInfo, 0, totalCombinations/2)
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
 			// Check if cancellation was requested
@@ -52,14 +56,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
 
-	// Trigger cache complete callback with all loaded cache
-	if cacheCompleteCallback != nil && len(allTrackData) > 0 {
-		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
-		cacheCompleteCallback(allTrackData)
-		log.Println("✅ Initial index ready")
-	}
-
-	// PHASE 2: Fetch missing and expired data
+	// PHASE 2: Check if we need to fetch
 	needsFetching := false
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
@@ -73,11 +70,20 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		}
 	}
 
+	// Trigger cache complete callback with whether we'll fetch
+	// Always invoke so orchestrator can decide to start periodic indexing
+	if cacheCompleteCallback != nil {
+		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
+		cacheCompleteCallback(allTrackData, needsFetching)
+		log.Println("✅ Initial index callback dispatched")
+	}
+
 	if !needsFetching {
 		log.Println("✅ All cache is fresh - no fetching needed")
 		return allTrackData
 	}
 
+	// PHASE 3: Fetch missing and expired data
 	log.Println("🔄 Phase 2: Fetching missing and expired data...")
 	fetchTracker.SaveFetchStart()
 
@@ -168,6 +174,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	for _, v := range existingData {
 		allTrackData = append(allTrackData, v)
 	}
+
+	// Clean up temporary map to release memory
+	existingData = nil
 
 	fetchTracker.SaveFetchEnd()
 
