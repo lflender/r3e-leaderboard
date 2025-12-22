@@ -47,6 +47,17 @@ func main() {
 	// Create orchestrator to coordinate all operations
 	orchestrator = NewOrchestrator(fetchContext, fetchCancel)
 
+	// Promote any leftover temporary cache from previous runs before starting
+	tempCache := internal.NewTempDataCache()
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Startup cache promotion error: %v", err)
+	} else if promotedCount > 0 {
+		log.Printf("🔄 Startup: promoted %d temp cache files", promotedCount)
+	} else {
+		log.Printf("ℹ️ Startup: no temp cache files to promote")
+	}
+
 	// Start background operations
 	orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
 	orchestrator.StartScheduledRefresh()

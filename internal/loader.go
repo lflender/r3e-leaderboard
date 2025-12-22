@@ -24,7 +24,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	defer apiClient.Close() // Ensure connections are cleaned up
 
 	var allTrackData []TrackInfo
-	dataCache := NewDataCache()
+	dataCache := NewDataCache()      // For reading existing cache
+	tempCache := NewTempDataCache()  // For writing new fetches
+	defer tempCache.ClearTempCache() // Clean up temp cache on exit
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 
@@ -124,13 +126,32 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				}
 			}
 
-			// Fetch fresh data
-			trackInfo, fromCache, err := dataCache.LoadOrFetchTrackData(
-				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false, false)
-
+			// Fetch fresh data - always fetch (don't check cache) and write to tempCache
+			// We use dataCache to check if cache exists/expired above, but write to tempCache
+			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
 			if err != nil {
-				continue // Skip logging errors to reduce spam
+				continue // Skip on fetch error
 			}
+
+			trackInfo := TrackInfo{
+				Name:    track.Name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+				Data:    data,
+			}
+
+			// Save to temp cache
+			if saveErr := tempCache.SaveTrackData(trackInfo); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
+			}
+
+			if len(data) > 0 {
+				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+			} else {
+				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+			}
+
+			fromCache := false
 
 			// Update or add the track data
 			if len(trackInfo.Data) > 0 {
@@ -177,6 +198,16 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	// Clean up temporary map to release memory
 	existingData = nil
+
+	// Promote temp cache to main cache atomically
+	log.Println("🔄 Promoting temporary cache to main cache...")
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
+		// Continue anyway - we still have the in-memory data
+	} else if promotedCount > 0 {
+		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
+	}
 
 	fetchTracker.SaveFetchEnd()
 

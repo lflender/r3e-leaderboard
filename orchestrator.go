@@ -151,7 +151,13 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 			log.Println("⏹️ Periodic indexing goroutine exiting")
 		}()
 
+		// Validate interval; default to 30 minutes if invalid
+		if intervalMinutes < 1 {
+			log.Printf("⚠️ Invalid periodic indexing interval (%d). Defaulting to 30 minutes.", intervalMinutes)
+			intervalMinutes = 30
+		}
 		interval := time.Duration(intervalMinutes) * time.Minute
+		log.Printf("⏱️ Periodic indexing ticker started: every %v", interval)
 
 		// Immediate indexing once if we have no previous index
 		if o.fetchInProgress && len(o.tracks) > 0 && o.lastIndexedCount == 0 {
@@ -176,8 +182,18 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 
 			select {
 			case <-ticker.C:
+				log.Println("⏱️ Periodic indexing tick fired")
 				// Only index if we're still fetching and have some data
 				if o.fetchInProgress && len(o.tracks) > 0 {
+					// Promote temp cache before indexing to ensure consistency
+					tempCache := internal.NewTempDataCache()
+					promotedCount, err := tempCache.PromoteTempCache()
+					if err != nil {
+						log.Printf("⚠️ Failed to promote temp cache: %v", err)
+					} else if promotedCount > 0 {
+						log.Printf("🔄 Promoted %d new cache files before indexing", promotedCount)
+					}
+
 					// Rebuild index every interval during fetching
 					if err := internal.BuildAndExportIndex(o.tracks); err != nil {
 						log.Printf("⚠️ Failed to export index: %v", err)
@@ -198,8 +214,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 	}()
 }
 
-// calculateStats calculates statistics for status export
-// DEPRECATED: This is no longer used - all metrics are now calculated during BuildAndExportIndex
 // Kept for potential future use, but currently unused
 func (o *Orchestrator) calculateStats() {
 	o.totalEntries = 0
