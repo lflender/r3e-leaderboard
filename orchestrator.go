@@ -95,7 +95,6 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		// Final update with all data
 		o.tracks = tracks
-		o.calculateStats()
 
 		o.lastScrapeEnd = time.Now()
 		o.fetchInProgress = false
@@ -127,7 +126,6 @@ func (o *Orchestrator) StartScheduledRefresh() {
 		// Perform incremental refresh
 		internal.PerformIncrementalRefresh(o.tracks, "", func(updatedTracks []internal.TrackInfo) {
 			o.tracks = updatedTracks
-			o.calculateStats()
 			if err := internal.BuildAndExportIndex(updatedTracks); err != nil {
 				log.Printf("⚠️ Failed to export index: %v", err)
 			}
@@ -201,6 +199,8 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 }
 
 // calculateStats calculates statistics for status export
+// DEPRECATED: This is no longer used - all metrics are now calculated during BuildAndExportIndex
+// Kept for potential future use, but currently unused
 func (o *Orchestrator) calculateStats() {
 	o.totalEntries = 0
 	driverSet := make(map[string]bool)
@@ -227,15 +227,24 @@ func (o *Orchestrator) calculateStats() {
 }
 
 // exportStatus exports the current status to JSON
+// Note: This is used for intermediate status updates (during fetching, before/after scraping)
+// All indexing-related metrics are calculated and exported by BuildAndExportIndex, not here
 func (o *Orchestrator) exportStatus() {
+	// Read existing status to preserve all indexing-related metrics
+	existingStatus := internal.ReadStatusData()
+
+	// Update ONLY the fetch/scrape status fields that the orchestrator manages
+	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
-		FetchInProgress: o.fetchInProgress,
-		LastScrapeStart: o.lastScrapeStart,
-		LastScrapeEnd:   o.lastScrapeEnd,
-		TrackCount:      len(o.tracks),
-		TotalDrivers:    o.totalDrivers,
-		TotalEntries:    o.totalEntries,
-		LastIndexUpdate: time.Now(),
+		FetchInProgress:   o.fetchInProgress,
+		LastScrapeStart:   o.lastScrapeStart,
+		LastScrapeEnd:     o.lastScrapeEnd,
+		TrackCount:        len(o.tracks),
+		TotalUniqueTracks: existingStatus.TotalUniqueTracks, // Preserved from indexing
+		TotalDrivers:      existingStatus.TotalDrivers,      // Preserved from indexing
+		TotalEntries:      existingStatus.TotalEntries,      // Preserved from indexing
+		LastIndexUpdate:   existingStatus.LastIndexUpdate,   // Preserved from indexing
+		IndexBuildTimeMs:  existingStatus.IndexBuildTimeMs,  // Preserved from indexing
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {

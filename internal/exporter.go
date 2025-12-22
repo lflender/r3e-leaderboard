@@ -19,14 +19,15 @@ const (
 
 // StatusData represents the status information to be exported to JSON
 type StatusData struct {
-	FetchInProgress  bool      `json:"fetch_in_progress"`
-	LastScrapeStart  time.Time `json:"last_scrape_start"`
-	LastScrapeEnd    time.Time `json:"last_scrape_end"`
-	TrackCount       int       `json:"track_count"`
-	TotalDrivers     int       `json:"total_drivers"`
-	TotalEntries     int       `json:"total_entries"`
-	LastIndexUpdate  time.Time `json:"last_index_update"`
-	IndexBuildTimeMs float64   `json:"index_build_time_ms"`
+	FetchInProgress   bool      `json:"fetch_in_progress"`
+	LastScrapeStart   time.Time `json:"last_scrape_start"`
+	LastScrapeEnd     time.Time `json:"last_scrape_end"`
+	TrackCount        int       `json:"track_count"`
+	TotalUniqueTracks int       `json:"total_unique_tracks"`
+	TotalDrivers      int       `json:"total_drivers"`
+	TotalEntries      int       `json:"total_entries"`
+	LastIndexUpdate   time.Time `json:"last_index_update"`
+	IndexBuildTimeMs  float64   `json:"index_build_time_ms"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -42,6 +43,24 @@ type TrackCombination struct {
 type TopCombinationsData struct {
 	Count   int                `json:"count"`
 	Results []TrackCombination `json:"results"`
+}
+
+// ReadStatusData reads the current status data from disk
+// Returns a StatusData with zero values if the file doesn't exist or can't be read
+func ReadStatusData() StatusData {
+	data, err := os.ReadFile(StatusFile)
+	if err != nil {
+		// File doesn't exist or can't be read - return zero value
+		return StatusData{}
+	}
+
+	var status StatusData
+	if err := json.Unmarshal(data, &status); err != nil {
+		log.Printf("⚠️ Failed to parse status file: %v", err)
+		return StatusData{}
+	}
+
+	return status
 }
 
 // ExportDriverIndex exports the driver index to a JSON file on disk
@@ -159,8 +178,16 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	log.Printf("🔄 Building driver index from %d track/class combinations...", len(tracks))
 
+	// Track unique track names
+	uniqueTracksMap := make(map[string]bool)
+
 	for _, track := range tracks {
 		totalEntries += len(track.Data)
+
+		// Record unique track names
+		if track.Name != "" {
+			uniqueTracksMap[track.Name] = true
+		}
 
 		for _, entry := range track.Data {
 			// Extract driver name
@@ -263,12 +290,16 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	}
 
 	buildDuration := time.Since(indexStart)
+	uniqueTrackCount := len(uniqueTracksMap)
+
+	// Clean up temporary map to release memory
+	uniqueTracksMap = nil
 
 	// Log memory usage
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries)",
-		buildDuration.Seconds(), len(index), totalEntries)
+	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries, %d unique tracks)",
+		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
 	log.Printf("💾 Memory usage: Alloc=%dMB, TotalAlloc=%dMB, Sys=%dMB, NumGC=%d",
 		m.Alloc/1024/1024, m.TotalAlloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 
@@ -279,10 +310,12 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	// Update status with index statistics
 	status := StatusData{
-		TotalDrivers:     len(index),
-		TotalEntries:     totalEntries,
-		LastIndexUpdate:  time.Now(),
-		IndexBuildTimeMs: buildDuration.Seconds() * 1000,
+		TrackCount:        len(tracks),
+		TotalUniqueTracks: uniqueTrackCount,
+		TotalDrivers:      len(index),
+		TotalEntries:      totalEntries,
+		LastIndexUpdate:   time.Now(),
+		IndexBuildTimeMs:  buildDuration.Seconds() * 1000,
 	}
 	if err := ExportStatusData(status); err != nil {
 		log.Printf("⚠️ Failed to update status with index stats: %v", err)

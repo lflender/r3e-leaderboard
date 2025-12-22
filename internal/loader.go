@@ -150,7 +150,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 			// Rate limiting for API calls
 			if !fromCache {
-				sleepDuration := 1500 * time.Millisecond
+				sleepDuration := 200 * time.Millisecond
 				for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
 					select {
 					case <-ctx.Done():
