@@ -122,46 +122,64 @@ func (o *Orchestrator) StartScheduledRefresh(indexingIntervalMinutes int) {
 			log.Println("⏭️ Skipping scheduled refresh - manual fetch already in progress")
 			return
 		}
-		o.performFullRefresh(indexingIntervalMinutes)
+		o.performFullRefresh(indexingIntervalMinutes, "nightly")
 	})
 }
 
 // performFullRefresh executes the full-force refresh flow reused by scheduler and file-trigger
-func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int) {
+func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin string) {
 	log.Println("🔄 Starting scheduled full refresh (force fetch all)...")
 	o.lastScrapeStart = time.Now()
 	o.fetchInProgress = true
 	o.lastIndexedCount = 0
 	o.exportStatus()
 
+	// Bootstrap: load ALL cached data first and build initial index so we never
+	// start from zero even if the API is down or slow.
+	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
+	if len(cachedTracks) > 0 {
+		log.Println("🔄 Building initial search index from existing cache (refresh bootstrap)...")
+		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+			log.Printf("⚠️ Failed to export initial index: %v", err)
+		} else {
+			o.lastIndexedCount = len(cachedTracks)
+		}
+		// Set current tracks to cached while fetching proceeds
+		o.tracks = cachedTracks
+		o.exportStatus()
+	} else {
+		log.Println("ℹ️ No cached combinations found for bootstrap index")
+	}
+
 	// Start periodic indexing during the fetch phase (every N minutes)
 	log.Printf("⏱️ Starting periodic indexing every %d minutes during scheduled refresh...", indexingIntervalMinutes)
 	o.StartPeriodicIndexing(indexingIntervalMinutes)
 
-	// Progress callback to update tracked combinations during refresh
-	progressCallback := func(currentTracks []internal.TrackInfo) {
-		o.tracks = currentTracks
-		// Reduced logging - show milestones
-		if len(currentTracks)%500 == 0 && len(currentTracks) > 0 {
-			log.Printf("📊 %d track/class combinations refreshed", len(currentTracks))
-			// Update status with current progress (lightweight)
+	// Progress callback merges fetched with cached for consistent indexing
+	progressCallback := func(fetched []internal.TrackInfo) {
+		merged := mergeTracks(cachedTracks, fetched)
+		o.tracks = merged
+		if len(merged)%500 == 0 && len(merged) > 0 {
+			log.Printf("📊 %d track/class combinations available (cached + refreshed)", len(merged))
 			o.exportStatus()
 		}
 	}
 
 	// Perform a full force-fetch refresh of all combinations, writing to temp cache
-	tracks := internal.FetchAllTrackDataWithCallback(o.fetchContext, progressCallback)
+	fetchedTracks := internal.FetchAllTrackDataWithCallback(o.fetchContext, progressCallback, origin)
 
+	// Build final index from merged cached + fetched
+	finalMerged := mergeTracks(cachedTracks, fetchedTracks)
 	log.Println("🔄 Building final search index (scheduled refresh)...")
-	if err := internal.BuildAndExportIndex(tracks); err != nil {
+	if err := internal.BuildAndExportIndex(finalMerged); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
-		o.lastIndexedCount = len(tracks)
+		o.lastIndexedCount = len(finalMerged)
 	}
 	log.Println("✅ Final index complete (scheduled refresh)")
 
 	// Final update
-	o.tracks = tracks
+	o.tracks = finalMerged
 	o.lastScrapeEnd = time.Now()
 	o.fetchInProgress = false
 	o.exportStatus()
@@ -172,6 +190,31 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int) {
 	log.Println("🧹 Compacted in-memory track data after scheduled refresh")
 
 	log.Println("✅ Scheduled full refresh completed")
+}
+
+// mergeTracks overlays fetched combinations over cached combinations by (trackID,classID)
+// and returns a slice containing only combinations with data.
+func mergeTracks(cached, fetched []internal.TrackInfo) []internal.TrackInfo {
+	m := make(map[string]internal.TrackInfo, len(cached)+len(fetched))
+	for _, t := range cached {
+		if len(t.Data) == 0 {
+			continue
+		}
+		key := t.TrackID + "_" + t.ClassID
+		m[key] = t
+	}
+	for _, t := range fetched {
+		if len(t.Data) == 0 {
+			continue
+		}
+		key := t.TrackID + "_" + t.ClassID
+		m[key] = t
+	}
+	out := make([]internal.TrackInfo, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
 }
 
 // StartRefreshFileTrigger watches for a lightweight file trigger to start a full refresh
@@ -203,7 +246,7 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 						continue
 					}
 					// Launch full refresh
-					o.performFullRefresh(indexingIntervalMinutes)
+					o.performFullRefresh(indexingIntervalMinutes, "manual")
 				}
 			case <-o.fetchContext.Done():
 				log.Println("⏹️ Refresh file trigger watcher stopping")

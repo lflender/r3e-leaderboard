@@ -20,7 +20,6 @@ var httpServer *http.Server
 
 func main() {
 	log.Println("🏎️  RaceRoom Leaderboard Cache Generator")
-	log.Println("Loading leaderboard data for ALL car classes across ALL tracks...")
 
 	// Set GOGC to a lower value for more aggressive garbage collection
 	// Default is 100, we set to 50 to reduce memory usage
@@ -54,8 +53,6 @@ func main() {
 		log.Printf("⚠️ Startup cache promotion error: %v", err)
 	} else if promotedCount > 0 {
 		log.Printf("🔄 Startup: promoted %d temp cache files", promotedCount)
-	} else {
-		log.Printf("ℹ️ Startup: no temp cache files to promote")
 	}
 
 	// Start background operations

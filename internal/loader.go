@@ -6,6 +6,37 @@ import (
 	"time"
 )
 
+// LoadAllCachedData loads ALL existing cache combinations (regardless of age)
+// without performing any network fetches. Returns only combinations with data.
+func LoadAllCachedData(ctx context.Context) []TrackInfo {
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	dataCache := NewDataCache()
+
+	totalCombinations := len(trackConfigs) * len(classConfigs)
+	cached := make([]TrackInfo, 0, totalCombinations/2)
+
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			select {
+			case <-ctx.Done():
+				return cached
+			default:
+			}
+			if dataCache.CacheExists(track.TrackID, class.ClassID) {
+				trackInfo, err := dataCache.LoadTrackData(track.TrackID, class.ClassID)
+				if err == nil && len(trackInfo.Data) > 0 {
+					cached = append(cached, trackInfo)
+				}
+			}
+		}
+	}
+
+	log.Printf("✅ Loaded %d cached combinations for bootstrap indexing", len(cached))
+	return cached
+}
+
 // LoadAllTrackData loads leaderboard data for all track+class combinations
 func LoadAllTrackData(ctx context.Context) []TrackInfo {
 	return LoadAllTrackDataWithCallback(ctx, nil, nil)
@@ -13,6 +44,11 @@ func LoadAllTrackData(ctx context.Context) []TrackInfo {
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
 func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool)) []TrackInfo {
+	// Observability: aggregate track activity during startup loading
+	activity := NewTrackActivityReport()
+	// Reset per-run dedup sets so counts reflect this run only
+	ResetCachedLoads(&activity)
+	ResetFetchedCounts(&activity, "startup")
 	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
@@ -51,12 +87,18 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				if err == nil && len(trackInfo.Data) > 0 {
 					allTrackData = append(allTrackData, trackInfo)
 					cacheLoadCount++
+					// Count cached unique class per track for this run
+					IncrementCacheLoad(&activity, track.TrackID, track.Name, class.ClassID)
 				}
 			}
 		}
 	}
 
 	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
+	// Persist activity after cache loading phase
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (cache phase): %v", err)
+	}
 
 	// PHASE 2: Check if we need to fetch
 	needsFetching := false
@@ -77,7 +119,6 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	if cacheCompleteCallback != nil {
 		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
 		cacheCompleteCallback(allTrackData, needsFetching)
-		log.Println("✅ Initial index callback dispatched")
 	}
 
 	if !needsFetching {
@@ -159,6 +200,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			if len(trackInfo.Data) > 0 {
 				existingData[key] = trackInfo
 				fetchedCount++
+				// Count unique fetch per track+class (startup origin)
+				IncrementFetch(&activity, track.TrackID, track.Name, "startup", class.ClassID)
 
 				// Update progress callback periodically
 				if progressCallback != nil && fetchedCount%10 == 0 {
@@ -215,6 +258,10 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
 		len(allTrackData), cacheLoadCount, fetchedCount)
+	// Persist activity after fetch phase
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (fetch phase): %v", err)
+	}
 	return allTrackData
 }
 
@@ -239,7 +286,7 @@ func ForceRefreshAllTracks(ctx context.Context) []TrackInfo {
 // FetchAllTrackDataWithCallback forces fetching of ALL track+class combinations,
 // bypassing cache reads entirely. It writes fresh data to a temporary cache
 // and promotes it atomically at the end. Progress is reported via the callback.
-func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo)) []TrackInfo {
+func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), origin string) []TrackInfo {
 	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
@@ -257,6 +304,10 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 	allTrackData := make([]TrackInfo, 0, totalCombinations)
 
 	fetchTracker.SaveFetchStart()
+	// Observability: aggregate track activity during forced refresh
+	activity := NewTrackActivityReport()
+	// Reset fetched counts for the specific origin so they reflect this run
+	ResetFetchedCounts(&activity, origin)
 
 	processed := 0
 	// Fetch ALL combinations unconditionally
@@ -301,6 +352,8 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 			// Append only if we have entries; keep empty combos out to avoid bloating
 			if len(ti.Data) > 0 {
 				allTrackData = append(allTrackData, ti)
+				// Count unique fetch per track+class for this origin (nightly/manual)
+				IncrementFetch(&activity, track.TrackID, track.Name, origin, class.ClassID)
 			}
 
 			if len(data) > 0 {
@@ -341,6 +394,10 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 	}
 
 	fetchTracker.SaveFetchEnd()
+	// Persist activity after forced refresh
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (forced refresh): %v", err)
+	}
 	log.Printf("✅ Force-fetched %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
 	return allTrackData
 }

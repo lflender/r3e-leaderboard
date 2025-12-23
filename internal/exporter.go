@@ -157,7 +157,7 @@ func ExportStatusData(status StatusData) error {
 		os.Remove(tempFile) // Clean up temp file after successful fallback
 	}
 
-	log.Printf("💾 Status data exported to %s", StatusFile)
+	// Reduced verbosity: avoid logging every status write
 	return nil
 }
 
@@ -174,7 +174,7 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	index := make(DriverIndex)
 	totalEntries := 0
 
-	log.Printf("🔄 Building driver index from %d track/class combinations...", len(tracks))
+	// Reduced verbosity: skip pre-build log
 
 	// Track unique track names
 	uniqueTracksMap := make(map[string]bool)
@@ -293,13 +293,8 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	// Clean up temporary map to release memory
 	uniqueTracksMap = nil
 
-	// Log memory usage
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	log.Printf("⚡ Driver index built: %.3f seconds (%d drivers, %d entries, %d unique tracks)",
+	log.Printf("🔍 Index built: %.3f seconds (%d drivers, %d entries, %d tracks)",
 		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
-	log.Printf("💾 Memory usage: Alloc=%dMB, TotalAlloc=%dMB, Sys=%dMB, NumGC=%d",
-		m.Alloc/1024/1024, m.TotalAlloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 
 	// Export the driver index with build duration
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
@@ -337,7 +332,7 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 // ExportTopCombinations exports the top 1000 track/class combinations by entry count
 func ExportTopCombinations(tracks []TrackInfo) error {
-	log.Printf("🔄 Building top combinations from %d track/class combinations...", len(tracks))
+	// Reduced verbosity: skip pre-build log
 
 	// Build combinations list
 	combinations := make([]TrackCombination, 0, len(tracks))
