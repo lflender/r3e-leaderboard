@@ -46,10 +46,8 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	go func() {
 		log.Println("🔄 Starting background data loading...")
-		o.lastScrapeStart = time.Now()
-		o.fetchInProgress = true
-
-		// Export initial status
+		// Do not mark scrape start yet; only do so if we actually fetch
+		o.fetchInProgress = false
 		o.exportStatus()
 
 		// Create a callback to update status incrementally during loading
@@ -77,8 +75,13 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 				log.Println("ℹ️ No cached combinations found — skipping initial index")
 			}
 
-			// Only start periodic indexing if we need to fetch fresh data
+			// Only start periodic indexing and mark scrape start if we will fetch
 			if willFetchFresh {
+				// Mark actual scrape start only when a network fetch will occur
+				o.lastScrapeStart = time.Now()
+				o.fetchInProgress = true
+				o.exportStatus()
+
 				log.Printf("⏱️ Starting periodic indexing every %d minutes during fetch...", indexingIntervalMinutes)
 				o.StartPeriodicIndexing(indexingIntervalMinutes)
 			} else {
@@ -97,8 +100,11 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		// Final update with all data
 		o.tracks = tracks
 
-		o.lastScrapeEnd = time.Now()
-		o.fetchInProgress = false
+		// Only mark scrape end if we had an actual fetch
+		if o.fetchInProgress {
+			o.lastScrapeEnd = time.Now()
+			o.fetchInProgress = false
+		}
 		o.exportStatus()
 
 		// Compact in-memory track data after indexing to reduce memory footprint
@@ -359,12 +365,22 @@ func (o *Orchestrator) exportStatus() {
 	// Read existing status to preserve all indexing-related metrics
 	existingStatus := internal.ReadStatusData()
 
+	// Preserve scrape timestamps if orchestrator values are zero (haven't been set yet)
+	scrapeStart := o.lastScrapeStart
+	if scrapeStart.IsZero() {
+		scrapeStart = existingStatus.LastScrapeStart
+	}
+	scrapeEnd := o.lastScrapeEnd
+	if scrapeEnd.IsZero() {
+		scrapeEnd = existingStatus.LastScrapeEnd
+	}
+
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
 		FetchInProgress:   o.fetchInProgress,
-		LastScrapeStart:   o.lastScrapeStart,
-		LastScrapeEnd:     o.lastScrapeEnd,
+		LastScrapeStart:   scrapeStart,
+		LastScrapeEnd:     scrapeEnd,
 		TrackCount:        len(o.tracks),
 		TotalUniqueTracks: existingStatus.TotalUniqueTracks, // Preserved from indexing
 		TotalDrivers:      existingStatus.TotalDrivers,      // Preserved from indexing

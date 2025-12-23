@@ -21,10 +21,7 @@ var httpServer *http.Server
 func main() {
 	log.Println("🏎️  RaceRoom Leaderboard Cache Generator")
 
-	// Set GOGC to a lower value for more aggressive garbage collection
-	// Default is 100, we set to 50 to reduce memory usage
-	oldGOGC := debug.SetGCPercent(50)
-	log.Printf("🧠 Set GOGC from %d to 50 for more aggressive garbage collection", oldGOGC)
+	// Use default Go GC strategy (GOGC ~100). No explicit override.
 
 	// Optional memory limit: set via MEMORY_LIMIT_MB env var (e.g., 1400)
 	if ml := os.Getenv("MEMORY_LIMIT_MB"); ml != "" {
@@ -129,13 +126,10 @@ func periodicMemoryMonitoring(ctx context.Context) {
 	for {
 		select {
 		case <-ticker.C:
-			// Force garbage collection
-			runtime.GC()
-
-			// Log memory stats
+			// Log memory stats (no forced GC)
 			var m runtime.MemStats
 			runtime.ReadMemStats(&m)
-			log.Printf("💾 Periodic GC: Alloc=%dMB, Sys=%dMB, NumGC=%d",
+			log.Printf("💾 Memory stats: Alloc=%dMB, Sys=%dMB, NumGC=%d",
 				m.Alloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 		case <-ctx.Done():
 			log.Println("⏹️ Memory monitoring stopped")
