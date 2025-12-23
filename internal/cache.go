@@ -111,6 +111,13 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 		return err
 	}
 
+	// Safety: do not write empty data to cache. Preserve existing cache
+	// when API returns no data or is temporarily unavailable.
+	if len(trackInfo.Data) == 0 {
+		log.Printf("ℹ️ Skipping cache write for %s + class %s: no data", trackInfo.TrackID, trackInfo.ClassID)
+		return nil
+	}
+
 	// Ensure track-specific directory exists (use correct base dir)
 	baseDir := dc.cacheDir
 	if dc.useTemp {

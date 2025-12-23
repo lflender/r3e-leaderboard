@@ -163,8 +163,6 @@ func ExportStatusData(status StatusData) error {
 
 // BuildAndExportIndex builds the driver index and exports it to JSON
 func BuildAndExportIndex(tracks []TrackInfo) error {
-	log.Printf("🔍 DEBUG: BuildAndExportIndex called with %d tracks", len(tracks))
-
 	if len(tracks) == 0 {
 		log.Println("⚠️ No tracks to index - skipping export")
 		return nil
@@ -308,8 +306,14 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		return err
 	}
 
-	// Update status with index statistics
+	// Update status with index statistics, preserving fetch/scrape fields
+	existingStatus := ReadStatusData()
 	status := StatusData{
+		// Preserve orchestrator-managed fields
+		FetchInProgress: existingStatus.FetchInProgress,
+		LastScrapeStart: existingStatus.LastScrapeStart,
+		LastScrapeEnd:   existingStatus.LastScrapeEnd,
+		// Update index-related metrics
 		TrackCount:        len(tracks),
 		TotalUniqueTracks: uniqueTrackCount,
 		TotalDrivers:      len(index),

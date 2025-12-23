@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"r3e-leaderboard/internal"
 	"runtime"
 	"time"
@@ -109,8 +110,11 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	}()
 }
 
-// StartScheduledRefresh starts the automatic nightly refresh
-func (o *Orchestrator) StartScheduledRefresh() {
+// StartScheduledRefresh starts the automatic nightly refresh using the same
+// mechanisms as the startup load & fetch phase, but forces a full refresh
+// of all combinations (ignoring cache age and content) and runs periodic
+// indexing during the fetch phase.
+func (o *Orchestrator) StartScheduledRefresh(indexingIntervalMinutes int) {
 	o.scheduler = internal.NewScheduler()
 	o.scheduler.Start(func() {
 		// Skip scheduled refresh if manual fetch is already in progress
@@ -118,30 +122,95 @@ func (o *Orchestrator) StartScheduledRefresh() {
 			log.Println("⏭️ Skipping scheduled refresh - manual fetch already in progress")
 			return
 		}
-
-		log.Println("🔄 Starting scheduled incremental refresh...")
-		o.fetchInProgress = true
-		o.exportStatus()
-
-		// Perform incremental refresh
-		internal.PerformIncrementalRefresh(o.tracks, "", func(updatedTracks []internal.TrackInfo) {
-			o.tracks = updatedTracks
-			if err := internal.BuildAndExportIndex(updatedTracks); err != nil {
-				log.Printf("⚠️ Failed to export index: %v", err)
-			}
-		})
-
-		o.lastScrapeEnd = time.Now()
-		o.fetchInProgress = false
-		o.exportStatus()
-
-		// Compact in-memory track data post-refresh to minimize idle memory usage
-		o.CompactTrackData()
-		runtime.GC()
-		log.Println("🧹 Compacted in-memory track data after scheduled refresh")
-
-		log.Println("✅ Scheduled incremental refresh completed")
+		o.performFullRefresh(indexingIntervalMinutes)
 	})
+}
+
+// performFullRefresh executes the full-force refresh flow reused by scheduler and file-trigger
+func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int) {
+	log.Println("🔄 Starting scheduled full refresh (force fetch all)...")
+	o.lastScrapeStart = time.Now()
+	o.fetchInProgress = true
+	o.lastIndexedCount = 0
+	o.exportStatus()
+
+	// Start periodic indexing during the fetch phase (every N minutes)
+	log.Printf("⏱️ Starting periodic indexing every %d minutes during scheduled refresh...", indexingIntervalMinutes)
+	o.StartPeriodicIndexing(indexingIntervalMinutes)
+
+	// Progress callback to update tracked combinations during refresh
+	progressCallback := func(currentTracks []internal.TrackInfo) {
+		o.tracks = currentTracks
+		// Reduced logging - show milestones
+		if len(currentTracks)%500 == 0 && len(currentTracks) > 0 {
+			log.Printf("📊 %d track/class combinations refreshed", len(currentTracks))
+			// Update status with current progress (lightweight)
+			o.exportStatus()
+		}
+	}
+
+	// Perform a full force-fetch refresh of all combinations, writing to temp cache
+	tracks := internal.FetchAllTrackDataWithCallback(o.fetchContext, progressCallback)
+
+	log.Println("🔄 Building final search index (scheduled refresh)...")
+	if err := internal.BuildAndExportIndex(tracks); err != nil {
+		log.Printf("⚠️ Failed to export index: %v", err)
+	} else {
+		o.lastIndexedCount = len(tracks)
+	}
+	log.Println("✅ Final index complete (scheduled refresh)")
+
+	// Final update
+	o.tracks = tracks
+	o.lastScrapeEnd = time.Now()
+	o.fetchInProgress = false
+	o.exportStatus()
+
+	// Compact in-memory track data post-refresh to minimize idle memory usage
+	o.CompactTrackData()
+	runtime.GC()
+	log.Println("🧹 Compacted in-memory track data after scheduled refresh")
+
+	log.Println("✅ Scheduled full refresh completed")
+}
+
+// StartRefreshFileTrigger watches for a lightweight file trigger to start a full refresh
+// The check is ultra-lightweight: a single stat per interval (defaults recommended: 30s)
+func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkIntervalSeconds int, indexingIntervalMinutes int) {
+	if checkIntervalSeconds < 1 {
+		checkIntervalSeconds = 30
+	}
+	interval := time.Duration(checkIntervalSeconds) * time.Second
+
+	go func() {
+		log.Printf("🪙 Refresh file trigger watching %s every %v", triggerPath, interval)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				// Ultra-lightweight existence check
+				if _, err := os.Stat(triggerPath); err == nil {
+					// Found trigger file
+					log.Printf("🪙 Refresh trigger file detected: %s", triggerPath)
+					// Attempt to remove to avoid repeated triggers
+					if rmErr := os.Remove(triggerPath); rmErr != nil {
+						log.Printf("⚠️ Could not remove trigger file: %v", rmErr)
+					}
+					// Skip if already fetching
+					if o.fetchInProgress {
+						log.Println("⏭️ Skipping manual refresh - fetch already in progress")
+						continue
+					}
+					// Launch full refresh
+					o.performFullRefresh(indexingIntervalMinutes)
+				}
+			case <-o.fetchContext.Done():
+				log.Println("⏹️ Refresh file trigger watcher stopping")
+				return
+			}
+		}
+	}()
 }
 
 // StartPeriodicIndexing starts periodic index updates during data loading

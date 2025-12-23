@@ -76,7 +76,7 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 				continue
 			}
 
-			// Only keep combinations that have data
+			// Only keep combinations that have data; empty fetches are ignored
 			if len(trackInfo.Data) > 0 {
 				updatedTracks = append(updatedTracks, trackInfo)
 				updatedCount++

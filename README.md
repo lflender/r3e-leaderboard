@@ -194,7 +194,7 @@ const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
 2. Fetches all 14,027 track/class combinations from RaceRoom API (~6 hours)
 3. Uses pagination to get complete results (handles 1500+ entry leaderboards)
 4. Saves data to local cache (`cache/` directory)
-5. Builds and exports driver index to JSON every 5 minutes during fetch
+5. Builds and exports driver index to JSON every 30 minutes during fetch (configurable)
 6. Updates status.json throughout the process
 
 ### Subsequent Startups (With Cache)
@@ -206,9 +206,10 @@ const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
 
 ### Automatic Refresh
 - Runs daily at 4:00 AM (configurable)
-- Updates data progressively
-- Refreshes index and JSON files every 100 tracks
-- Maintains data availability throughout
+- Performs a full-force refresh of ALL track/class combinations (ignores cache age)
+- Writes fresh data to a temporary cache and promotes atomically at the end (prevents partial/dirty states)
+- Rebuilds the complete searchable index every `indexing_minutes` during the refresh window (default 30)
+- Maintains data availability throughout: previous cache and index remain accessible while refresh runs
 
 ## 🗂️ Cache Management
 
@@ -218,7 +219,6 @@ cache/
 ├── driver_index.json         # Searchable driver index
 ├── status.json               # Status and statistics
 ├── top_combinations.json     # Top 1000 track/class combos by entries
-├── fetch_timestamps.json     # Track fetch history
 ├── track_status.json         # Track status tracking
 ├── track_9473/
 │   ├── class_1703.json.gz   # Brands Hatch + GT3
@@ -234,7 +234,7 @@ cache/
 - Cache older than **24 hours** is refreshed in background
 - Refresh updates cache progressively
 - Interrupted refresh keeps existing cache
-- Never deletes cache without replacement
+- Never replaces existing cache with empty fetches: if the API returns no data, the previous cache is preserved and not overwritten
 
 ## 🛠️ Common Commands
 
@@ -257,7 +257,7 @@ Edit `internal/config.go` or create `config.json` to customize:
 {
   "schedule": {
     "refresh_hour": 4,
-    "indexing_minutes": 5
+    "indexing_minutes": 30
   }
 }
 ```
@@ -265,7 +265,18 @@ Edit `internal/config.go` or create `config.json` to customize:
 ## 🔧 Troubleshooting
 
 ### Missing Data After Interrupted Refresh
-**No data lost!** The refresh system preserves existing cache. Just restart and it will continue from where it left off.
+**No data lost!** Nightly refresh uses temporary cache promotion and preserves existing cache and index throughout. If interrupted, restart—existing data stays intact and the next refresh will replace cache atomically.
+
+### Manual Force Refresh (Options)
+- **Admin HTTP endpoint (recommended):** Add `/admin/refresh-now` to trigger the same full-refresh path used nightly. Then:
+  - `curl -X POST http://localhost:8080/admin/refresh-now`
+  - Benefits: secure, auditable, scriptable. I can implement this endpoint on request.
+- **Signal-triggered refresh:** Handle `SIGUSR1` in the process to invoke the full refresh. Then on Linux: `systemctl kill -s SIGUSR1 r3e-leaderboard.service`.
+- **File-based trigger:** Watch for a sentinel file (e.g., `cache/refresh_now`) and start refresh when it appears:
+  - `touch cache/refresh_now`
+  - Simple and works across environments.
+
+If you want, I can implement the HTTP endpoint or signal handler now so you can trigger refresh immediately on your Linux server.
 
 ### JSON Files Not Updating
 Check logs for errors during index building. The application will continue running even if JSON export fails.

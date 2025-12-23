@@ -60,7 +60,9 @@ func main() {
 
 	// Start background operations
 	orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
-	orchestrator.StartScheduledRefresh()
+	orchestrator.StartScheduledRefresh(config.Schedule.IndexingMinutes)
+	// Ultra-lightweight manual trigger via file sentinel
+	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 30, config.Schedule.IndexingMinutes)
 
 	// Start periodic memory monitoring and GC
 	go periodicMemoryMonitoring(fetchContext)
