@@ -387,17 +387,18 @@ func (o *Orchestrator) exportStatus() {
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
-		FetchInProgress:   o.fetchInProgress,
-		LastScrapeStart:   scrapeStart,
-		LastScrapeEnd:     scrapeEnd,
-		TrackCount:        len(o.tracks),
-		TotalUniqueTracks: existingStatus.TotalUniqueTracks, // Preserved from indexing
-		TotalDrivers:      existingStatus.TotalDrivers,      // Preserved from indexing
-		TotalEntries:      existingStatus.TotalEntries,      // Preserved from indexing
-		LastIndexUpdate:   existingStatus.LastIndexUpdate,   // Preserved from indexing
-		IndexBuildTimeMs:  existingStatus.IndexBuildTimeMs,  // Preserved from indexing
-		MemoryAllocMB:     m.Alloc / 1024 / 1024,
-		MemorySysMB:       m.Sys / 1024 / 1024,
+		FetchInProgress:          o.fetchInProgress,
+		LastScrapeStart:          scrapeStart,
+		LastScrapeEnd:            scrapeEnd,
+		TrackCount:               len(o.tracks),
+		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations, // Preserved from indexing
+		TotalUniqueTracks:        existingStatus.TotalUniqueTracks,        // Preserved from indexing
+		TotalDrivers:             existingStatus.TotalDrivers,             // Preserved from indexing
+		TotalEntries:             existingStatus.TotalEntries,             // Preserved from indexing
+		LastIndexUpdate:          existingStatus.LastIndexUpdate,          // Preserved from indexing
+		IndexBuildTimeMs:         existingStatus.IndexBuildTimeMs,         // Preserved from indexing
+		MemoryAllocMB:            m.Alloc / 1024 / 1024,
+		MemorySysMB:              m.Sys / 1024 / 1024,
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {

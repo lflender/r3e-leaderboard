@@ -64,6 +64,16 @@ func (dc *DataCache) EnsureCacheDir() error {
 	return os.MkdirAll(dc.cacheDir, 0755)
 }
 
+// CountCachedCombinations returns the total number of cached combinations
+func (dc *DataCache) CountCachedCombinations() int {
+	pattern := filepath.Join(dc.cacheDir, "track_*", "class_*.json.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0
+	}
+	return len(files)
+}
+
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
 	baseDir := dc.cacheDir

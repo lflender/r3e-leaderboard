@@ -19,17 +19,18 @@ const (
 
 // StatusData represents the status information to be exported to JSON
 type StatusData struct {
-	FetchInProgress   bool      `json:"fetch_in_progress"`
-	LastScrapeStart   time.Time `json:"last_scrape_start"`
-	LastScrapeEnd     time.Time `json:"last_scrape_end"`
-	TrackCount        int       `json:"track_count"`
-	TotalUniqueTracks int       `json:"total_unique_tracks"`
-	TotalDrivers      int       `json:"total_drivers"`
-	TotalEntries      int       `json:"total_entries"`
-	LastIndexUpdate   time.Time `json:"last_index_update"`
-	IndexBuildTimeMs  float64   `json:"index_build_time_ms"`
-	MemoryAllocMB     uint64    `json:"memory_alloc_mb"`
-	MemorySysMB       uint64    `json:"memory_sys_mb"`
+	FetchInProgress          bool      `json:"fetch_in_progress"`
+	LastScrapeStart          time.Time `json:"last_scrape_start"`
+	LastScrapeEnd            time.Time `json:"last_scrape_end"`
+	TrackCount               int       `json:"track_count"`
+	TotalFetchedCombinations int       `json:"total_fetched_combinations"`
+	TotalUniqueTracks        int       `json:"total_unique_tracks"`
+	TotalDrivers             int       `json:"total_drivers"`
+	TotalEntries             int       `json:"total_entries"`
+	LastIndexUpdate          time.Time `json:"last_index_update"`
+	IndexBuildTimeMs         float64   `json:"index_build_time_ms"`
+	MemoryAllocMB            uint64    `json:"memory_alloc_mb"`
+	MemorySysMB              uint64    `json:"memory_sys_mb"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -309,20 +310,26 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	// Update status with index statistics, preserving fetch/scrape fields
 	existingStatus := ReadStatusData()
+
+	// Count total cached combinations (including empty)
+	dataCache := NewDataCache()
+	totalCached := dataCache.CountCachedCombinations()
+
 	status := StatusData{
 		// Preserve orchestrator-managed fields
 		FetchInProgress: existingStatus.FetchInProgress,
 		LastScrapeStart: existingStatus.LastScrapeStart,
 		LastScrapeEnd:   existingStatus.LastScrapeEnd,
 		// Update index-related metrics
-		TrackCount:        len(tracks),
-		TotalUniqueTracks: uniqueTrackCount,
-		TotalDrivers:      len(index),
-		TotalEntries:      totalEntries,
-		LastIndexUpdate:   time.Now(),
-		IndexBuildTimeMs:  buildDuration.Seconds() * 1000,
-		MemoryAllocMB:     m.Alloc / 1024 / 1024,
-		MemorySysMB:       m.Sys / 1024 / 1024,
+		TrackCount:               len(tracks),
+		TotalFetchedCombinations: totalCached,
+		TotalUniqueTracks:        uniqueTrackCount,
+		TotalDrivers:             len(index),
+		TotalEntries:             totalEntries,
+		LastIndexUpdate:          time.Now(),
+		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
+		MemoryAllocMB:            m.Alloc / 1024 / 1024,
+		MemorySysMB:              m.Sys / 1024 / 1024,
 	}
 	if err := ExportStatusData(status); err != nil {
 		log.Printf("⚠️ Failed to update status with index stats: %v", err)
