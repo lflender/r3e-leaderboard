@@ -219,43 +219,9 @@ cache/
 ├── driver_index.json         # Searchable driver index
 ├── status.json               # Status and statistics
 ├── top_combinations.json     # Top 1000 track/class combos by entries
- ├── track_activity.json      # Per-track activity: cache loads, fetch counts by origin, last processed
 ├── track_9473/
 │   ├── class_1703.json.gz   # Brands Hatch + GT3
 │   ├── class_1704.json.gz   # Brands Hatch + GT2
-│   └── ...
-```
-### Track Activity
-**File:** `cache/track_activity.json`
-
-Per-track observability stats updated during startup cache loading and during fetch phases (startup, nightly, manual). Export uses a single sorted list under `tracks`, ordered by `track_name` (then `track_id`):
-```
-{
-  "updated_at": "2025-12-23T08:15:00Z",
-  "tracks": [
-    {
-      "track_id": "1693",
-      "track_name": "Nürburgring - Grand Prix",
-      "cached_loads": 120,
-      "fetched_startup": 8,
-      "fetched_nightly": 1,
-      "fetched_manual": 0,
-      "last_processed": "2025-12-23T08:14:05Z"
-    },
-    {
-      "track_id": "8075",
-      "track_name": "Zhejiang Circuit - Grand Prix",
-      "cached_loads": 52,
-      "fetched_startup": 14,
-      "fetched_nightly": 0,
-      "fetched_manual": 2,
-      "last_processed": "2025-12-23T08:14:12Z"
-    }
-  ]
-}
-```
-Updated with atomic writes; minimal overhead and no impact on core behavior.
-├── track_10394/
 │   └── ...
 ```
 
