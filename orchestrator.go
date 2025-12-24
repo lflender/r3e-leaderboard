@@ -120,8 +120,8 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 // mechanisms as the startup load & fetch phase, but forces a full refresh
 // of all combinations (ignoring cache age and content) and runs periodic
 // indexing during the fetch phase.
-func (o *Orchestrator) StartScheduledRefresh(indexingIntervalMinutes int) {
-	o.scheduler = internal.NewScheduler()
+func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, indexingIntervalMinutes int) {
+	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute)
 	o.scheduler.Start(func() {
 		// Skip scheduled refresh if manual fetch is already in progress
 		if o.fetchInProgress {

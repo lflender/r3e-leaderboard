@@ -23,7 +23,7 @@ func main() {
 
 	// Use default Go GC strategy (GOGC ~100). No explicit override.
 
-	// Optional memory limit: set via MEMORY_LIMIT_MB env var (e.g., 1400)
+	// Optional memory limit: set via MEMORY_LIMIT_MB env varconfig (e.g., 1400)
 	if ml := os.Getenv("MEMORY_LIMIT_MB"); ml != "" {
 		if mb, err := strconv.Atoi(ml); err == nil && mb > 0 {
 			limitBytes := int64(mb) * 1024 * 1024
@@ -54,7 +54,7 @@ func main() {
 
 	// Start background operations
 	orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
-	orchestrator.StartScheduledRefresh(config.Schedule.IndexingMinutes)
+	orchestrator.StartScheduledRefresh(config.Schedule.RefreshHour, config.Schedule.RefreshMinute, config.Schedule.IndexingMinutes)
 	// Ultra-lightweight manual trigger via file sentinel
 	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 30, config.Schedule.IndexingMinutes)
 
