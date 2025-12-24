@@ -6,13 +6,49 @@ import (
 	"time"
 )
 
+// LoadAllCachedData loads ALL existing cache combinations (regardless of age)
+// without performing any network fetches. Returns only combinations with data.
+func LoadAllCachedData(ctx context.Context) []TrackInfo {
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	dataCache := NewDataCache()
+
+	totalCombinations := len(trackConfigs) * len(classConfigs)
+	cached := make([]TrackInfo, 0, totalCombinations/2)
+
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			select {
+			case <-ctx.Done():
+				return cached
+			default:
+			}
+			if dataCache.CacheExists(track.TrackID, class.ClassID) {
+				trackInfo, err := dataCache.LoadTrackData(track.TrackID, class.ClassID)
+				if err == nil && len(trackInfo.Data) > 0 {
+					cached = append(cached, trackInfo)
+				}
+			}
+		}
+	}
+
+	log.Printf("✅ Loaded %d cached combinations for bootstrap indexing", len(cached))
+	return cached
+}
+
 // LoadAllTrackData loads leaderboard data for all track+class combinations
 func LoadAllTrackData(ctx context.Context) []TrackInfo {
 	return LoadAllTrackDataWithCallback(ctx, nil, nil)
 }
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
-func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo)) []TrackInfo {
+func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool)) []TrackInfo {
+	// Observability: aggregate track activity during startup loading
+	activity := NewTrackActivityReport()
+	// Reset per-run dedup sets so counts reflect this run only
+	ResetCachedLoads(&activity)
+	ResetFetchedCounts(&activity, "startup")
 	fetchTracker := NewFetchTracker()
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
@@ -21,35 +57,90 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
 	apiClient := NewAPIClient()
+	defer apiClient.Close() // Ensure connections are cleaned up
+
 	var allTrackData []TrackInfo
-	dataCache := NewDataCache()
+	dataCache := NewDataCache()      // For reading existing cache
+	tempCache := NewTempDataCache()  // For writing new fetches
+	defer tempCache.ClearTempCache() // Clean up temp cache on exit
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
-	currentCombination := 0
 
-	// Check if we'll need any API fetching (for progress display)
-	needsAPIFetching := false
+	// PHASE 1: Load ALL existing cache (even if expired)
+	log.Println("🔄 Phase 1: Loading all cached data...")
+	cacheLoadCount := 0
+	// Pre-allocate with estimated capacity to avoid repeated allocations
+	allTrackData = make([]TrackInfo, 0, totalCombinations/2)
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
-			if !dataCache.IsCacheValid(track.TrackID, class.ClassID) {
-				needsAPIFetching = true
+			// Check if cancellation was requested
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Cancelled during cache loading")
+				return allTrackData
+			default:
+			}
+
+			// Only load from cache, don't fetch
+			if dataCache.CacheExists(track.TrackID, class.ClassID) {
+				trackInfo, err := dataCache.LoadTrackData(track.TrackID, class.ClassID)
+				if err == nil && len(trackInfo.Data) > 0 {
+					allTrackData = append(allTrackData, trackInfo)
+					cacheLoadCount++
+					// Count cached unique class per track for this run
+					IncrementCacheLoad(&activity, track.TrackID, track.Name, class.ClassID)
+				}
+			}
+		}
+	}
+
+	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
+	// Persist activity after cache loading phase
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (cache phase): %v", err)
+	}
+
+	// PHASE 2: Check if we need to fetch
+	needsFetching := false
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			if !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID) {
+				needsFetching = true
 				break
 			}
 		}
-		if needsAPIFetching {
+		if needsFetching {
 			break
 		}
 	}
-	hasFetchedFromAPI := false
-	cacheLoadingComplete := false
+
+	// Trigger cache complete callback with whether we'll fetch
+	// Always invoke so orchestrator can decide to start periodic indexing
+	if cacheCompleteCallback != nil {
+		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
+		cacheCompleteCallback(allTrackData, needsFetching)
+	}
+
+	if !needsFetching {
+		log.Println("✅ All cache is fresh - no fetching needed")
+		return allTrackData
+	}
+
+	// PHASE 3: Fetch missing and expired data
+	log.Println("🔄 Phase 2: Fetching missing and expired data...")
+	fetchTracker.SaveFetchStart()
+
+	currentCombination := 0
+	fetchedCount := 0
+
+	// Create a map of existing data for quick lookup
+	existingData := make(map[string]TrackInfo)
+	for _, track := range allTrackData {
+		key := track.TrackID + "_" + track.ClassID
+		existingData[key] = track
+	}
 
 	for _, track := range trackConfigs {
-		// Track per-track cache statistics
-		trackCachedClasses := 0
-		trackCachedEntries := 0
-		trackHasData := false
-		cacheSummaryShown := false
-
 		for _, class := range classConfigs {
 			currentCombination++
 
@@ -61,101 +152,116 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			default:
 			}
 
-			// Check if this will be fetched (not cached)
-			willFetch := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
+			key := track.TrackID + "_" + class.ClassID
+			needsRefresh := !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID)
 
-			// If this is the first fetch and we have cache data, trigger cache complete callback
-			if willFetch && !cacheLoadingComplete && len(allTrackData) > 0 {
-				cacheLoadingComplete = true
-				if cacheCompleteCallback != nil {
-					log.Printf("📊 Cache loading complete - %d tracks/class combinations loaded, building initial index...", len(allTrackData))
-					cacheCompleteCallback(allTrackData)
-					log.Println("✅ Initial index ready - API is now searchable while fetching continues")
-				}
+			if !needsRefresh {
+				// Already have fresh cache, skip
+				continue
 			}
 
-			// Show progress every 50 combinations if ANY fetching is needed
-			if (currentCombination%50 == 0 || currentCombination == 1) && needsAPIFetching {
-
-				// Update progress callback every 50 combinations
+			// Show progress every 50 combinations
+			if currentCombination%50 == 0 || currentCombination == 1 {
 				if progressCallback != nil {
 					progressCallback(allTrackData)
 				}
 			}
 
-			// If we have cached data and we're about to fetch, show cache summary first
-			if willFetch && trackCachedClasses > 0 && !cacheSummaryShown {
-				log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
-				cacheSummaryShown = true
-			}
-
-			trackInfo, fromCache, err := dataCache.LoadOrFetchTrackData(
-				apiClient, track.Name, track.TrackID, class.Name, class.ClassID, false)
-
+			// Fetch fresh data - always fetch (don't check cache) and write to tempCache
+			// We use dataCache to check if cache exists/expired above, but write to tempCache
+			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
 			if err != nil {
-				continue // Skip logging errors to reduce spam
+				continue // Skip on fetch error
 			}
 
-			// Only keep combinations that have data
-			if len(trackInfo.Data) > 0 {
-				allTrackData = append(allTrackData, trackInfo)
-				trackHasData = true
+			trackInfo := TrackInfo{
+				Name:    track.Name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+				Data:    data,
+			}
 
-				// Update server every 10 new tracks for more responsive periodic indexing
-				if progressCallback != nil && len(allTrackData)%10 == 0 {
+			// Save to temp cache only when data exists (avoid overwriting with empty cache)
+			if len(trackInfo.Data) > 0 {
+				if saveErr := tempCache.SaveTrackData(trackInfo); saveErr != nil {
+					log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
+				}
+			}
+
+			if len(data) > 0 {
+				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+			} else {
+				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+			}
+
+			fromCache := false
+
+			// Update or add the track data
+			if len(trackInfo.Data) > 0 {
+				existingData[key] = trackInfo
+				fetchedCount++
+				// Count unique fetch per track+class (startup origin)
+				IncrementFetch(&activity, track.TrackID, track.Name, "startup", class.ClassID)
+
+				// Update progress callback periodically
+				if progressCallback != nil && fetchedCount%10 == 0 {
+					// Rebuild allTrackData from map
+					allTrackData = make([]TrackInfo, 0, len(existingData))
+					for _, v := range existingData {
+						allTrackData = append(allTrackData, v)
+					}
 					progressCallback(allTrackData)
 				}
-
-				// Track per-track cache statistics
-				if fromCache {
-					trackCachedClasses++
-					trackCachedEntries += len(trackInfo.Data)
-				} else {
-					// This was fetched from API - track fetch timing
-					if !hasFetchedFromAPI {
-						fetchTracker.SaveFetchStart()
-						hasFetchedFromAPI = true
-					}
-				}
 			}
 
-			// Rate limiting only for API calls, not cached files
+			// Rate limiting for API calls
 			if !fromCache {
-				// API rate limiting with frequent cancellation checks
-				sleepDuration := 1500 * time.Millisecond
+				sleepDuration := 200 * time.Millisecond
 				for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
 					select {
 					case <-ctx.Done():
 						log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
+						// Rebuild final data from map
+						allTrackData = make([]TrackInfo, 0, len(existingData))
+						for _, v := range existingData {
+							allTrackData = append(allTrackData, v)
+						}
 						return allTrackData
 					default:
 					}
 					time.Sleep(100 * time.Millisecond)
 				}
-			} else {
-				// Quick cancellation check for cached files (no delay)
-				select {
-				case <-ctx.Done():
-					log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
-					return allTrackData
-				default:
-				}
 			}
 		}
-
-		// Show per-track cache summary if we haven't shown it yet and track had cached data
-		if trackCachedClasses > 0 && trackHasData && !cacheSummaryShown {
-			log.Printf("📂 %s: cached %d classes with %d entries", track.Name, trackCachedClasses, trackCachedEntries)
-		}
 	}
 
-	// Save fetch end time if we did any API fetching
-	if hasFetchedFromAPI {
-		fetchTracker.SaveFetchEnd()
+	// Rebuild final allTrackData from map
+	allTrackData = make([]TrackInfo, 0, len(existingData))
+	for _, v := range existingData {
+		allTrackData = append(allTrackData, v)
 	}
 
-	log.Printf("✅ Loaded %d combinations with data (out of %d total)",
-		len(allTrackData), totalCombinations)
+	// Clean up temporary map to release memory
+	existingData = nil
+
+	// Promote temp cache to main cache atomically
+	log.Println("🔄 Promoting temporary cache to main cache...")
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
+		// Continue anyway - we still have the in-memory data
+	} else if promotedCount > 0 {
+		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
+	}
+
+	fetchTracker.SaveFetchEnd()
+
+	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
+		len(allTrackData), cacheLoadCount, fetchedCount)
+	// Persist activity after fetch phase
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (fetch phase): %v", err)
+	}
 	return allTrackData
 }
 
@@ -175,4 +281,123 @@ func ForceRefreshAllTracks(ctx context.Context) []TrackInfo {
 
 	fetchTracker.SaveFetchEnd()
 	return result
+}
+
+// FetchAllTrackDataWithCallback forces fetching of ALL track+class combinations,
+// bypassing cache reads entirely. It writes fresh data to a temporary cache
+// and promotes it atomically at the end. Progress is reported via the callback.
+func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), origin string) []TrackInfo {
+	fetchTracker := NewFetchTracker()
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	log.Printf("📊 Scheduled refresh: force-fetch %d tracks × %d classes = %d combinations...",
+		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
+
+	apiClient := NewAPIClient()
+	defer apiClient.Close()
+
+	tempCache := NewTempDataCache()
+	defer tempCache.ClearTempCache()
+
+	totalCombinations := len(trackConfigs) * len(classConfigs)
+	allTrackData := make([]TrackInfo, 0, totalCombinations)
+
+	fetchTracker.SaveFetchStart()
+	// Observability: aggregate track activity during forced refresh
+	activity := NewTrackActivityReport()
+	// Reset fetched counts for the specific origin so they reflect this run
+	ResetFetchedCounts(&activity, origin)
+
+	processed := 0
+	// Fetch ALL combinations unconditionally
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			processed++
+
+			// Check cancellation
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+				fetchTracker.SaveFetchEnd()
+				return allTrackData
+			default:
+			}
+
+			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
+			if err != nil {
+				// Log and continue on error to avoid losing large portions
+				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
+				// still report progress periodically
+				if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+					progressCallback(allTrackData)
+				}
+				continue
+			}
+
+			ti := TrackInfo{
+				Name:    track.Name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+				Data:    data,
+			}
+
+			// Save to temp cache only when data exists
+			if len(ti.Data) > 0 {
+				if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+					log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
+				}
+			}
+
+			// Append only if we have entries; keep empty combos out to avoid bloating
+			if len(ti.Data) > 0 {
+				allTrackData = append(allTrackData, ti)
+				// Count unique fetch per track+class for this origin (nightly/manual)
+				IncrementFetch(&activity, track.TrackID, track.Name, origin, class.ClassID)
+			}
+
+			if len(data) > 0 {
+				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+			} else {
+				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+			}
+
+			// Periodic progress updates
+			if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+				progressCallback(allTrackData)
+			}
+
+			// Rate limit API calls
+			sleepDuration := 200 * time.Millisecond
+			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
+				select {
+				case <-ctx.Done():
+					log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+					fetchTracker.SaveFetchEnd()
+					return allTrackData
+				default:
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+
+	// Promote temp cache to main cache atomically
+	log.Println("🔄 Promoting temporary cache to main cache...")
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
+	} else if promotedCount > 0 {
+		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
+	}
+
+	fetchTracker.SaveFetchEnd()
+	// Persist activity after forced refresh
+	if err := ExportTrackActivity(activity); err != nil {
+		log.Printf("⚠️ Failed to export track activity (forced refresh): %v", err)
+	}
+	log.Printf("✅ Force-fetched %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
+	return allTrackData
 }

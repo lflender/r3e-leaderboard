@@ -29,26 +29,48 @@ type CachedTrackData struct {
 
 // DataCache handles loading and saving track data to disk
 type DataCache struct {
-	cacheDir string
-	maxAge   time.Duration
+	cacheDir     string
+	tempCacheDir string
+	maxAge       time.Duration
+	useTemp      bool // Flag to use temp cache for writes
 }
 
 // NewDataCache creates a new data cache manager
 func NewDataCache() *DataCache {
 	return &DataCache{
-		cacheDir: "cache",
-		maxAge:   24 * time.Hour, // Cache expires after 24 hours
+		cacheDir:     "cache",
+		tempCacheDir: "cache_temp",
+		maxAge:       24 * time.Hour, // Cache expires after 24 hours
+		useTemp:      false,
+	}
+}
+
+// NewTempDataCache creates a data cache manager that writes to temporary cache
+func NewTempDataCache() *DataCache {
+	return &DataCache{
+		cacheDir:     "cache",
+		tempCacheDir: "cache_temp",
+		maxAge:       24 * time.Hour,
+		useTemp:      true,
 	}
 }
 
 // EnsureCacheDir creates the cache directory if it doesn't exist
 func (dc *DataCache) EnsureCacheDir() error {
+	if dc.useTemp {
+		// When using temp cache, ensure temp directory exists
+		return os.MkdirAll(dc.tempCacheDir, 0755)
+	}
 	return os.MkdirAll(dc.cacheDir, 0755)
 }
 
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
-	trackDir := filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s", trackID))
+	baseDir := dc.cacheDir
+	if dc.useTemp {
+		baseDir = dc.tempCacheDir
+	}
+	trackDir := filepath.Join(baseDir, fmt.Sprintf("track_%s", trackID))
 	return filepath.Join(trackDir, fmt.Sprintf("class_%s.json.gz", classID))
 }
 
@@ -66,14 +88,42 @@ func (dc *DataCache) IsCacheValid(trackID, classID string) bool {
 	return time.Since(info.ModTime()) < dc.maxAge
 }
 
+// CacheExists checks if cached data exists (regardless of age)
+func (dc *DataCache) CacheExists(trackID, classID string) bool {
+	filename := dc.GetCacheFileName(trackID, classID)
+	_, err := os.Stat(filename)
+	return err == nil
+}
+
+// IsCacheExpired checks if cache exists but is older than maxAge
+func (dc *DataCache) IsCacheExpired(trackID, classID string) bool {
+	filename := dc.GetCacheFileName(trackID, classID)
+	info, err := os.Stat(filename)
+	if err != nil {
+		return false // doesn't exist, so not "expired"
+	}
+	return time.Since(info.ModTime()) >= dc.maxAge
+}
+
 // SaveTrackData saves track data to cache
 func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	if err := dc.EnsureCacheDir(); err != nil {
 		return err
 	}
 
-	// Ensure track-specific directory exists
-	trackDir := filepath.Join(dc.cacheDir, fmt.Sprintf("track_%s", trackInfo.TrackID))
+	// Safety: do not write empty data to cache. Preserve existing cache
+	// when API returns no data or is temporarily unavailable.
+	if len(trackInfo.Data) == 0 {
+		log.Printf("ℹ️ Skipping cache write for %s + class %s: no data", trackInfo.TrackID, trackInfo.ClassID)
+		return nil
+	}
+
+	// Ensure track-specific directory exists (use correct base dir)
+	baseDir := dc.cacheDir
+	if dc.useTemp {
+		baseDir = dc.tempCacheDir
+	}
+	trackDir := filepath.Join(baseDir, fmt.Sprintf("track_%s", trackInfo.TrackID))
 	if err := os.MkdirAll(trackDir, 0755); err != nil {
 		return err
 	}
@@ -128,14 +178,26 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 }
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool) (TrackInfo, bool, error) {
+// If loadExpiredCache is true, will load even expired cache without fetching
+func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
 	// Try to load from cache first (unless forced to refresh)
-	if !force && dc.IsCacheValid(trackID, classID) {
-		trackInfo, err := dc.LoadTrackData(trackID, classID)
-		if err == nil {
-			return trackInfo, true, nil // true = loaded from cache
-		} else {
-			log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+	if !force {
+		// If loadExpiredCache is true, load any existing cache regardless of age
+		if loadExpiredCache && dc.CacheExists(trackID, classID) {
+			trackInfo, err := dc.LoadTrackData(trackID, classID)
+			if err == nil {
+				return trackInfo, true, nil // true = loaded from cache
+			} else {
+				log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+			}
+		} else if dc.IsCacheValid(trackID, classID) {
+			// Load only non-expired cache
+			trackInfo, err := dc.LoadTrackData(trackID, classID)
+			if err == nil {
+				return trackInfo, true, nil // true = loaded from cache
+			} else {
+				log.Printf("⚠️ Cache file exists but failed to load: %s + %s: %v", trackName, className, err)
+			}
 		}
 	}
 
@@ -154,13 +216,13 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 
 	// Save to cache
 	if err := dc.SaveTrackData(trackInfo); err != nil {
-		fmt.Printf("⚠️ Warning: Could not cache %s + %s: %v\n", trackName, className, err)
+		log.Printf("⚠️ Warning: Could not cache %s + %s: %v", trackName, className, err)
 	}
 
 	if len(data) > 0 {
-		fmt.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]\n", trackName, className, duration.Seconds(), len(data), trackID, classID)
+		log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]", trackName, className, duration.Seconds(), len(data), trackID, classID)
 	} else {
-		fmt.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]\n", trackName, className, duration.Seconds(), trackID, classID)
+		log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]", trackName, className, duration.Seconds(), trackID, classID)
 	}
 	return trackInfo, false, nil // false = fetched fresh
 }
@@ -168,6 +230,111 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 // ClearCache removes all cached files
 func (dc *DataCache) ClearCache() error {
 	return os.RemoveAll(dc.cacheDir)
+}
+
+// ClearTempCache removes all temporary cached files
+func (dc *DataCache) ClearTempCache() error {
+	return os.RemoveAll(dc.tempCacheDir)
+}
+
+// PromoteTempCache atomically moves temp cache to main cache
+// This ensures the index always sees consistent data
+// Returns the number of files promoted and any critical error
+func (dc *DataCache) PromoteTempCache() (int, error) {
+	// Check if temp cache exists
+	if _, err := os.Stat(dc.tempCacheDir); os.IsNotExist(err) {
+		log.Println("ℹ️ No temp cache directory to promote")
+		return 0, nil
+	}
+
+	// Read all temp cache entries
+	tempFiles, err := filepath.Glob(filepath.Join(dc.tempCacheDir, "track_*", "class_*.json.gz"))
+	if err != nil {
+		log.Printf("⚠️ Failed to list temp cache files: %v", err)
+		return 0, fmt.Errorf("failed to list temp cache files: %w", err)
+	}
+
+	if len(tempFiles) == 0 {
+		log.Println("ℹ️ No temp cache files to promote")
+		// Clean up empty temp cache directory
+		if err := dc.ClearTempCache(); err != nil {
+			log.Printf("⚠️ Warning: Failed to clean up empty temp cache: %v", err)
+		}
+		return 0, nil
+	}
+
+	log.Printf("🔄 Promoting %d temp cache files to main cache...", len(tempFiles))
+
+	// Ensure main cache directory exists
+	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
+		log.Printf("⚠️ Failed to create main cache directory: %v", err)
+		return 0, fmt.Errorf("failed to create cache dir: %w", err)
+	}
+
+	promoted := 0
+	failed := 0
+
+	// Move each temp file to main cache
+	for _, tempFile := range tempFiles {
+		// Get relative path from temp cache dir
+		relPath, err := filepath.Rel(dc.tempCacheDir, tempFile)
+		if err != nil {
+			log.Printf("⚠️ Failed to get relative path for %s: %v", tempFile, err)
+			failed++
+			continue
+		}
+
+		// Construct destination path
+		destFile := filepath.Join(dc.cacheDir, relPath)
+
+		// Ensure destination directory exists
+		if err := os.MkdirAll(filepath.Dir(destFile), 0755); err != nil {
+			log.Printf("⚠️ Failed to create directory for %s: %v", destFile, err)
+			failed++
+			continue
+		}
+
+		// On Windows, os.Rename fails if destination exists and is open
+		// Remove destination first to avoid conflicts (old cache is replaced)
+		if _, err := os.Stat(destFile); err == nil {
+			// Destination exists, remove it first
+			if err := os.Remove(destFile); err != nil {
+				log.Printf("⚠️ Failed to remove old cache file %s: %v (file may be in use)", destFile, err)
+				// Don't fail - try to rename anyway, might work
+			}
+		}
+
+		// Move (rename) the file - atomic operation on same filesystem
+		if err := os.Rename(tempFile, destFile); err != nil {
+			log.Printf("⚠️ Failed to promote %s to %s: %v", filepath.Base(tempFile), filepath.Base(destFile), err)
+			failed++
+			// Don't break - continue with other files
+			continue
+		}
+		promoted++
+	}
+
+	// Log results
+	if failed > 0 {
+		log.Printf("⚠️ Cache promotion completed with issues: %d files promoted, %d failed", promoted, failed)
+	} else {
+		log.Printf("✅ Successfully promoted %d cache files to main cache", promoted)
+	}
+
+	// Clean up temp cache directory and empty track directories
+	// This is best-effort cleanup, don't fail if it doesn't work
+	if err := dc.ClearTempCache(); err != nil {
+		log.Printf("⚠️ Warning: Failed to clean up temp cache directory: %v", err)
+		// Not a critical error - old temp files won't cause issues
+	}
+
+	// Return success even if some files failed - partial promotion is better than none
+	// Only return error if NO files were promoted and we expected some
+	if promoted == 0 && len(tempFiles) > 0 {
+		return 0, fmt.Errorf("failed to promote any cache files (%d attempted)", len(tempFiles))
+	}
+
+	return promoted, nil
 }
 
 // GetCacheInfo returns information about cached files

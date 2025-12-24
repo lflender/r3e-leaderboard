@@ -28,19 +28,38 @@ type APIResponse struct {
 
 // APIClient handles all API communications with RaceRoom
 type APIClient struct {
-	client  *http.Client
-	timeout time.Duration
+	client    *http.Client
+	timeout   time.Duration
+	transport *http.Transport
 }
 
 // NewAPIClient creates a new API client with default settings
 func NewAPIClient() *APIClient {
 	jar, _ := cookiejar.New(nil)
+
+	// Configure transport with connection limits to prevent connection leaks
+	transport := &http.Transport{
+		MaxIdleConns:        5,
+		MaxIdleConnsPerHost: 2,
+		IdleConnTimeout:     30 * time.Second,
+		DisableKeepAlives:   false,
+	}
+
 	return &APIClient{
 		client: &http.Client{
-			Timeout: 20 * time.Second,
-			Jar:     jar,
+			Timeout:   20 * time.Second,
+			Jar:       jar,
+			Transport: transport,
 		},
-		timeout: 20 * time.Second,
+		timeout:   20 * time.Second,
+		transport: transport,
+	}
+}
+
+// Close closes idle connections and cleans up resources
+func (api *APIClient) Close() {
+	if api.transport != nil {
+		api.transport.CloseIdleConnections()
 	}
 }
 
@@ -66,7 +85,8 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 	resp.Body.Close()
 
 	// Fetch data with pagination (API limits to 1500 per request)
-	allResults := []map[string]interface{}{}
+	// Pre-allocate with reasonable capacity to avoid repeated allocations
+	allResults := make([]map[string]interface{}, 0, 1500)
 	pageSize := 1500
 	start := 0
 
