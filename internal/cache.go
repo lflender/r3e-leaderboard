@@ -143,19 +143,52 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	}
 
 	filename := dc.GetCacheFileName(trackInfo.TrackID, trackInfo.ClassID)
-	file, err := os.Create(filename)
+
+	// Write to temporary file first to avoid corrupting existing cache on errors
+	tempFile := filename + ".tmp"
+	file, err := os.Create(tempFile)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
 	// Create gzip writer
 	gzWriter := gzip.NewWriter(file)
-	defer gzWriter.Close()
-
 	encoder := json.NewEncoder(gzWriter)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(cached)
+
+	// Encode data
+	if err := encoder.Encode(cached); err != nil {
+		file.Close()
+		os.Remove(tempFile) // Clean up failed temp file
+		return err
+	}
+
+	// Close gzip writer to flush
+	if err := gzWriter.Close(); err != nil {
+		file.Close()
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Close file
+	if err := file.Close(); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Atomically rename temp file to final file
+	// On error, the old cache file remains untouched
+	if err := os.Rename(tempFile, filename); err != nil {
+		// On Windows, rename fails if destination exists
+		// Remove destination first and retry
+		os.Remove(filename)
+		if retryErr := os.Rename(tempFile, filename); retryErr != nil {
+			os.Remove(tempFile)
+			return retryErr
+		}
+	}
+
+	return nil
 }
 
 // LoadTrackData loads track data from cache
