@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 )
@@ -89,6 +90,12 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 					cacheLoadCount++
 					// Count cached unique class per track for this run
 					IncrementCacheLoad(&activity, track.TrackID, track.Name, class.ClassID)
+					// Export activity periodically during cache loading
+					if cacheLoadCount%50 == 0 {
+						if err := ExportTrackActivity(activity); err != nil {
+							log.Printf("⚠️ Failed to export track activity during cache load: %v", err)
+						}
+					}
 				}
 			}
 		}
@@ -160,6 +167,20 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				continue
 			}
 
+			// Get cache age for logging
+			cacheAge := dataCache.GetCacheAge(track.TrackID, class.ClassID)
+			cacheAgeStr := "missing"
+			if cacheAge >= 0 {
+				// Format age nicely
+				if cacheAge < time.Hour {
+					cacheAgeStr = fmt.Sprintf("%.0fm", cacheAge.Minutes())
+				} else if cacheAge < 24*time.Hour {
+					cacheAgeStr = fmt.Sprintf("%.1fh", cacheAge.Hours())
+				} else {
+					cacheAgeStr = fmt.Sprintf("%.1fd", cacheAge.Hours()/24)
+				}
+			}
+
 			// Show progress every 50 combinations
 			if currentCombination%50 == 0 || currentCombination == 1 {
 				if progressCallback != nil {
@@ -181,17 +202,15 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				Data:    data,
 			}
 
-			// Save to temp cache only when data exists (avoid overwriting with empty cache)
-			if len(trackInfo.Data) > 0 {
-				if saveErr := tempCache.SaveTrackData(trackInfo); saveErr != nil {
-					log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
-				}
+			// Always save to temp cache to update timestamp, even for empty data
+			if saveErr := tempCache.SaveTrackData(trackInfo); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
 			}
 
 			if len(data) > 0 {
-				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+				log.Printf("🌐 %s + %s: %.2fs → %d entries (cache age: %s) [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), len(data), cacheAgeStr, track.TrackID, class.ClassID)
 			} else {
-				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+				log.Printf("🌐 %s + %s: %.2fs → no data (cache age: %s) [track=%s, class=%s]", track.Name, class.Name, duration.Seconds(), cacheAgeStr, track.TrackID, class.ClassID)
 			}
 
 			fromCache := false
@@ -203,7 +222,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				// Count unique fetch per track+class (startup origin)
 				IncrementFetch(&activity, track.TrackID, track.Name, "startup", class.ClassID)
 
-				// Update progress callback periodically
+				// Update progress callback and export activity periodically
 				if progressCallback != nil && fetchedCount%10 == 0 {
 					// Rebuild allTrackData from map
 					allTrackData = make([]TrackInfo, 0, len(existingData))
@@ -211,6 +230,10 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 						allTrackData = append(allTrackData, v)
 					}
 					progressCallback(allTrackData)
+					// Export activity to track progress
+					if err := ExportTrackActivity(activity); err != nil {
+						log.Printf("⚠️ Failed to export track activity during fetch: %v", err)
+					}
 				}
 			}
 
@@ -342,11 +365,9 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 				Data:    data,
 			}
 
-			// Save to temp cache only when data exists
-			if len(ti.Data) > 0 {
-				if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
-					log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
-				}
+			// Always save to temp cache to update timestamp, even for empty data
+			if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
 			}
 
 			// Append only if we have entries; keep empty combos out to avoid bloating
@@ -364,9 +385,15 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 					track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
 			}
 
-			// Periodic progress updates
+			// Periodic progress updates and activity export
 			if progressCallback != nil && (processed%50 == 0 || processed == 1) {
 				progressCallback(allTrackData)
+			}
+			// Export activity every 50 fetches to track progress
+			if processed%50 == 0 {
+				if err := ExportTrackActivity(activity); err != nil {
+					log.Printf("⚠️ Failed to export track activity during refresh: %v", err)
+				}
 			}
 
 			// Rate limit API calls

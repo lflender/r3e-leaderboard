@@ -105,18 +105,24 @@ func (dc *DataCache) IsCacheExpired(trackID, classID string) bool {
 	return time.Since(info.ModTime()) >= dc.maxAge
 }
 
+// GetCacheAge returns the age of the cache file, or -1 if it doesn't exist
+func (dc *DataCache) GetCacheAge(trackID, classID string) time.Duration {
+	filename := dc.GetCacheFileName(trackID, classID)
+	info, err := os.Stat(filename)
+	if err != nil {
+		return -1 // doesn't exist
+	}
+	return time.Since(info.ModTime())
+}
+
 // SaveTrackData saves track data to cache
 func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	if err := dc.EnsureCacheDir(); err != nil {
 		return err
 	}
 
-	// Safety: do not write empty data to cache. Preserve existing cache
-	// when API returns no data or is temporarily unavailable.
-	if len(trackInfo.Data) == 0 {
-		log.Printf("ℹ️ Skipping cache write for %s + class %s: no data", trackInfo.TrackID, trackInfo.ClassID)
-		return nil
-	}
+	// Always write to cache to update the timestamp, even for empty data
+	// This prevents repeatedly fetching combinations that have no leaderboard data
 
 	// Ensure track-specific directory exists (use correct base dir)
 	baseDir := dc.cacheDir

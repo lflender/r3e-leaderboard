@@ -6,6 +6,7 @@ import (
 	"os"
 	"r3e-leaderboard/internal"
 	"runtime"
+	"runtime/debug"
 	"time"
 )
 
@@ -110,6 +111,8 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		// Compact in-memory track data after indexing to reduce memory footprint
 		o.CompactTrackData()
 		runtime.GC()
+		// Proactively return unused memory to the OS after heavy work
+		debug.FreeOSMemory()
 		log.Printf("🧹 Compacted in-memory track data. %d combinations retained (metadata only)", len(o.tracks))
 
 		log.Printf("✅ Data loading complete! %d track/class combinations indexed", len(tracks))
@@ -193,6 +196,8 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	// Compact in-memory track data post-refresh to minimize idle memory usage
 	o.CompactTrackData()
 	runtime.GC()
+	// Proactively return unused memory to the OS after heavy work
+	debug.FreeOSMemory()
 	log.Println("🧹 Compacted in-memory track data after scheduled refresh")
 
 	log.Println("✅ Scheduled full refresh completed")
@@ -375,6 +380,10 @@ func (o *Orchestrator) exportStatus() {
 		scrapeEnd = existingStatus.LastScrapeEnd
 	}
 
+	// Read current memory stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
@@ -387,6 +396,8 @@ func (o *Orchestrator) exportStatus() {
 		TotalEntries:      existingStatus.TotalEntries,      // Preserved from indexing
 		LastIndexUpdate:   existingStatus.LastIndexUpdate,   // Preserved from indexing
 		IndexBuildTimeMs:  existingStatus.IndexBuildTimeMs,  // Preserved from indexing
+		MemoryAllocMB:     m.Alloc / 1024 / 1024,
+		MemorySysMB:       m.Sys / 1024 / 1024,
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {

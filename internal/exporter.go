@@ -28,6 +28,8 @@ type StatusData struct {
 	TotalEntries      int       `json:"total_entries"`
 	LastIndexUpdate   time.Time `json:"last_index_update"`
 	IndexBuildTimeMs  float64   `json:"index_build_time_ms"`
+	MemoryAllocMB     uint64    `json:"memory_alloc_mb"`
+	MemorySysMB       uint64    `json:"memory_sys_mb"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -301,6 +303,10 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		return err
 	}
 
+	// Read current memory stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
 	// Update status with index statistics, preserving fetch/scrape fields
 	existingStatus := ReadStatusData()
 	status := StatusData{
@@ -315,6 +321,8 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		TotalEntries:      totalEntries,
 		LastIndexUpdate:   time.Now(),
 		IndexBuildTimeMs:  buildDuration.Seconds() * 1000,
+		MemoryAllocMB:     m.Alloc / 1024 / 1024,
+		MemorySysMB:       m.Sys / 1024 / 1024,
 	}
 	if err := ExportStatusData(status); err != nil {
 		log.Printf("⚠️ Failed to update status with index stats: %v", err)
