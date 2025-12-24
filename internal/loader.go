@@ -61,9 +61,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	defer apiClient.Close() // Ensure connections are cleaned up
 
 	var allTrackData []TrackInfo
-	dataCache := NewDataCache()      // For reading existing cache
-	tempCache := NewTempDataCache()  // For writing new fetches
-	defer tempCache.ClearTempCache() // Clean up temp cache on exit
+	dataCache := NewDataCache()     // For reading existing cache
+	tempCache := NewTempDataCache() // For writing new fetches
+	// Note: temp cache is NOT cleared on exit - it will be promoted at next startup
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 
@@ -321,7 +321,7 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 	defer apiClient.Close()
 
 	tempCache := NewTempDataCache()
-	defer tempCache.ClearTempCache()
+	// Note: temp cache is NOT cleared on exit - it will be promoted at next startup
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 	allTrackData := make([]TrackInfo, 0, totalCombinations)

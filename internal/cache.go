@@ -280,9 +280,20 @@ func (dc *DataCache) ClearTempCache() error {
 // This ensures the index always sees consistent data
 // Returns the number of files promoted and any critical error
 func (dc *DataCache) PromoteTempCache() (int, error) {
+	// Get absolute paths for diagnostics
+	absTemp, _ := filepath.Abs(dc.tempCacheDir)
+	absCache, _ := filepath.Abs(dc.cacheDir)
+	cwd, _ := os.Getwd()
+
+	log.Printf("🔍 PromoteTempCache: cwd=%s, tempCacheDir=%s (abs: %s), cacheDir=%s (abs: %s)",
+		cwd, dc.tempCacheDir, absTemp, dc.cacheDir, absCache)
+
 	// Check if temp cache exists
 	if _, err := os.Stat(dc.tempCacheDir); os.IsNotExist(err) {
-		log.Println("ℹ️ No temp cache directory to promote")
+		log.Printf("ℹ️ No temp cache directory to promote (os.Stat failed on %s)", dc.tempCacheDir)
+		return 0, nil
+	} else if err != nil {
+		log.Printf("⚠️ Error checking temp cache dir %s: %v", dc.tempCacheDir, err)
 		return 0, nil
 	}
 
