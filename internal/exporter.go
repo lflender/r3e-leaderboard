@@ -1,11 +1,13 @@
 package internal
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -69,14 +71,8 @@ func ReadStatusData() StatusData {
 // ExportDriverIndex exports the driver index to a JSON file on disk
 // Uses atomic write (temp file + rename) with fallback to handle file locking
 func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
+	// Stream the JSON to reduce peak memory usage
 	indexStart := time.Now()
-
-	// Convert the index to JSON
-	jsonData, err := json.MarshalIndent(index, "", "  ")
-	if err != nil {
-		log.Printf("❌ Failed to marshal driver index: %v", err)
-		return err
-	}
 
 	// Ensure cache directory exists
 	cacheDir := filepath.Dir(DriverIndexFile)
@@ -85,37 +81,113 @@ func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
 		return err
 	}
 
-	// Write to temporary file first (atomic write pattern)
 	tempFile := DriverIndexFile + ".tmp"
-	if err := os.WriteFile(tempFile, jsonData, 0644); err != nil {
-		log.Printf("❌ Failed to write temporary driver index file: %v", err)
+	f, err := os.Create(tempFile)
+	if err != nil {
+		log.Printf("❌ Failed to create temporary driver index file: %v", err)
+		return err
+	}
+
+	w := bufio.NewWriterSize(f, 1<<20) // 1MB buffer
+	// Write opening brace
+	if _, err := w.WriteString("{\n"); err != nil {
+		f.Close()
+		return err
+	}
+
+	// Iterate over map entries and encode each slice separately
+	first := true
+	for name, results := range index {
+		if !first {
+			if _, err := w.WriteString(",\n"); err != nil {
+				f.Close()
+				return err
+			}
+		}
+		first = false
+
+		// Encode key as JSON string
+		keyBytes, err := json.Marshal(name)
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := w.Write(keyBytes); err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := w.WriteString(": "); err != nil {
+			f.Close()
+			return err
+		}
+
+		// Encode value slice
+		valBytes, err := json.Marshal(results)
+		if err != nil {
+			f.Close()
+			return err
+		}
+		if _, err := w.Write(valBytes); err != nil {
+			f.Close()
+			return err
+		}
+	}
+
+	// Write closing brace and flush
+	if _, err := w.WriteString("\n}\n"); err != nil {
+		f.Close()
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		f.Close()
+		return err
+	}
+
+	// Ensure bytes are flushed to disk before rename
+	if err := f.Sync(); err != nil {
+		f.Close()
+		log.Printf("❌ Failed to sync temporary driver index file: %v", err)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		log.Printf("❌ Failed to close temporary driver index file: %v", err)
 		return err
 	}
 
 	// Rename temp file to final file (atomic operation)
 	if err := os.Rename(tempFile, DriverIndexFile); err != nil {
 		log.Printf("⚠️ WARNING: Atomic rename failed: %v", err)
-		log.Printf("   Attempting direct write as fallback (file may be locked by editor)")
-
-		// Fallback: try direct write (less safe but better than nothing)
-		if directErr := os.WriteFile(DriverIndexFile, jsonData, 0644); directErr != nil {
-			log.Printf("❌ ERROR: Direct write also failed: %v", directErr)
-			log.Printf("   Please close %s in your editor and try again", DriverIndexFile)
-			os.Remove(tempFile) // Clean up temp file
-			return directErr
+		if runtime.GOOS == "windows" {
+			log.Printf("   Attempting direct write as fallback (Windows file locking)")
+			// Read back the streamed temp file and write directly
+			data, readErr := os.ReadFile(tempFile)
+			if readErr != nil {
+				os.Remove(tempFile)
+				return readErr
+			}
+			if directErr := os.WriteFile(DriverIndexFile, data, 0644); directErr != nil {
+				log.Printf("❌ ERROR: Direct write also failed: %v", directErr)
+				os.Remove(tempFile)
+				return directErr
+			}
+			log.Printf("✅ Fallback write successful (Windows)")
+			os.Remove(tempFile)
+		} else {
+			log.Printf("❌ Aborting export to avoid partial write on non-Windows; keeping previous index intact")
+			os.Remove(tempFile)
+			return err
 		}
-
-		log.Printf("✅ Fallback write successful")
-		os.Remove(tempFile) // Clean up temp file after successful fallback
 	}
 
 	exportDuration := time.Since(indexStart)
-	log.Printf("💾 Driver index exported to %s (%.3f seconds, %.2f MB)",
-		DriverIndexFile, exportDuration.Seconds(), float64(len(jsonData))/(1024*1024))
-
-	// Release jsonData memory immediately
-	jsonData = nil
-
+	// Stat the final file to report size
+	fi, statErr := os.Stat(DriverIndexFile)
+	if statErr == nil {
+		log.Printf("💾 Driver index exported to %s (%.3f seconds, %.2f MB)",
+			DriverIndexFile, exportDuration.Seconds(), float64(fi.Size())/(1024*1024))
+	} else {
+		log.Printf("💾 Driver index exported to %s (%.3f seconds)", DriverIndexFile, exportDuration.Seconds())
+	}
 	return nil
 }
 
@@ -299,7 +371,7 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	log.Printf("🔍 Index built: %.3f seconds (%d drivers, %d entries, %d tracks)",
 		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
 
-	// Export the driver index with build duration
+	// Export the driver index with build duration (streaming to limit peak memory)
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
 		return err
 	}
@@ -341,6 +413,8 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	// Suggest garbage collection after large index operations
 	runtime.GC()
+	// Proactively return unused memory to the OS after large allocations
+	debug.FreeOSMemory()
 
 	return ExportTopCombinations(tracks)
 }

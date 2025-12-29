@@ -175,7 +175,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			// We use dataCache to check if cache exists/expired above, but write to tempCache
 			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
 			if err != nil {
-				continue // Skip on fetch error
+				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
+				continue // Skip on fetch error but keep processing other combinations
 			}
 
 			trackInfo := TrackInfo{
@@ -216,7 +217,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 			// Rate limiting for API calls
 			if !fromCache {
-				sleepDuration := 200 * time.Millisecond
+				sleepDuration := 50 * time.Millisecond
 				for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
 					select {
 					case <-ctx.Done():
@@ -358,7 +359,7 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 			}
 
 			// Rate limit API calls
-			sleepDuration := 200 * time.Millisecond
+			sleepDuration := 50 * time.Millisecond
 			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
 				select {
 				case <-ctx.Done():

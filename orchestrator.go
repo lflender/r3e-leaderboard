@@ -282,15 +282,17 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 		interval := time.Duration(intervalMinutes) * time.Minute
 		log.Printf("⏱️ Periodic indexing ticker started: every %v", interval)
 
-		// Immediate indexing once if we have no previous index
+		// Immediate indexing once if we have no previous index (non-blocking)
 		if o.fetchInProgress && len(o.tracks) > 0 && o.lastIndexedCount == 0 {
-			if err := internal.BuildAndExportIndex(o.tracks); err != nil {
-				log.Printf("⚠️ Failed to export index: %v", err)
-			} else {
-				log.Printf("🔍 Initial periodic index built: %d track/class combinations", len(o.tracks))
-				o.lastIndexedCount = len(o.tracks)
-			}
-			o.exportStatus()
+			go func() {
+				if err := internal.BuildAndExportIndex(o.tracks); err != nil {
+					log.Printf("⚠️ Failed to export index: %v", err)
+				} else {
+					log.Printf("🔍 Initial periodic index built: %d track/class combinations", len(o.tracks))
+					o.lastIndexedCount = len(o.tracks)
+				}
+				o.exportStatus()
+			}()
 		}
 
 		ticker := time.NewTicker(interval)
@@ -308,23 +310,27 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 				log.Println("⏱️ Periodic indexing tick fired")
 				// Only index if we're still fetching and have some data
 				if o.fetchInProgress && len(o.tracks) > 0 {
-					// Promote temp cache before indexing to ensure consistency
-					tempCache := internal.NewTempDataCache()
-					promotedCount, err := tempCache.PromoteTempCache()
-					if err != nil {
-						log.Printf("⚠️ Failed to promote temp cache: %v", err)
-					} else if promotedCount > 0 {
-						log.Printf("🔄 Promoted %d new cache files before indexing", promotedCount)
-					}
+					// Run index building in a separate goroutine to avoid blocking the ticker
+					// This is CRITICAL - the index build can take 2+ minutes and was blocking all fetches
+					go func() {
+						// Promote temp cache before indexing to ensure consistency
+						tempCache := internal.NewTempDataCache()
+						promotedCount, err := tempCache.PromoteTempCache()
+						if err != nil {
+							log.Printf("⚠️ Failed to promote temp cache: %v", err)
+						} else if promotedCount > 0 {
+							log.Printf("🔄 Promoted %d new cache files before indexing", promotedCount)
+						}
 
-					// Rebuild index every interval during fetching
-					if err := internal.BuildAndExportIndex(o.tracks); err != nil {
-						log.Printf("⚠️ Failed to export index: %v", err)
-					} else {
-						log.Printf("🔍 Index updated: %d track/class combinations", len(o.tracks))
-						o.lastIndexedCount = len(o.tracks)
-					}
-					o.exportStatus()
+						// Rebuild index every interval during fetching
+						if err := internal.BuildAndExportIndex(o.tracks); err != nil {
+							log.Printf("⚠️ Failed to export index: %v", err)
+						} else {
+							log.Printf("🔍 Index updated: %d track/class combinations", len(o.tracks))
+							o.lastIndexedCount = len(o.tracks)
+						}
+						o.exportStatus()
+					}()
 				} else if !o.fetchInProgress {
 					log.Println("⏹️ Stopping periodic indexing - data loading completed")
 					return
