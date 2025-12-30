@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,11 +48,11 @@ func NewAPIClient() *APIClient {
 
 	return &APIClient{
 		client: &http.Client{
-			Timeout:   20 * time.Second,
+			Timeout:   60 * time.Second,
 			Jar:       jar,
 			Transport: transport,
 		},
-		timeout:   20 * time.Second,
+		timeout:   60 * time.Second,
 		transport: transport,
 	}
 }
@@ -64,7 +65,7 @@ func (api *APIClient) Close() {
 }
 
 // FetchLeaderboardData retrieves leaderboard data from RaceRoom API with pagination
-func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[string]interface{}, time.Duration, error) {
+func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID string) ([]map[string]interface{}, time.Duration, error) {
 	startTime := time.Now()
 
 	// Add "class-" prefix to the class ID
@@ -72,7 +73,7 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 
 	// Establish session
 	mainURL := "https://game.raceroom.com/leaderboard/?car_class=" + fullClassID + "&track=" + trackID
-	req, err := http.NewRequest("GET", mainURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", mainURL, nil)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -91,10 +92,17 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 	start := 0
 
 	for {
+		// Check if context is cancelled before making request
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		default:
+		}
+
 		// API call for leaderboard data
 		apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=" + fmt.Sprintf("%d", start) + "&count=" + fmt.Sprintf("%d", pageSize)
 
-		apiReq, err := http.NewRequest("GET", apiURL, nil)
+		apiReq, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
 			return nil, 0, err
 		}

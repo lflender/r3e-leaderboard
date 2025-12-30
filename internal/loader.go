@@ -171,9 +171,11 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 				}
 			}
 
-			// Fetch fresh data - always fetch (don't check cache) and write to tempCache
-			// We use dataCache to check if cache exists/expired above, but write to tempCache
-			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
+			// Create a per-request context with timeout to prevent hanging
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 90*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Clean up context resources
+
 			if err != nil {
 				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
 				continue // Skip on fetch error but keep processing other combinations
@@ -317,7 +319,11 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 			default:
 			}
 
-			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
+			// Create a per-request context with timeout to prevent hanging
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 90*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Clean up context resources
+
 			if err != nil {
 				// Log and continue on error to avoid losing large portions
 				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
@@ -384,5 +390,125 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 
 	fetchTracker.SaveFetchEnd()
 	log.Printf("✅ Force-fetched %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
+	return allTrackData
+}
+
+// FetchSelectedTracksDataWithCallback force-fetches all car classes for the provided track IDs only.
+// It bypasses cache reads for the selected tracks, writes to a temporary cache, and promotes it at the end.
+// Progress is reported via the callback similarly to the full refresh.
+func FetchSelectedTracksDataWithCallback(ctx context.Context, selectedTrackIDs []string, progressCallback func([]TrackInfo), origin string) []TrackInfo {
+	fetchTracker := NewFetchTracker()
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	// Build a set of selected track IDs for O(1) lookups
+	selected := make(map[string]struct{}, len(selectedTrackIDs))
+	for _, id := range selectedTrackIDs {
+		if id == "" {
+			continue
+		}
+		selected[id] = struct{}{}
+	}
+
+	// Filter tracks to only selected ones
+	filteredTracks := make([]TrackConfig, 0, len(selected))
+	for _, t := range trackConfigs {
+		if _, ok := selected[t.TrackID]; ok {
+			filteredTracks = append(filteredTracks, t)
+		}
+	}
+
+	log.Printf("📊 Targeted refresh: force-fetch %d selected tracks × %d classes = %d combinations...",
+		len(filteredTracks), len(classConfigs), len(filteredTracks)*len(classConfigs))
+
+	apiClient := NewAPIClient()
+	defer apiClient.Close()
+
+	tempCache := NewTempDataCache()
+
+	totalCombinations := len(filteredTracks) * len(classConfigs)
+	allTrackData := make([]TrackInfo, 0, totalCombinations)
+
+	fetchTracker.SaveFetchStart()
+
+	processed := 0
+	for _, track := range filteredTracks {
+		for _, class := range classConfigs {
+			processed++
+
+			// Check cancellation
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+				fetchTracker.SaveFetchEnd()
+				return allTrackData
+			default:
+			}
+
+			// Create a per-request context with timeout to prevent hanging
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 90*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Clean up context resources
+
+			if err != nil {
+				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
+				if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+					progressCallback(allTrackData)
+				}
+				continue
+			}
+
+			ti := TrackInfo{
+				Name:    track.Name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+				Data:    data,
+			}
+
+			if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
+			}
+
+			if len(ti.Data) > 0 {
+				allTrackData = append(allTrackData, ti)
+			}
+
+			if len(data) > 0 {
+				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+			} else {
+				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+			}
+
+			if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+				progressCallback(allTrackData)
+			}
+
+			// Rate limit API calls
+			sleepDuration := 50 * time.Millisecond
+			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
+				select {
+				case <-ctx.Done():
+					log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+					fetchTracker.SaveFetchEnd()
+					return allTrackData
+				default:
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+
+	log.Println("🔄 Promoting temporary cache to main cache...")
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
+	} else if promotedCount > 0 {
+		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
+	}
+
+	fetchTracker.SaveFetchEnd()
+	log.Printf("✅ Targeted force-fetch complete: %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
 	return allTrackData
 }

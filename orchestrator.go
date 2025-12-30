@@ -7,6 +7,7 @@ import (
 	"r3e-leaderboard/internal"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -46,7 +47,6 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 // StartBackgroundDataLoading initiates the background data loading process
 func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	go func() {
-		log.Println("🔄 Starting background data loading...")
 		// Do not mark scrape start yet; only do so if we actually fetch
 		o.fetchInProgress = false
 		o.exportStatus()
@@ -65,7 +65,6 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 			o.tracks = cachedTracks
 
 			if len(cachedTracks) > 0 {
-				log.Println("🔄 Building initial search index from cache...")
 				if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
 					log.Printf("⚠️ Failed to export index: %v", err)
 				} else {
@@ -85,8 +84,6 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 				log.Printf("⏱️ Starting periodic indexing every %d minutes during fetch...", indexingIntervalMinutes)
 				o.StartPeriodicIndexing(indexingIntervalMinutes)
-			} else {
-				log.Println("✅ All data is cached - skipping periodic indexing")
 			}
 		}
 
@@ -203,6 +200,78 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	log.Println("✅ Scheduled full refresh completed")
 }
 
+// performTargetedRefresh executes a force refresh for only the provided track IDs
+// (across all car classes), while merging with cached data for all other tracks
+// and performing periodic indexing during the fetch phase.
+func (o *Orchestrator) performTargetedRefresh(selectedTrackIDs []string, indexingIntervalMinutes int, origin string) {
+	if len(selectedTrackIDs) == 0 {
+		// Fallback to full refresh if no valid IDs provided
+		o.performFullRefresh(indexingIntervalMinutes, origin)
+		return
+	}
+
+	log.Printf("🔄 Starting targeted refresh for %d tracks (force fetch classes)...", len(selectedTrackIDs))
+	o.fetchInProgress = true
+	o.lastIndexedCount = 0
+	o.exportStatus()
+
+	// Bootstrap: load ALL cached data first and build initial index so we never
+	// start from zero even if the API is down or slow.
+	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
+	if len(cachedTracks) > 0 {
+		log.Println("🔄 Building initial search index from existing cache (targeted refresh bootstrap)...")
+		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+			log.Printf("⚠️ Failed to export initial index: %v", err)
+		} else {
+			o.lastIndexedCount = len(cachedTracks)
+		}
+		o.tracks = cachedTracks
+		o.exportStatus()
+	} else {
+		log.Println("ℹ️ No cached combinations found for bootstrap index")
+	}
+
+	// Start periodic indexing during the fetch phase (every N minutes)
+	log.Printf("⏱️ Starting periodic indexing every %d minutes during targeted refresh...", indexingIntervalMinutes)
+	o.StartPeriodicIndexing(indexingIntervalMinutes)
+
+	// Progress callback merges fetched with cached for consistent indexing
+	progressCallback := func(fetched []internal.TrackInfo) {
+		merged := mergeTracks(cachedTracks, fetched)
+		o.tracks = merged
+		if len(merged)%500 == 0 && len(merged) > 0 {
+			log.Printf("📊 %d track/class combinations available (cached + refreshed)", len(merged))
+			o.exportStatus()
+		}
+	}
+
+	// Perform targeted force-fetch refresh only for selected tracks
+	fetchedTracks := internal.FetchSelectedTracksDataWithCallback(o.fetchContext, selectedTrackIDs, progressCallback, origin)
+
+	// Build final index from merged cached + fetched
+	finalMerged := mergeTracks(cachedTracks, fetchedTracks)
+	log.Println("🔄 Building final search index (targeted refresh)...")
+	if err := internal.BuildAndExportIndex(finalMerged); err != nil {
+		log.Printf("⚠️ Failed to export index: %v", err)
+	} else {
+		o.lastIndexedCount = len(finalMerged)
+	}
+	log.Println("✅ Final index complete (targeted refresh)")
+
+	// Final update
+	o.tracks = finalMerged
+	o.fetchInProgress = false
+	o.exportStatus()
+
+	// Compact in-memory track data post-refresh to minimize idle memory usage
+	o.CompactTrackData()
+	runtime.GC()
+	debug.FreeOSMemory()
+	log.Println("🧹 Compacted in-memory track data after targeted refresh")
+
+	log.Println("✅ Targeted refresh completed")
+}
+
 // mergeTracks overlays fetched combinations over cached combinations by (trackID,classID)
 // and returns a slice containing only combinations with data.
 func mergeTracks(cached, fetched []internal.TrackInfo) []internal.TrackInfo {
@@ -247,17 +316,38 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 				if _, err := os.Stat(triggerPath); err == nil {
 					// Found trigger file
 					log.Printf("🪙 Refresh trigger file detected: %s", triggerPath)
-					// Attempt to remove to avoid repeated triggers
-					if rmErr := os.Remove(triggerPath); rmErr != nil {
-						log.Printf("⚠️ Could not remove trigger file: %v", rmErr)
-					}
 					// Skip if already fetching
 					if o.fetchInProgress {
 						log.Println("⏭️ Skipping manual refresh - fetch already in progress")
+						// Remove trigger file even if skipping
+						if rmErr := os.Remove(triggerPath); rmErr != nil {
+							log.Printf("⚠️ Could not remove trigger file: %v", rmErr)
+						}
 						continue
 					}
-					// Launch full refresh
-					o.performFullRefresh(indexingIntervalMinutes, "manual")
+					// Read file content to determine whether to run targeted or full refresh
+					content, readErr := os.ReadFile(triggerPath)
+					if readErr != nil {
+						log.Printf("⚠️ Could not read trigger file (fallback to full refresh): %v", readErr)
+						o.performFullRefresh(indexingIntervalMinutes, "manual")
+						continue
+					}
+					// Remove trigger file after reading to avoid repeated triggers
+					if rmErr := os.Remove(triggerPath); rmErr != nil {
+						log.Printf("⚠️ Could not remove trigger file: %v", rmErr)
+					}
+
+					// Parse whitespace-separated or newline-separated track IDs
+					// Accept any non-empty token as an ID; consumer functions validate existence
+					tokens := strings.Fields(string(content))
+					if len(tokens) == 0 {
+						log.Println("ℹ️ Trigger file empty — performing full refresh")
+						o.performFullRefresh(indexingIntervalMinutes, "manual")
+						continue
+					}
+
+					log.Printf("🪙 Targeted refresh requested for %d track IDs via file", len(tokens))
+					o.performTargetedRefresh(tokens, indexingIntervalMinutes, "manual")
 				}
 			case <-o.fetchContext.Done():
 				log.Println("⏹️ Refresh file trigger watcher stopping")
@@ -280,7 +370,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 			intervalMinutes = 30
 		}
 		interval := time.Duration(intervalMinutes) * time.Minute
-		log.Printf("⏱️ Periodic indexing ticker started: every %v", interval)
 
 		// Immediate indexing once if we have no previous index (non-blocking)
 		if o.fetchInProgress && len(o.tracks) > 0 && o.lastIndexedCount == 0 {

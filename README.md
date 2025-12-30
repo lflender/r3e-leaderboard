@@ -271,6 +271,12 @@ Edit `internal/config.go` or create `config.json` to customize:
 - **File-based trigger:** Watch for a sentinel file (e.g., `cache/refresh_now`) and start refresh when it appears:
   - `touch cache/refresh_now`
   - Simple and works across environments.
+  - Targeted refresh: put one or more track IDs in `cache/refresh_now` (separated by spaces or newlines) to refresh only those tracks across all car classes. Example:
+    ```
+    1671 263
+    3291
+    ```
+    When this file is detected, only tracks `1671`, `263`, and `3291` will be force-fetched (all classes), merged with existing cached data, and the index rebuilt.
 
 If you want, I can implement the HTTP endpoint or signal handler now so you can trigger refresh immediately on your Linux server.
 
