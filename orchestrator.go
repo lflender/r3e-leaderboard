@@ -432,32 +432,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 	}()
 }
 
-// Kept for potential future use, but currently unused
-func (o *Orchestrator) calculateStats() {
-	o.totalEntries = 0
-	driverSet := make(map[string]bool)
-
-	for _, track := range o.tracks {
-		o.totalEntries += len(track.Data)
-
-		// Count unique drivers
-		for _, entry := range track.Data {
-			if driverInterface, exists := entry["driver"]; exists {
-				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
-					if name, ok := driverMap["name"].(string); ok && name != "" {
-						driverSet[name] = true
-					}
-				}
-			}
-		}
-	}
-
-	o.totalDrivers = len(driverSet)
-
-	// Clean up temporary map to release memory
-	driverSet = nil
-}
-
 // exportStatus exports the current status to JSON
 // Note: This is used for intermediate status updates (during fetching, before/after scraping)
 // All indexing-related metrics are calculated and exported by BuildAndExportIndex, not here
