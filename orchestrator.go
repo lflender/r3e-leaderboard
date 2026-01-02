@@ -371,6 +371,9 @@ func (o *Orchestrator) exportStatus() {
 		IndexBuildTimeMs:         existingStatus.IndexBuildTimeMs,         // Preserved from indexing
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,
 		MemorySysMB:              m.Sys / 1024 / 1024,
+		FailedFetchCount:         existingStatus.FailedFetchCount,  // Preserved from loader
+		FailedFetches:            existingStatus.FailedFetches,     // Preserved from loader
+		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {

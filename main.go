@@ -120,7 +120,7 @@ func waitForShutdown() {
 }
 
 func periodicMemoryMonitoring(ctx context.Context) {
-	ticker := time.NewTicker(15 * time.Minute)
+	ticker := time.NewTicker(30 * time.Minute)
 	defer ticker.Stop()
 
 	for {

@@ -1,12 +1,13 @@
 package internal
 
 import (
+	"context"
 	"log"
 )
 
 // PerformIncrementalRefresh refreshes track data progressively
 // If trackID is provided, only refreshes combinations for that specific track
-func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, updateCallback func([]TrackInfo)) {
+func PerformIncrementalRefresh(ctx context.Context, currentTracks []TrackInfo, trackID string, updateCallback func([]TrackInfo)) {
 	trackConfigs := GetTracks()
 	classConfigs := GetCarClasses()
 
@@ -61,7 +62,7 @@ func PerformIncrementalRefresh(currentTracks []TrackInfo, trackID string, update
 			}
 			// Force refresh by bypassing cache - fetch fresh data and overwrite cache file
 			trackInfo, _, err := dataCache.LoadOrFetchTrackData(
-				apiClient, trackConfig.Name, trackConfig.TrackID,
+				ctx, apiClient, trackConfig.Name, trackConfig.TrackID,
 				classConfig.Name, classConfig.ClassID,
 				true,  // force refresh
 				false, // don't load expired cache, fetch fresh

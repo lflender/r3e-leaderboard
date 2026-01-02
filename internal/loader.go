@@ -116,10 +116,15 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	}
 
 	// PHASE 3: Fetch missing and expired data
-	log.Println("🔄 Phase 2: Fetching missing and expired data...")
+	log.Println("🔄 Phase 3: Fetching missing and expired data...")
 
 	currentCombination := 0
 	fetchedCount := 0
+	var failedFetches []struct {
+		track TrackConfig
+		class CarClassConfig
+		err   error
+	}
 
 	// Create a map of existing data for quick lookup
 	existingData := make(map[string]TrackInfo)
@@ -171,9 +176,18 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 			// Fetch fresh data - always fetch (don't check cache) and write to tempCache
 			// We use dataCache to check if cache exists/expired above, but write to tempCache
-			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
+			// Create a context with timeout for this specific fetch
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Always cancel to release resources
 			if err != nil {
-				continue // Skip on fetch error
+				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", track.Name, class.Name, err)
+				failedFetches = append(failedFetches, struct {
+					track TrackConfig
+					class CarClassConfig
+					err   error
+				}{track, class, err})
+				continue // Skip on fetch error but log it - we'll retry in PHASE 4
 			}
 
 			trackInfo := TrackInfo{
@@ -242,6 +256,56 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	// Clean up temporary map to release memory
 	existingData = nil
 
+	// PHASE 4: Retry failed fetches
+	if len(failedFetches) > 0 {
+		log.Printf("🔄 Phase 4: Retrying %d failed fetches...", len(failedFetches))
+		retriedCount := 0
+		for i, failed := range failedFetches {
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Retry cancelled at %d/%d", i+1, len(failedFetches))
+				break
+			default:
+			}
+
+			log.Printf("🔁 Retry %d/%d: %s + %s", i+1, len(failedFetches), failed.track.Name, failed.class.Name)
+
+			// Create a context with timeout for retry
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, failed.track.TrackID, failed.class.ClassID)
+			fetchCancel()
+
+			if err != nil {
+				log.Printf("⚠️ Retry failed %s + %s: %v", failed.track.Name, failed.class.Name, err)
+				continue
+			}
+
+			trackInfo := TrackInfo{
+				Name:    failed.track.Name,
+				TrackID: failed.track.TrackID,
+				ClassID: failed.class.ClassID,
+				Data:    data,
+			}
+
+			// Save to temp cache
+			if saveErr := tempCache.SaveTrackData(trackInfo); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", failed.track.Name, failed.class.Name, saveErr)
+			}
+
+			if len(data) > 0 {
+				log.Printf("✅ Retry succeeded %s + %s: %.2fs → %d entries", failed.track.Name, failed.class.Name, duration.Seconds(), len(data))
+				allTrackData = append(allTrackData, trackInfo)
+				retriedCount++
+			} else {
+				log.Printf("ℹ️ Retry succeeded %s + %s: %.2fs → no data", failed.track.Name, failed.class.Name, duration.Seconds())
+			}
+
+			// Rate limiting
+			time.Sleep(20 * time.Millisecond)
+		}
+		log.Printf("✅ Retry phase complete: %d/%d succeeded", retriedCount, len(failedFetches))
+	}
+
 	// Promote temp cache to main cache atomically
 	log.Println("🔄 Promoting temporary cache to main cache...")
 	promotedCount, err := tempCache.PromoteTempCache()
@@ -254,6 +318,12 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
 		len(allTrackData), cacheLoadCount, fetchedCount)
+
+	// Export failed fetch statistics to status file
+	if len(failedFetches) > 0 {
+		exportFailedFetches(failedFetches)
+	}
+
 	return allTrackData
 }
 
@@ -275,6 +345,11 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 	allTrackData := make([]TrackInfo, 0, totalCombinations)
+	var failedFetches []struct {
+		track TrackConfig
+		class CarClassConfig
+		err   error
+	}
 
 	processed := 0
 	// Fetch ALL combinations unconditionally
@@ -290,10 +365,19 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 			default:
 			}
 
-			data, duration, err := apiClient.FetchLeaderboardData(track.TrackID, class.ClassID)
+			// Create a context with timeout for this specific fetch
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Always cancel to release resources
+
 			if err != nil {
 				// Log and continue on error to avoid losing large portions
-				log.Printf("⚠️ Fetch error %s + %s: %v", track.Name, class.Name, err)
+				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", track.Name, class.Name, err)
+				failedFetches = append(failedFetches, struct {
+					track TrackConfig
+					class CarClassConfig
+					err   error
+				}{track, class, err})
 				// still report progress periodically
 				if progressCallback != nil && (processed%50 == 0 || processed == 1) {
 					progressCallback(allTrackData)
@@ -345,6 +429,56 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 		}
 	}
 
+	// PHASE 4: Retry failed fetches
+	if len(failedFetches) > 0 {
+		log.Printf("🔄 Phase 4: Retrying %d failed fetches...", len(failedFetches))
+		retriedCount := 0
+		for i, failed := range failedFetches {
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Retry cancelled at %d/%d", i+1, len(failedFetches))
+				break
+			default:
+			}
+
+			log.Printf("🔁 Retry %d/%d: %s + %s", i+1, len(failedFetches), failed.track.Name, failed.class.Name)
+
+			// Create a context with timeout for retry
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, failed.track.TrackID, failed.class.ClassID)
+			fetchCancel()
+
+			if err != nil {
+				log.Printf("⚠️ Retry failed %s + %s: %v", failed.track.Name, failed.class.Name, err)
+				continue
+			}
+
+			ti := TrackInfo{
+				Name:    failed.track.Name,
+				TrackID: failed.track.TrackID,
+				ClassID: failed.class.ClassID,
+				Data:    data,
+			}
+
+			// Save to temp cache
+			if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", failed.track.Name, failed.class.Name, saveErr)
+			}
+
+			if len(data) > 0 {
+				log.Printf("✅ Retry succeeded %s + %s: %.2fs → %d entries", failed.track.Name, failed.class.Name, duration.Seconds(), len(data))
+				allTrackData = append(allTrackData, ti)
+				retriedCount++
+			} else {
+				log.Printf("ℹ️ Retry succeeded %s + %s: %.2fs → no data", failed.track.Name, failed.class.Name, duration.Seconds())
+			}
+
+			// Rate limiting
+			time.Sleep(20 * time.Millisecond)
+		}
+		log.Printf("✅ Retry phase complete: %d/%d succeeded", retriedCount, len(failedFetches))
+	}
+
 	// Promote temp cache to main cache atomically
 	log.Println("🔄 Promoting temporary cache to main cache...")
 	promotedCount, err := tempCache.PromoteTempCache()
@@ -355,5 +489,36 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 	}
 
 	log.Printf("✅ Force-fetched %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
+
+	// Export failed fetch statistics to status file
+	if len(failedFetches) > 0 {
+		exportFailedFetches(failedFetches)
+	}
+
 	return allTrackData
+}
+
+// exportFailedFetches saves failed fetch information to the status file
+func exportFailedFetches(failedFetches []struct {
+	track TrackConfig
+	class CarClassConfig
+	err   error
+}) {
+	status := ReadStatusData()
+	status.FailedFetchCount = len(failedFetches)
+	status.FailedFetches = make([]FailedFetch, 0, len(failedFetches))
+
+	for _, failed := range failedFetches {
+		status.FailedFetches = append(status.FailedFetches, FailedFetch{
+			TrackName: failed.track.Name,
+			TrackID:   failed.track.TrackID,
+			ClassID:   failed.class.ClassID,
+			Error:     failed.err.Error(),
+			Timestamp: time.Now(),
+		})
+	}
+
+	if err := ExportStatusData(status); err != nil {
+		log.Printf("⚠️ Failed to export failed fetch data: %v", err)
+	}
 }

@@ -2,6 +2,7 @@ package internal
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -228,7 +229,7 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
 // If loadExpiredCache is true, will load even expired cache without fetching
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
+func (dc *DataCache) LoadOrFetchTrackData(ctx context.Context, apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
 	// Try to load from cache first (unless forced to refresh)
 	if !force {
 		// If loadExpiredCache is true, load any existing cache regardless of age
@@ -251,7 +252,9 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	}
 
 	// Cache miss or expired - fetch fresh data
-	data, duration, err := apiClient.FetchLeaderboardData(trackID, classID)
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+	data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, trackID, classID)
+	fetchCancel() // Always cancel to release resources
 	if err != nil {
 		return TrackInfo{}, false, err
 	}

@@ -17,20 +17,32 @@ const (
 	TopCombinationsFile = "cache/top_combinations.json"
 )
 
+// FailedFetch represents a failed fetch attempt
+type FailedFetch struct {
+	TrackName string    `json:"track_name"`
+	TrackID   string    `json:"track_id"`
+	ClassID   string    `json:"class_id"`
+	Error     string    `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // StatusData represents the status information to be exported to JSON
 type StatusData struct {
-	FetchInProgress          bool      `json:"fetch_in_progress"`
-	LastScrapeStart          time.Time `json:"last_scrape_start"`
-	LastScrapeEnd            time.Time `json:"last_scrape_end"`
-	TrackCount               int       `json:"track_count"`
-	TotalFetchedCombinations int       `json:"total_fetched_combinations"`
-	TotalUniqueTracks        int       `json:"total_unique_tracks"`
-	TotalDrivers             int       `json:"total_drivers"`
-	TotalEntries             int       `json:"total_entries"`
-	LastIndexUpdate          time.Time `json:"last_index_update"`
-	IndexBuildTimeMs         float64   `json:"index_build_time_ms"`
-	MemoryAllocMB            uint64    `json:"memory_alloc_mb"`
-	MemorySysMB              uint64    `json:"memory_sys_mb"`
+	FetchInProgress          bool          `json:"fetch_in_progress"`
+	LastScrapeStart          time.Time     `json:"last_scrape_start"`
+	LastScrapeEnd            time.Time     `json:"last_scrape_end"`
+	TrackCount               int           `json:"track_count"`
+	TotalFetchedCombinations int           `json:"total_fetched_combinations"`
+	TotalUniqueTracks        int           `json:"total_unique_tracks"`
+	TotalDrivers             int           `json:"total_drivers"`
+	TotalEntries             int           `json:"total_entries"`
+	LastIndexUpdate          time.Time     `json:"last_index_update"`
+	IndexBuildTimeMs         float64       `json:"index_build_time_ms"`
+	MemoryAllocMB            uint64        `json:"memory_alloc_mb"`
+	MemorySysMB              uint64        `json:"memory_sys_mb"`
+	FailedFetchCount         int           `json:"failed_fetch_count"`
+	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
+	RetriedFetchCount        int           `json:"retried_fetch_count"`
 }
 
 // TrackCombination represents a track/class combination with entry count
