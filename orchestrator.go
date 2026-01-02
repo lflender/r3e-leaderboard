@@ -46,7 +46,6 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 // StartBackgroundDataLoading initiates the background data loading process
 func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	go func() {
-		log.Println("🔄 Starting background data loading...")
 		// Do not mark scrape start yet; only do so if we actually fetch
 		o.fetchInProgress = false
 		o.exportStatus()
@@ -280,7 +279,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 			intervalMinutes = 30
 		}
 		interval := time.Duration(intervalMinutes) * time.Minute
-		log.Printf("⏱️ Periodic indexing ticker started: every %v", interval)
 
 		// Immediate indexing once if we have no previous index
 		if o.fetchInProgress && len(o.tracks) > 0 && o.lastIndexedCount == 0 {
@@ -335,32 +333,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 			}
 		}
 	}()
-}
-
-// Kept for potential future use, but currently unused
-func (o *Orchestrator) calculateStats() {
-	o.totalEntries = 0
-	driverSet := make(map[string]bool)
-
-	for _, track := range o.tracks {
-		o.totalEntries += len(track.Data)
-
-		// Count unique drivers
-		for _, entry := range track.Data {
-			if driverInterface, exists := entry["driver"]; exists {
-				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
-					if name, ok := driverMap["name"].(string); ok && name != "" {
-						driverSet[name] = true
-					}
-				}
-			}
-		}
-	}
-
-	o.totalDrivers = len(driverSet)
-
-	// Clean up temporary map to release memory
-	driverSet = nil
 }
 
 // exportStatus exports the current status to JSON

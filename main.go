@@ -56,7 +56,7 @@ func main() {
 	orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
 	orchestrator.StartScheduledRefresh(config.Schedule.RefreshHour, config.Schedule.RefreshMinute, config.Schedule.IndexingMinutes)
 	// Ultra-lightweight manual trigger via file sentinel
-	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 30, config.Schedule.IndexingMinutes)
+	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60, config.Schedule.IndexingMinutes)
 
 	// Start periodic memory monitoring and GC
 	go periodicMemoryMonitoring(fetchContext)

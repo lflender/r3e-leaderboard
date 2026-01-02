@@ -73,9 +73,3 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 		}
 	}
 }
-
-// ForceRefresh triggers an immediate refresh (for manual "fetch" command)
-func (s *Scheduler) ForceRefresh(refreshCallback func()) {
-	log.Println("🔄 Manual refresh triggered")
-	refreshCallback()
-}
