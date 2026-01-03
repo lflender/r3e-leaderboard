@@ -91,8 +91,16 @@ func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID
 	allResults := make([]map[string]interface{}, 0, 1500)
 	pageSize := 1500
 	start := 0
+	maxPages := 100 // Safety limit: prevent infinite loops (100 pages = 150k entries)
 
-	for {
+	for page := 0; page < maxPages; page++ {
+		// Check if context is cancelled before each page fetch
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		default:
+		}
+
 		// API call for leaderboard data
 		apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=" + fmt.Sprintf("%d", start) + "&count=" + fmt.Sprintf("%d", pageSize)
 
@@ -113,7 +121,7 @@ func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID
 
 		if apiResp.StatusCode != 200 {
 			apiResp.Body.Close()
-			return nil, 0, err
+			return nil, 0, fmt.Errorf("API returned status code %d", apiResp.StatusCode)
 		}
 
 		// Parse JSON response
