@@ -7,6 +7,7 @@ import (
 	"r3e-leaderboard/internal"
 	"runtime"
 	"runtime/debug"
+	"strings"
 	"time"
 )
 
@@ -202,6 +203,73 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	log.Println("✅ Scheduled full refresh completed")
 }
 
+// performTargetedRefresh executes a targeted refresh for specific track IDs
+func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
+	log.Printf("🎯 Starting targeted refresh for %d track(s)...", len(trackIDs))
+	o.lastScrapeStart = time.Now()
+	o.fetchInProgress = true
+	o.lastIndexedCount = 0
+	o.exportStatus()
+
+	// Bootstrap: load ALL cached data first and build initial index
+	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
+	if len(cachedTracks) > 0 {
+		log.Println("🔄 Building initial search index from existing cache (targeted refresh bootstrap)...")
+		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+			log.Printf("⚠️ Failed to export initial index: %v", err)
+		} else {
+			o.lastIndexedCount = len(cachedTracks)
+		}
+		// Set current tracks to cached while fetching proceeds
+		o.tracks = cachedTracks
+		o.exportStatus()
+	} else {
+		log.Println("ℹ️ No cached combinations found for bootstrap index")
+	}
+
+	// Start periodic indexing during the fetch phase (every N minutes)
+	log.Printf("⏱️ Starting periodic indexing every %d minutes during targeted refresh...", indexingIntervalMinutes)
+	o.StartPeriodicIndexing(indexingIntervalMinutes)
+
+	// Progress callback merges fetched with cached for consistent indexing
+	progressCallback := func(fetched []internal.TrackInfo) {
+		merged := mergeTracks(cachedTracks, fetched)
+		o.tracks = merged
+		if len(merged)%50 == 0 && len(merged) > 0 {
+			log.Printf("📊 %d track/class combinations available (cached + refreshed)", len(merged))
+			o.exportStatus()
+		}
+	}
+
+	// Perform targeted refresh for specific tracks only
+	fetchedTracks := internal.FetchTargetedTrackDataWithCallback(o.fetchContext, trackIDs, progressCallback, origin)
+
+	// Build final index from merged cached + fetched
+	finalMerged := mergeTracks(cachedTracks, fetchedTracks)
+	log.Println("🔄 Building final search index (targeted refresh)...")
+	if err := internal.BuildAndExportIndex(finalMerged); err != nil {
+		log.Printf("⚠️ Failed to export index: %v", err)
+	} else {
+		o.lastIndexedCount = len(finalMerged)
+	}
+	log.Println("✅ Final index complete (targeted refresh)")
+
+	// Final update
+	o.tracks = finalMerged
+	o.lastScrapeEnd = time.Now()
+	o.fetchInProgress = false
+	o.exportStatus()
+
+	// Compact in-memory track data post-refresh to minimize idle memory usage
+	o.CompactTrackData()
+	runtime.GC()
+	// Proactively return unused memory to the OS after heavy work
+	debug.FreeOSMemory()
+	log.Println("🧹 Compacted in-memory track data after targeted refresh")
+
+	log.Println("✅ Targeted refresh completed")
+}
+
 // mergeTracks overlays fetched combinations over cached combinations by (trackID,classID)
 // and returns a slice containing only combinations with data.
 func mergeTracks(cached, fetched []internal.TrackInfo) []internal.TrackInfo {
@@ -246,17 +314,43 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 				if _, err := os.Stat(triggerPath); err == nil {
 					// Found trigger file
 					log.Printf("🪙 Refresh trigger file detected: %s", triggerPath)
+
+					// Read file contents before deleting to check for track IDs
+					fileContent, readErr := os.ReadFile(triggerPath)
+					var trackIDs []string
+					if readErr == nil {
+						// Parse track IDs from file (space or newline separated)
+						content := strings.TrimSpace(string(fileContent))
+						if content != "" {
+							// Split by whitespace (spaces, tabs, newlines)
+							fields := strings.Fields(content)
+							for _, field := range fields {
+								if field != "" {
+									trackIDs = append(trackIDs, field)
+								}
+							}
+						}
+					}
+
 					// Attempt to remove to avoid repeated triggers
 					if rmErr := os.Remove(triggerPath); rmErr != nil {
 						log.Printf("⚠️ Could not remove trigger file: %v", rmErr)
 					}
+
 					// Skip if already fetching
 					if o.fetchInProgress {
 						log.Println("⏭️ Skipping manual refresh - fetch already in progress")
 						continue
 					}
-					// Launch full refresh
-					o.performFullRefresh(indexingIntervalMinutes, "manual")
+
+					// Launch targeted or full refresh based on file contents
+					if len(trackIDs) > 0 {
+						log.Printf("🎯 Targeted refresh requested for %d track(s)", len(trackIDs))
+						o.performTargetedRefresh(trackIDs, indexingIntervalMinutes, "manual")
+					} else {
+						log.Println("🔄 Full refresh requested (no track IDs specified)")
+						o.performFullRefresh(indexingIntervalMinutes, "manual")
+					}
 				}
 			case <-o.fetchContext.Done():
 				log.Println("⏹️ Refresh file trigger watcher stopping")

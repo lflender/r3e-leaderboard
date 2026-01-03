@@ -25,8 +25,8 @@ func GetDefaultConfig() Config {
 			Port: 8080,
 		},
 		Schedule: ScheduleConfig{
-			RefreshHour:     0,  // 12 AM
-			RefreshMinute:   0,  // At the top of the hour
+			RefreshHour:     5,  // 5 AM
+			RefreshMinute:   30, // At the top of the hour
 			IndexingMinutes: 30, // Every 30 minutes during fetching
 		},
 	}

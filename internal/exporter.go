@@ -186,7 +186,13 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	indexStart := time.Now()
 
 	// Build index using search engine logic
-	index := make(DriverIndex)
+	// Pre-allocate map with estimated capacity to reduce reallocations
+	// Estimate based on track count (rough heuristic: ~100-500 drivers per 1000 tracks)
+	estimatedDrivers := len(tracks) / 5
+	if estimatedDrivers < 1000 {
+		estimatedDrivers = 1000
+	}
+	index := make(DriverIndex, estimatedDrivers)
 	totalEntries := 0
 
 	// Reduced verbosity: skip pre-build log
@@ -313,6 +319,9 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	// Export the driver index with build duration
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
+		// Even on error, clean up index to prevent memory leak
+		index = nil
+		runtime.GC()
 		return err
 	}
 
@@ -351,8 +360,19 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	// The exported JSON files will persist the data
 	index = nil
 
+	// Read memory stats before GC for comparison
+	var mBefore runtime.MemStats
+	runtime.ReadMemStats(&mBefore)
+
 	// Suggest garbage collection after large index operations
 	runtime.GC()
+
+	// Read memory stats after GC
+	var mAfter runtime.MemStats
+	runtime.ReadMemStats(&mAfter)
+	log.Printf("💾 Memory after index: %.1f MB allocated, %.1f MB freed by GC",
+		float64(mAfter.Alloc)/(1024*1024),
+		float64(mBefore.Alloc-mAfter.Alloc)/(1024*1024))
 
 	return ExportTopCombinations(tracks)
 }

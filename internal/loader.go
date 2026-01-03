@@ -522,3 +522,193 @@ func exportFailedFetches(failedFetches []struct {
 		log.Printf("⚠️ Failed to export failed fetch data: %v", err)
 	}
 }
+
+// FetchTargetedTrackDataWithCallback fetches data for specific track IDs only
+// trackIDs is a slice of track IDs to refresh (all classes for each track)
+func FetchTargetedTrackDataWithCallback(ctx context.Context, trackIDs []string, progressCallback func([]TrackInfo), origin string) []TrackInfo {
+	allTrackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	// Filter to only the requested tracks
+	trackConfigs := make([]TrackConfig, 0)
+	for _, trackConfig := range allTrackConfigs {
+		for _, targetID := range trackIDs {
+			if trackConfig.TrackID == targetID {
+				trackConfigs = append(trackConfigs, trackConfig)
+				break
+			}
+		}
+	}
+
+	if len(trackConfigs) == 0 {
+		log.Printf("⚠️ No valid tracks found for IDs: %v", trackIDs)
+		return []TrackInfo{}
+	}
+
+	log.Printf("📊 Targeted refresh: force-fetch %d tracks × %d classes = %d combinations...",
+		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
+
+	// Log which tracks we're refreshing
+	for _, track := range trackConfigs {
+		log.Printf("  🎯 %s (ID: %s)", track.Name, track.TrackID)
+	}
+
+	apiClient := NewAPIClient()
+	defer apiClient.Close()
+
+	tempCache := NewTempDataCache()
+
+	totalCombinations := len(trackConfigs) * len(classConfigs)
+	allTrackData := make([]TrackInfo, 0, totalCombinations)
+	var failedFetches []struct {
+		track TrackConfig
+		class CarClassConfig
+		err   error
+	}
+
+	processed := 0
+	// Fetch ALL combinations unconditionally for the targeted tracks
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			processed++
+
+			// Check cancellation
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+				return allTrackData
+			default:
+			}
+
+			// Create a context with timeout for this specific fetch
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, track.TrackID, class.ClassID)
+			fetchCancel() // Always cancel to release resources
+
+			if err != nil {
+				// Log and continue on error to avoid losing large portions
+				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", track.Name, class.Name, err)
+				failedFetches = append(failedFetches, struct {
+					track TrackConfig
+					class CarClassConfig
+					err   error
+				}{track, class, err})
+				// still report progress periodically
+				if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+					progressCallback(allTrackData)
+				}
+				continue
+			}
+
+			ti := TrackInfo{
+				Name:    track.Name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+				Data:    data,
+			}
+
+			// Always save to temp cache to update timestamp, even for empty data
+			if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
+			}
+
+			// Append only if we have entries; keep empty combos out to avoid bloating
+			if len(ti.Data) > 0 {
+				allTrackData = append(allTrackData, ti)
+			}
+
+			if len(data) > 0 {
+				log.Printf("🌐 %s + %s: %.2fs → %d entries [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), len(data), track.TrackID, class.ClassID)
+			} else {
+				log.Printf("🌐 %s + %s: %.2fs → no data [track=%s, class=%s]",
+					track.Name, class.Name, duration.Seconds(), track.TrackID, class.ClassID)
+			}
+
+			// Periodic progress updates
+			if progressCallback != nil && (processed%50 == 0 || processed == 1) {
+				progressCallback(allTrackData)
+			}
+
+			// Rate limit API calls
+			sleepDuration := 20 * time.Millisecond
+			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
+				select {
+				case <-ctx.Done():
+					log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+					return allTrackData
+				default:
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}
+
+	// PHASE 4: Retry failed fetches
+	if len(failedFetches) > 0 {
+		log.Printf("🔄 Phase 4: Retrying %d failed fetches...", len(failedFetches))
+		retriedCount := 0
+		for i, failed := range failedFetches {
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Retry cancelled at %d/%d", i+1, len(failedFetches))
+				break
+			default:
+			}
+
+			log.Printf("🔁 Retry %d/%d: %s + %s", i+1, len(failedFetches), failed.track.Name, failed.class.Name)
+
+			// Create a context with timeout for retry
+			fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+			data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, failed.track.TrackID, failed.class.ClassID)
+			fetchCancel()
+
+			if err != nil {
+				log.Printf("⚠️ Retry failed %s + %s: %v", failed.track.Name, failed.class.Name, err)
+				continue
+			}
+
+			ti := TrackInfo{
+				Name:    failed.track.Name,
+				TrackID: failed.track.TrackID,
+				ClassID: failed.class.ClassID,
+				Data:    data,
+			}
+
+			// Save to temp cache
+			if saveErr := tempCache.SaveTrackData(ti); saveErr != nil {
+				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", failed.track.Name, failed.class.Name, saveErr)
+			}
+
+			if len(data) > 0 {
+				log.Printf("✅ Retry succeeded %s + %s: %.2fs → %d entries", failed.track.Name, failed.class.Name, duration.Seconds(), len(data))
+				allTrackData = append(allTrackData, ti)
+				retriedCount++
+			} else {
+				log.Printf("ℹ️ Retry succeeded %s + %s: %.2fs → no data", failed.track.Name, failed.class.Name, duration.Seconds())
+			}
+
+			// Rate limiting
+			time.Sleep(20 * time.Millisecond)
+		}
+		log.Printf("✅ Retry phase complete: %d/%d succeeded", retriedCount, len(failedFetches))
+	}
+
+	// Promote temp cache to main cache atomically
+	log.Println("🔄 Promoting temporary cache to main cache...")
+	promotedCount, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
+	} else if promotedCount > 0 {
+		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
+	}
+
+	log.Printf("✅ Targeted refresh complete: fetched %d combinations (kept %d with data)", totalCombinations, len(allTrackData))
+
+	// Export failed fetch statistics to status file
+	if len(failedFetches) > 0 {
+		exportFailedFetches(failedFetches)
+	}
+
+	return allTrackData
+}
