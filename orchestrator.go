@@ -99,9 +99,9 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		// Final update with all data
 		o.tracks = tracks
 
-		// Only mark scrape end if we had an actual fetch
+		// Don't update scrape timestamps during normal startup loading
+		// Only explicit refresh operations (full/targeted) should update these
 		if o.fetchInProgress {
-			o.lastScrapeEnd = time.Now()
 			o.fetchInProgress = false
 		}
 		o.exportStatus()
@@ -141,17 +141,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	o.exportStatus()
 
 	// Build initial index from cache if available
-	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
-	if len(cachedTracks) > 0 {
-		log.Println("🔄 Building initial search index from existing cache...")
-		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
-			log.Printf("⚠️ Failed to export initial index: %v", err)
-		} else {
-			o.lastIndexedCount = len(cachedTracks)
-		}
-		o.tracks = cachedTracks
-		o.exportStatus()
-	}
+	o.buildBootstrapIndex()
 
 	// Start periodic indexing during refresh
 	log.Printf("⏱️ Starting periodic indexing every %d minutes...", indexingIntervalMinutes)
@@ -192,25 +182,13 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 // performTargetedRefresh executes a targeted refresh for specific track IDs
 func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
 	log.Printf("🎯 Starting targeted refresh for %d track(s)...", len(trackIDs))
-	o.lastScrapeStart = time.Now()
+	// Don't update lastScrapeStart - that's only for full refreshes
 	o.fetchInProgress = true
 	o.lastIndexedCount = 0
 	o.exportStatus()
 
 	// Build initial index from cache
-	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
-	if len(cachedTracks) > 0 {
-		log.Println("🔄 Building initial search index from existing cache (targeted refresh bootstrap)...")
-		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
-			log.Printf("⚠️ Failed to export initial index: %v", err)
-		} else {
-			o.lastIndexedCount = len(cachedTracks)
-		}
-		o.tracks = cachedTracks
-		o.exportStatus()
-	} else {
-		log.Println("ℹ️ No cached combinations found for bootstrap index")
-	}
+	o.buildBootstrapIndex()
 
 	// Start periodic indexing
 	log.Printf("⏱️ Starting periodic indexing every %d minutes during targeted refresh...", indexingIntervalMinutes)
@@ -381,5 +359,23 @@ func (o *Orchestrator) CompactTrackData() {
 	for i := range o.tracks {
 		// Retain Name/TrackID/ClassID, drop Data to free memory
 		o.tracks[i].Data = nil
+	}
+}
+
+// buildBootstrapIndex loads cached data and builds an initial search index
+// This is used by refresh operations to provide immediate search results
+func (o *Orchestrator) buildBootstrapIndex() {
+	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
+	if len(cachedTracks) > 0 {
+		log.Println("🔄 Building initial search index from existing cache...")
+		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+			log.Printf("⚠️ Failed to export initial index: %v", err)
+		} else {
+			o.lastIndexedCount = len(cachedTracks)
+		}
+		o.tracks = cachedTracks
+		o.exportStatus()
+	} else {
+		log.Println("ℹ️ No cached combinations found for bootstrap index")
 	}
 }
