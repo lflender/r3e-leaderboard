@@ -183,6 +183,17 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		return nil
 	}
 
+	// DEBUG: Check if tracks have data
+	tracksWithData := 0
+	totalDataEntries := 0
+	for _, t := range tracks {
+		if len(t.Data) > 0 {
+			tracksWithData++
+			totalDataEntries += len(t.Data)
+		}
+	}
+	log.Printf("🔍 DEBUG BuildAndExportIndex: %d tracks received, %d have data, %d total entries", len(tracks), tracksWithData, totalDataEntries)
+
 	indexStart := time.Now()
 
 	// Build index using search engine logic
@@ -200,14 +211,49 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	// Track unique track names
 	uniqueTracksMap := make(map[string]bool)
 
-	for _, track := range tracks {
+	// First pass: count entries per driver to pre-allocate slices
+	driverCounts := make(map[string]int, estimatedDrivers)
+	// ALSO capture entry counts for each track before we clear Data
+	trackEntryCounts := make(map[string]int, len(tracks))
+
+	for i := range tracks {
+		track := &tracks[i]
 		totalEntries += len(track.Data)
 
-		// Record unique track names
+		// Store entry count for later use by ExportTopCombinations
+		key := track.TrackID + "_" + track.ClassID
+		trackEntryCounts[key] = len(track.Data)
+
 		if track.Name != "" {
 			uniqueTracksMap[track.Name] = true
 		}
 
+		for _, entry := range track.Data {
+			if driverInterface, exists := entry["driver"]; exists {
+				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
+					if nameInterface, exists := driverMap["name"]; exists {
+						if name, ok := nameInterface.(string); ok && name != "" {
+							lowerName := strings.ToLower(name)
+							driverCounts[lowerName]++
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Pre-allocate slices for each driver with exact capacity
+	for driver, count := range driverCounts {
+		index[driver] = make([]DriverResult, 0, count)
+	}
+	// Clear the counting map to free memory
+	for k := range driverCounts {
+		delete(driverCounts, k)
+	}
+	driverCounts = nil
+
+	// Second pass: populate the index
+	for _, track := range tracks {
 		for _, entry := range track.Data {
 			// Extract driver name
 			driverInterface, driverExists := entry["driver"]
@@ -374,17 +420,26 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		float64(mAfter.Alloc)/(1024*1024),
 		float64(mBefore.Alloc-mAfter.Alloc)/(1024*1024))
 
-	return ExportTopCombinations(tracks)
+	return ExportTopCombinations(tracks, trackEntryCounts)
 }
 
 // ExportTopCombinations exports the top 1000 track/class combinations by entry count
-func ExportTopCombinations(tracks []TrackInfo) error {
+// trackEntryCounts: map of trackID_classID -> entry count (used when track.Data is nil)
+func ExportTopCombinations(tracks []TrackInfo, trackEntryCounts map[string]int) error {
 	// Reduced verbosity: skip pre-build log
 
 	// Build combinations list
 	combinations := make([]TrackCombination, 0, len(tracks))
 	for _, track := range tracks {
-		if len(track.Data) == 0 {
+		// Get entry count from either Data (if still present) or pre-captured map
+		entryCount := len(track.Data)
+		if entryCount == 0 && trackEntryCounts != nil {
+			key := track.TrackID + "_" + track.ClassID
+			entryCount = trackEntryCounts[key]
+		}
+
+		// Skip tracks with no entries
+		if entryCount == 0 {
 			continue
 		}
 
@@ -396,7 +451,7 @@ func ExportTopCombinations(tracks []TrackInfo) error {
 			TrackID:    track.TrackID,
 			ClassID:    track.ClassID,
 			ClassName:  className,
-			EntryCount: len(track.Data),
+			EntryCount: entryCount,
 		}
 		combinations = append(combinations, combination)
 	}

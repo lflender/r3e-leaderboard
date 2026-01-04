@@ -239,7 +239,6 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 
 	// Finalize
 	o.tracks = finalTracks
-	o.lastScrapeEnd = time.Now()
 	o.fetchInProgress = false
 	o.exportStatus()
 

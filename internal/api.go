@@ -139,6 +139,11 @@ func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID
 
 		allResults = append(allResults, results...)
 
+		// Clear results slice to help GC
+		for i := range results {
+			results[i] = nil
+		}
+
 		// If we got fewer results than the page size, we're done
 		if len(results) < pageSize {
 			break

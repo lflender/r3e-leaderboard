@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"time"
 )
 
@@ -243,6 +244,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	}
 
 	// Clean up temporary map to release memory
+	for k := range existingData {
+		delete(existingData, k)
+	}
 	existingData = nil
 
 	// PHASE 4: Retry failed fetches
@@ -266,6 +270,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	if len(failedFetches) > 0 {
 		exportFailedFetches(failedFetches)
 	}
+
+	// Force GC after large loading operation to clean up temporary structures
+	runtime.GC()
 
 	return allTrackData
 }
@@ -377,6 +384,9 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 
 	// Export failed fetch statistics to status file
 	if len(failedFetches) > 0 {
+		// Force GC after large force-fetch operation
+		runtime.GC()
+
 		exportFailedFetches(failedFetches)
 	}
 

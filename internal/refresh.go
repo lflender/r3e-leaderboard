@@ -125,8 +125,15 @@ func PerformIncrementalRefresh(ctx context.Context, currentTracks []TrackInfo, t
 	updateCallback(mergedSlice)
 
 	// Clean up temporary maps to release memory
+	for k := range existingTracks {
+		delete(existingTracks, k)
+	}
 	existingTracks = nil
 	updatedTracks = nil
+	// Clear merged map
+	for k := range merged {
+		delete(merged, k)
+	}
 	merged = nil
 
 	log.Printf("✅ Incremental refresh complete: %d tracks updated", updatedCount)
@@ -153,6 +160,7 @@ func PerformFullRefresh(ctx context.Context, progressCallback func([]TrackInfo),
 
 	// Build final merged result
 	finalMerged := MergeTracks(cachedTracks, fetchedTracks)
+
 	log.Printf("✅ Full refresh complete: %d total combinations", len(finalMerged))
 
 	return finalMerged
@@ -161,8 +169,6 @@ func PerformFullRefresh(ctx context.Context, progressCallback func([]TrackInfo),
 // PerformTargetedRefresh executes a targeted refresh for specific track IDs
 // Returns the merged result of cached + fetched tracks
 func PerformTargetedRefresh(ctx context.Context, trackIDs []string, progressCallback func([]TrackInfo), origin string) []TrackInfo {
-	log.Printf("🎯 Starting targeted refresh for %d track(s)...", len(trackIDs))
-
 	// Bootstrap: load ALL cached data first
 	cachedTracks := LoadAllCachedData(ctx)
 
@@ -179,6 +185,7 @@ func PerformTargetedRefresh(ctx context.Context, trackIDs []string, progressCall
 
 	// Build final merged result
 	finalMerged := MergeTracks(cachedTracks, fetchedTracks)
+
 	log.Printf("✅ Targeted refresh complete: %d total combinations", len(finalMerged))
 
 	return finalMerged
@@ -205,6 +212,10 @@ func MergeTracks(cached, fetched []TrackInfo) []TrackInfo {
 	out := make([]TrackInfo, 0, len(m))
 	for _, v := range m {
 		out = append(out, v)
+	}
+	// Clear map immediately to help GC
+	for k := range m {
+		delete(m, k)
 	}
 	return out
 }
