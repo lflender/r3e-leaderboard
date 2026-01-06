@@ -81,8 +81,8 @@ func ReadStatusData() StatusData {
 func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
 	indexStart := time.Now()
 
-	// Convert the index to JSON
-	jsonData, err := json.MarshalIndent(index, "", "  ")
+	// Convert the index to compact JSON (smaller, parses faster)
+	jsonData, err := json.Marshal(index)
 	if err != nil {
 		log.Printf("❌ Failed to marshal driver index: %v", err)
 		return err
