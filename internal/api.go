@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -47,11 +48,11 @@ func NewAPIClient() *APIClient {
 
 	return &APIClient{
 		client: &http.Client{
-			Timeout:   20 * time.Second,
+			Timeout:   120 * time.Second,
 			Jar:       jar,
 			Transport: transport,
 		},
-		timeout:   20 * time.Second,
+		timeout:   120 * time.Second,
 		transport: transport,
 	}
 }
@@ -64,7 +65,7 @@ func (api *APIClient) Close() {
 }
 
 // FetchLeaderboardData retrieves leaderboard data from RaceRoom API with pagination
-func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[string]interface{}, time.Duration, error) {
+func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID string) ([]map[string]interface{}, time.Duration, error) {
 	startTime := time.Now()
 
 	// Add "class-" prefix to the class ID
@@ -76,6 +77,7 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 	if err != nil {
 		return nil, 0, err
 	}
+	req = req.WithContext(ctx)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 
 	resp, err := api.client.Do(req)
@@ -89,8 +91,16 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 	allResults := make([]map[string]interface{}, 0, 1500)
 	pageSize := 1500
 	start := 0
+	maxPages := 100 // Safety limit: prevent infinite loops (100 pages = 150k entries)
 
-	for {
+	for page := 0; page < maxPages; page++ {
+		// Check if context is cancelled before each page fetch
+		select {
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		default:
+		}
+
 		// API call for leaderboard data
 		apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=" + fmt.Sprintf("%d", start) + "&count=" + fmt.Sprintf("%d", pageSize)
 
@@ -98,6 +108,7 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 		if err != nil {
 			return nil, 0, err
 		}
+		apiReq = apiReq.WithContext(ctx)
 		apiReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
 		apiReq.Header.Set("Accept", "application/json")
 		apiReq.Header.Set("X-Requested-With", "XMLHttpRequest")
@@ -110,7 +121,7 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 
 		if apiResp.StatusCode != 200 {
 			apiResp.Body.Close()
-			return nil, 0, err
+			return nil, 0, fmt.Errorf("API returned status code %d", apiResp.StatusCode)
 		}
 
 		// Parse JSON response
@@ -127,6 +138,11 @@ func (api *APIClient) FetchLeaderboardData(trackID, classID string) ([]map[strin
 		}
 
 		allResults = append(allResults, results...)
+
+		// Clear results slice to help GC
+		for i := range results {
+			results[i] = nil
+		}
 
 		// If we got fewer results than the page size, we're done
 		if len(results) < pageSize {

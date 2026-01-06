@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
-	"strings"
 	"time"
 )
 
@@ -17,17 +15,32 @@ const (
 	TopCombinationsFile = "cache/top_combinations.json"
 )
 
+// FailedFetch represents a failed fetch attempt
+type FailedFetch struct {
+	TrackName string    `json:"track_name"`
+	TrackID   string    `json:"track_id"`
+	ClassID   string    `json:"class_id"`
+	Error     string    `json:"error"`
+	Timestamp time.Time `json:"timestamp"`
+}
+
 // StatusData represents the status information to be exported to JSON
 type StatusData struct {
-	FetchInProgress   bool      `json:"fetch_in_progress"`
-	LastScrapeStart   time.Time `json:"last_scrape_start"`
-	LastScrapeEnd     time.Time `json:"last_scrape_end"`
-	TrackCount        int       `json:"track_count"`
-	TotalUniqueTracks int       `json:"total_unique_tracks"`
-	TotalDrivers      int       `json:"total_drivers"`
-	TotalEntries      int       `json:"total_entries"`
-	LastIndexUpdate   time.Time `json:"last_index_update"`
-	IndexBuildTimeMs  float64   `json:"index_build_time_ms"`
+	FetchInProgress          bool          `json:"fetch_in_progress"`
+	LastScrapeStart          time.Time     `json:"last_scrape_start"`
+	LastScrapeEnd            time.Time     `json:"last_scrape_end"`
+	TrackCount               int           `json:"track_count"`
+	TotalFetchedCombinations int           `json:"total_fetched_combinations"`
+	TotalUniqueTracks        int           `json:"total_unique_tracks"`
+	TotalDrivers             int           `json:"total_drivers"`
+	TotalEntries             int           `json:"total_entries"`
+	LastIndexUpdate          time.Time     `json:"last_index_update"`
+	IndexBuildTimeMs         float64       `json:"index_build_time_ms"`
+	MemoryAllocMB            uint64        `json:"memory_alloc_mb"`
+	MemorySysMB              uint64        `json:"memory_sys_mb"`
+	FailedFetchCount         int           `json:"failed_fetch_count"`
+	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
+	RetriedFetchCount        int           `json:"retried_fetch_count"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -161,183 +174,56 @@ func ExportStatusData(status StatusData) error {
 	return nil
 }
 
-// BuildAndExportIndex builds the driver index and exports it to JSON
-func BuildAndExportIndex(tracks []TrackInfo) error {
-	if len(tracks) == 0 {
-		log.Println("⚠️ No tracks to index - skipping export")
-		return nil
-	}
+// UpdateStatusWithIndexMetrics updates the status file with index statistics
+// This is exported so indexer.go can update status after building the index
+func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration) error {
+	// Read current memory stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
 
-	indexStart := time.Now()
-
-	// Build index using search engine logic
-	index := make(DriverIndex)
-	totalEntries := 0
-
-	// Reduced verbosity: skip pre-build log
-
-	// Track unique track names
-	uniqueTracksMap := make(map[string]bool)
-
-	for _, track := range tracks {
-		totalEntries += len(track.Data)
-
-		// Record unique track names
-		if track.Name != "" {
-			uniqueTracksMap[track.Name] = true
-		}
-
-		for _, entry := range track.Data {
-			// Extract driver name
-			driverInterface, driverExists := entry["driver"]
-			if !driverExists {
-				continue
-			}
-
-			driverMap, driverOk := driverInterface.(map[string]interface{})
-			if !driverOk {
-				continue
-			}
-
-			nameInterface, nameExists := driverMap["name"]
-			if !nameExists {
-				continue
-			}
-
-			name, nameOk := nameInterface.(string)
-			if !nameOk || name == "" {
-				continue
-			}
-
-			// Get position
-			position := 1
-			if posInterface, posExists := entry["index"]; posExists {
-				if posFloat, ok := posInterface.(float64); ok {
-					position = int(posFloat) + 1
-				}
-			}
-
-			result := DriverResult{
-				Name:         name,
-				Position:     position,
-				TrackID:      track.TrackID,
-				ClassID:      track.ClassID,
-				Track:        track.Name,
-				Found:        true,
-				TotalEntries: len(track.Data),
-			}
-
-			// Extract lap time
-			if lapTime, ok := entry["laptime"].(string); ok {
-				result.LapTime = lapTime
-			}
-
-			// Extract time difference
-			if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
-				timeStr := strings.TrimPrefix(relativeLaptime, "+")
-				timeStr = strings.TrimSuffix(timeStr, "s")
-				if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
-					result.TimeDiff = timeDiff
-				}
-			}
-
-			// Extract country
-			if countryInterface, countryExists := entry["country"]; countryExists {
-				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
-					if countryName, nameOk := countryMap["name"].(string); nameOk {
-						result.Country = countryName
-					}
-				}
-			}
-
-			// Extract car information
-			if carClassInterface, carClassExists := entry["car_class"]; carClassExists {
-				if carClassMap, carClassOk := carClassInterface.(map[string]interface{}); carClassOk {
-					if carInterface, carExists := carClassMap["car"]; carExists {
-						if carMap, carOk := carInterface.(map[string]interface{}); carOk {
-							if carName, carNameOk := carMap["name"].(string); carNameOk {
-								result.Car = carName
-							}
-							if className, classNameOk := carMap["class-name"].(string); classNameOk {
-								result.CarClass = className
-							}
-						}
-					}
-				}
-			}
-
-			// Extract team
-			if teamStr, teamOk := entry["team"].(string); teamOk && teamStr != "" {
-				result.Team = teamStr
-			}
-
-			// Extract rank
-			if rankStr, rankOk := entry["rank"].(string); rankOk && rankStr != "" {
-				result.Rank = rankStr
-			}
-
-			// Extract difficulty
-			if drivingModel, dmOk := entry["driving_model"].(string); dmOk && drivingModel != "" {
-				result.Difficulty = drivingModel
-			}
-
-			// Add to index (case-insensitive)
-			lowerName := strings.ToLower(name)
-			index[lowerName] = append(index[lowerName], result)
-		}
-	}
-
-	buildDuration := time.Since(indexStart)
-	uniqueTrackCount := len(uniqueTracksMap)
-
-	// Clean up temporary map to release memory
-	uniqueTracksMap = nil
-
-	log.Printf("🔍 Index built: %.3f seconds (%d drivers, %d entries, %d tracks)",
-		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
-
-	// Export the driver index with build duration
-	if err := ExportDriverIndex(index, buildDuration); err != nil {
-		return err
-	}
-
-	// Update status with index statistics, preserving fetch/scrape fields
+	// Read existing status to preserve fetch/scrape fields
 	existingStatus := ReadStatusData()
+
+	// Count total cached combinations (including empty)
+	dataCache := NewDataCache()
+	totalCached := dataCache.CountCachedCombinations()
+
 	status := StatusData{
 		// Preserve orchestrator-managed fields
 		FetchInProgress: existingStatus.FetchInProgress,
 		LastScrapeStart: existingStatus.LastScrapeStart,
 		LastScrapeEnd:   existingStatus.LastScrapeEnd,
 		// Update index-related metrics
-		TrackCount:        len(tracks),
-		TotalUniqueTracks: uniqueTrackCount,
-		TotalDrivers:      len(index),
-		TotalEntries:      totalEntries,
-		LastIndexUpdate:   time.Now(),
-		IndexBuildTimeMs:  buildDuration.Seconds() * 1000,
+		TrackCount:               len(tracks),
+		TotalFetchedCombinations: totalCached,
+		TotalUniqueTracks:        uniqueTrackCount,
+		TotalDrivers:             len(index),
+		TotalEntries:             totalEntries,
+		LastIndexUpdate:          time.Now(),
+		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
+		MemoryAllocMB:            m.Alloc / 1024 / 1024,
+		MemorySysMB:              m.Sys / 1024 / 1024,
 	}
-	if err := ExportStatusData(status); err != nil {
-		log.Printf("⚠️ Failed to update status with index stats: %v", err)
-	}
-
-	// Clean up index variable after export to help GC
-	// The exported JSON files will persist the data
-	index = nil
-
-	// Suggest garbage collection after large index operations
-	runtime.GC()
-
-	return ExportTopCombinations(tracks)
+	return ExportStatusData(status)
 }
 
 // ExportTopCombinations exports the top 1000 track/class combinations by entry count
-func ExportTopCombinations(tracks []TrackInfo) error {
+// trackEntryCounts: map of trackID_classID -> entry count (used when track.Data is nil)
+func ExportTopCombinations(tracks []TrackInfo, trackEntryCounts map[string]int) error {
 	// Reduced verbosity: skip pre-build log
 
 	// Build combinations list
 	combinations := make([]TrackCombination, 0, len(tracks))
 	for _, track := range tracks {
-		if len(track.Data) == 0 {
+		// Get entry count from either Data (if still present) or pre-captured map
+		entryCount := len(track.Data)
+		if entryCount == 0 && trackEntryCounts != nil {
+			key := track.TrackID + "_" + track.ClassID
+			entryCount = trackEntryCounts[key]
+		}
+
+		// Skip tracks with no entries
+		if entryCount == 0 {
 			continue
 		}
 
@@ -349,7 +235,7 @@ func ExportTopCombinations(tracks []TrackInfo) error {
 			TrackID:    track.TrackID,
 			ClassID:    track.ClassID,
 			ClassName:  className,
-			EntryCount: len(track.Data),
+			EntryCount: entryCount,
 		}
 		combinations = append(combinations, combination)
 	}

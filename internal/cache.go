@@ -2,6 +2,7 @@ package internal
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -64,6 +65,16 @@ func (dc *DataCache) EnsureCacheDir() error {
 	return os.MkdirAll(dc.cacheDir, 0755)
 }
 
+// CountCachedCombinations returns the total number of cached combinations
+func (dc *DataCache) CountCachedCombinations() int {
+	pattern := filepath.Join(dc.cacheDir, "track_*", "class_*.json.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0
+	}
+	return len(files)
+}
+
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
 	baseDir := dc.cacheDir
@@ -105,18 +116,24 @@ func (dc *DataCache) IsCacheExpired(trackID, classID string) bool {
 	return time.Since(info.ModTime()) >= dc.maxAge
 }
 
+// GetCacheAge returns the age of the cache file, or -1 if it doesn't exist
+func (dc *DataCache) GetCacheAge(trackID, classID string) time.Duration {
+	filename := dc.GetCacheFileName(trackID, classID)
+	info, err := os.Stat(filename)
+	if err != nil {
+		return -1 // doesn't exist
+	}
+	return time.Since(info.ModTime())
+}
+
 // SaveTrackData saves track data to cache
 func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	if err := dc.EnsureCacheDir(); err != nil {
 		return err
 	}
 
-	// Safety: do not write empty data to cache. Preserve existing cache
-	// when API returns no data or is temporarily unavailable.
-	if len(trackInfo.Data) == 0 {
-		log.Printf("ℹ️ Skipping cache write for %s + class %s: no data", trackInfo.TrackID, trackInfo.ClassID)
-		return nil
-	}
+	// Always write to cache to update the timestamp, even for empty data
+	// This prevents repeatedly fetching combinations that have no leaderboard data
 
 	// Ensure track-specific directory exists (use correct base dir)
 	baseDir := dc.cacheDir
@@ -137,19 +154,52 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	}
 
 	filename := dc.GetCacheFileName(trackInfo.TrackID, trackInfo.ClassID)
-	file, err := os.Create(filename)
+
+	// Write to temporary file first to avoid corrupting existing cache on errors
+	tempFile := filename + ".tmp"
+	file, err := os.Create(tempFile)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
 
 	// Create gzip writer
 	gzWriter := gzip.NewWriter(file)
-	defer gzWriter.Close()
-
 	encoder := json.NewEncoder(gzWriter)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(cached)
+
+	// Encode data
+	if err := encoder.Encode(cached); err != nil {
+		file.Close()
+		os.Remove(tempFile) // Clean up failed temp file
+		return err
+	}
+
+	// Close gzip writer to flush
+	if err := gzWriter.Close(); err != nil {
+		file.Close()
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Close file
+	if err := file.Close(); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Atomically rename temp file to final file
+	// On error, the old cache file remains untouched
+	if err := os.Rename(tempFile, filename); err != nil {
+		// On Windows, rename fails if destination exists
+		// Remove destination first and retry
+		os.Remove(filename)
+		if retryErr := os.Rename(tempFile, filename); retryErr != nil {
+			os.Remove(tempFile)
+			return retryErr
+		}
+	}
+
+	return nil
 }
 
 // LoadTrackData loads track data from cache
@@ -179,7 +229,7 @@ func (dc *DataCache) LoadTrackData(trackID, classID string) (TrackInfo, error) {
 
 // LoadOrFetchTrackData loads from cache or fetches fresh data
 // If loadExpiredCache is true, will load even expired cache without fetching
-func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
+func (dc *DataCache) LoadOrFetchTrackData(ctx context.Context, apiClient *APIClient, trackName, trackID, className, classID string, force bool, loadExpiredCache bool) (TrackInfo, bool, error) {
 	// Try to load from cache first (unless forced to refresh)
 	if !force {
 		// If loadExpiredCache is true, load any existing cache regardless of age
@@ -202,7 +252,9 @@ func (dc *DataCache) LoadOrFetchTrackData(apiClient *APIClient, trackName, track
 	}
 
 	// Cache miss or expired - fetch fresh data
-	data, duration, err := apiClient.FetchLeaderboardData(trackID, classID)
+	fetchCtx, fetchCancel := context.WithTimeout(ctx, 120*time.Second)
+	data, duration, err := apiClient.FetchLeaderboardData(fetchCtx, trackID, classID)
+	fetchCancel() // Always cancel to release resources
 	if err != nil {
 		return TrackInfo{}, false, err
 	}
@@ -241,9 +293,20 @@ func (dc *DataCache) ClearTempCache() error {
 // This ensures the index always sees consistent data
 // Returns the number of files promoted and any critical error
 func (dc *DataCache) PromoteTempCache() (int, error) {
+	// Get absolute paths for diagnostics
+	absTemp, _ := filepath.Abs(dc.tempCacheDir)
+	absCache, _ := filepath.Abs(dc.cacheDir)
+	cwd, _ := os.Getwd()
+
+	log.Printf("🔍 PromoteTempCache: cwd=%s, tempCacheDir=%s (abs: %s), cacheDir=%s (abs: %s)",
+		cwd, dc.tempCacheDir, absTemp, dc.cacheDir, absCache)
+
 	// Check if temp cache exists
 	if _, err := os.Stat(dc.tempCacheDir); os.IsNotExist(err) {
-		log.Println("ℹ️ No temp cache directory to promote")
+		log.Printf("ℹ️ No temp cache directory to promote (os.Stat failed on %s)", dc.tempCacheDir)
+		return 0, nil
+	} else if err != nil {
+		log.Printf("⚠️ Error checking temp cache dir %s: %v", dc.tempCacheDir, err)
 		return 0, nil
 	}
 

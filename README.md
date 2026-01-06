@@ -16,8 +16,8 @@ Disclaimer: all code was written by AI.
 ## Data Coverage:
 
 - 169 tracks × 83 classes = 14,027 combinations
-- 45,000+ drivers searchable
-- 200,000+ leaderboard entries
+- 60,000+ drivers searchable
+- 300,000+ leaderboard entries
 
 ## Clean Architecture:
 
@@ -28,14 +28,28 @@ Disclaimer: all code was written by AI.
 
 ## 🚀 Quick Start
 
-### 1. Build the Application
+### Windows
+
+#### 1. Build the Application
 ```powershell
-go build -o bin/r3e-leaderboard.exe .
+go build -o r3e-leaderboard.exe .
 ```
 
-### 2. Run the Cache Generator
+#### 2. Run the Cache Generator
 ```powershell
-.\bin\r3e-leaderboard.exe
+.\r3e-leaderboard.exe
+```
+
+### Linux
+
+#### 1. Build the Application
+```bash
+go build -o r3e-leaderboard .
+```
+
+#### 2. Run the Cache Generator
+```bash
+./r3e-leaderboard
 ```
 
 The application will:
@@ -44,6 +58,7 @@ The application will:
 - Export status data to `cache/status.json`
 - Fetch missing/updated data in background
 - Refresh JSON files periodically
+- Start HTTP server on port 8080 (configurable) to serve static files
 
 ## 📋 Generated JSON Files
 
@@ -219,44 +234,19 @@ cache/
 ├── driver_index.json         # Searchable driver index
 ├── status.json               # Status and statistics
 ├── top_combinations.json     # Top 1000 track/class combos by entries
- ├── track_activity.json      # Per-track activity: cache loads, fetch counts by origin, last processed
+├── refresh_now               # Manual refresh trigger file (touch to trigger)
 ├── track_9473/
 │   ├── class_1703.json.gz   # Brands Hatch + GT3
 │   ├── class_1704.json.gz   # Brands Hatch + GT2
 │   └── ...
+└── track_*/                  # All other tracks
 ```
-### Track Activity
-**File:** `cache/track_activity.json`
 
-Per-track observability stats updated during startup cache loading and during fetch phases (startup, nightly, manual). Export uses a single sorted list under `tracks`, ordered by `track_name` (then `track_id`):
+### Temporary Cache During Refresh
 ```
-{
-  "updated_at": "2025-12-23T08:15:00Z",
-  "tracks": [
-    {
-      "track_id": "1693",
-      "track_name": "Nürburgring - Grand Prix",
-      "cached_loads": 120,
-      "fetched_startup": 8,
-      "fetched_nightly": 1,
-      "fetched_manual": 0,
-      "last_processed": "2025-12-23T08:14:05Z"
-    },
-    {
-      "track_id": "8075",
-      "track_name": "Zhejiang Circuit - Grand Prix",
-      "cached_loads": 52,
-      "fetched_startup": 14,
-      "fetched_nightly": 0,
-      "fetched_manual": 2,
-      "last_processed": "2025-12-23T08:14:12Z"
-    }
-  ]
-}
-```
-Updated with atomic writes; minimal overhead and no impact on core behavior.
-├── track_10394/
-│   └── ...
+cache_temp/
+└── track_*/                  # Temporary cache during refresh
+                              # Promoted atomically to cache/ when complete
 ```
 
 ### Cache Validity
@@ -268,19 +258,146 @@ Updated with atomic writes; minimal overhead and no impact on core behavior.
 
 ## 🛠️ Common Commands
 
-### Development
+### Development (Windows)
 ```powershell
 # Build application
-go build -o bin/r3e-leaderboard.exe .
+go build -o r3e-leaderboard.exe .
 
 # Run cache generator
-.\bin\r3e-leaderboard.exe
+.\r3e-leaderboard.exe
 
 # Build and run (quick test)
 go run main.go orchestrator.go
 ```
 
-## 📝 Configuration
+### Development (Linux)
+```bash
+# Build application
+$env:GOOS="linux"; $env:GOARCH="amd64"; go build -o r3e-leaderboard-linux-amd64
+```
+
+### Linux Server Deployment
+
+#### View Application Logs
+```bash
+# View last 100 lines
+journalctl -u r3e-leaderboard -n 100 --no-pager
+
+# Follow logs in real-time
+journalctl -u r3e-leaderboard -f
+
+# View logs since today
+journalctl -u r3e-leaderboard --since today
+
+# View logs with timestamps
+journalctl -u r3e-leaderboard -n 50 --no-pager -o short-iso
+```
+
+#### Service Management
+```bash
+# Restart service
+sudo systemctl restart r3e-leaderboard
+
+# Check service status
+sudo systemctl status r3e-leaderboard
+
+# Stop service
+sudo systemctl stop r3e-leaderboard
+
+# Start service
+sudo systemctl start r3e-leaderboard
+
+# Enable service on boot
+sudo systemctl enable r3e-leaderboard
+
+# Reload systemd after changing service file
+sudo systemctl daemon-reload
+```
+
+#### Trigger Manual Refresh
+```bash
+# Full refresh (all tracks)
+touch /cache/refresh_now
+
+# Targeted refresh (specific tracks)
+echo "1693" > /cache/refresh_now
+echo "1778" >> /cache/refresh_now
+```
+
+## � Server Requirements
+
+### Memory Management
+
+The application handles large datasets (~300,000 entries) and performs memory-intensive indexing operations. While it includes automatic garbage collection and memory limits, **enabling swap is highly recommended** for production deployments.
+
+#### Setting Up Swap (Linux)
+
+If your server doesn't have swap enabled, follow these steps to create a 4GB swap file:
+
+```bash
+# Create 4GB swap file
+sudo fallocate -l 4G /swapfile
+
+# Set correct permissions (important for security)
+sudo chmod 600 /swapfile
+
+# Set up swap space
+sudo mkswap /swapfile
+
+# Enable swap
+sudo swapon /swapfile
+
+# Verify swap is active
+sudo swapon --show
+free -h
+
+# Make swap permanent (survives reboots)
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+#### Verify Swap Configuration
+```bash
+# Check if swap is enabled
+swapon --show
+
+# View memory and swap usage
+free -h
+
+# Check swap usage over time
+watch -n 5 free -h
+```
+
+#### Optional: Configure Swappiness
+Swappiness controls how aggressively the kernel swaps memory pages (0-100, default 60):
+
+```bash
+# Check current swappiness
+cat /proc/sys/vm/swappiness
+
+# Set swappiness to 10 (prefer RAM, use swap only when needed)
+sudo sysctl vm.swappiness=10
+
+# Make permanent
+echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+```
+
+### Optional: Memory Limit
+
+You can set a soft memory limit via environment variable:
+
+```bash
+# Set 1.4GB memory limit
+export MEMORY_LIMIT_MB=1400
+./r3e-leaderboard
+```
+
+Or in systemd service file:
+```ini
+[Service]
+Environment="MEMORY_LIMIT_MB=1400"
+```
+
+## �📝 Configuration
 
 Edit `internal/config.go` or create `config.json` to customize:
 ```json
@@ -297,16 +414,28 @@ Edit `internal/config.go` or create `config.json` to customize:
 ### Missing Data After Interrupted Refresh
 **No data lost!** Nightly refresh uses temporary cache promotion and preserves existing cache and index throughout. If interrupted, restart—existing data stays intact and the next refresh will replace cache atomically.
 
-### Manual Force Refresh (Options)
-- **Admin HTTP endpoint (recommended):** Add `/admin/refresh-now` to trigger the same full-refresh path used nightly. Then:
-  - `curl -X POST http://localhost:8080/admin/refresh-now`
-  - Benefits: secure, auditable, scriptable. I can implement this endpoint on request.
-- **Signal-triggered refresh:** Handle `SIGUSR1` in the process to invoke the full refresh. Then on Linux: `systemctl kill -s SIGUSR1 r3e-leaderboard.service`.
-- **File-based trigger:** Watch for a sentinel file (e.g., `cache/refresh_now`) and start refresh when it appears:
-  - `touch cache/refresh_now`
-  - Simple and works across environments.
+### Manual Force Refresh
 
-If you want, I can implement the HTTP endpoint or signal handler now so you can trigger refresh immediately on your Linux server.
+The application supports **file-based manual refresh trigger**:
+
+#### Full Refresh (All Tracks)
+```bash
+touch cache/refresh_now
+```
+
+#### Targeted Refresh (Specific Tracks)
+Create `cache/refresh_now` with track IDs (one per line):
+```bash
+echo "1693" > cache/refresh_now
+echo "1778" >> cache/refresh_now
+```
+
+The application checks for this file every 60 seconds. When detected:
+- Starts immediate refresh (full or targeted based on file contents)
+- Deletes the trigger file
+- Performs the refresh using the same atomic cache promotion as nightly refresh
+
+**Note:** Only one refresh can run at a time. If a refresh is already in progress, the trigger is ignored.
 
 ### JSON Files Not Updating
 Check logs for errors during index building. The application will continue running even if JSON export fails.
@@ -315,25 +444,38 @@ Check logs for errors during index building. The application will continue runni
 
 ```
 r3e-leaderboard/
-├── bin/                      # Compiled executable
 ├── cache/                    # Cached data + JSON exports
 │   ├── driver_index.json    # Searchable driver index
 │   ├── status.json          # Status data
+│   ├── top_combinations.json# Top combinations
+│   ├── refresh_now          # Manual refresh trigger (created by user)
 │   └── track_*/             # Per-track cache
-├── main.go                   # Application entry point
-├── orchestrator.go           # Coordination logic
+├── cache_temp/              # Temporary cache during refresh
+│   └── track_*/             # Atomically promoted to cache/ when complete
+├── main.go                  # Application entry point
+├── orchestrator.go          # High-level coordination logic
 ├── internal/
 │   ├── api.go               # RaceRoom API client
 │   ├── cache.go             # Cache management
 │   ├── config.go            # Configuration
-│   ├── exporter.go          # JSON export logic
-│   ├── loader.go            # Data loading
+│   ├── exporter.go          # JSON file I/O operations
+│   ├── indexer.go           # Index building logic
+│   ├── loader.go            # Data loading and fetching
 │   ├── models.go            # Data structures
-│   ├── refresh.go           # Refresh logic
-│   └── scheduler.go         # Automatic refresh
-├── go.mod                   # Go dependencies
+│   ├── refresh.go           # Refresh coordination
+│   ├── retry.go             # Fetch retry logic
+│   ├── scheduler.go         # Automatic scheduled refresh
+│   └── watcher.go           # File-based refresh trigger
+├── go.mod                   # Go module definition
 └── README.md                # This file
 ```
+
+### Architecture Principles
+
+- **Modular Design**: Clear separation of concerns across files
+- **Single Responsibility**: Each file has one focused purpose
+- **No External Dependencies**: Uses only Go standard library
+- **Production Ready**: Proper error handling, logging, and resource management
 
 ## 📄 License
 
