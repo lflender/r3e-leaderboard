@@ -282,17 +282,6 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		return nil
 	}
 
-	// DEBUG: Check if tracks have data
-	tracksWithData := 0
-	totalDataEntries := 0
-	for _, t := range tracks {
-		if len(t.Data) > 0 {
-			tracksWithData++
-			totalDataEntries += len(t.Data)
-		}
-	}
-	log.Printf("🔍 DEBUG BuildAndExportIndex: %d tracks received, %d have data, %d total entries", len(tracks), tracksWithData, totalDataEntries)
-
 	indexStart := time.Now()
 
 	// Build the driver index
