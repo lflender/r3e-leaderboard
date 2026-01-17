@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"log"
 	"os"
@@ -79,10 +81,10 @@ func ReadStatusData() StatusData {
 // ExportDriverIndex exports the driver index to a JSON file on disk
 // Uses atomic write (temp file + rename) with fallback to handle file locking
 func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
-	indexStart := time.Now()
+	// Begin export
 
-	// Convert the index to JSON
-	jsonData, err := json.MarshalIndent(index, "", "  ")
+	// Convert the index to compact JSON (smaller, parses faster)
+	jsonData, err := json.Marshal(index)
 	if err != nil {
 		log.Printf("❌ Failed to marshal driver index: %v", err)
 		return err
@@ -95,33 +97,36 @@ func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
 		return err
 	}
 
-	// Write to temporary file first (atomic write pattern)
-	tempFile := DriverIndexFile + ".tmp"
-	if err := os.WriteFile(tempFile, jsonData, 0644); err != nil {
-		log.Printf("❌ Failed to write temporary driver index file: %v", err)
-		return err
-	}
-
-	// Rename temp file to final file (atomic operation)
-	if err := os.Rename(tempFile, DriverIndexFile); err != nil {
-		log.Printf("⚠️ WARNING: Atomic rename failed: %v", err)
-		log.Printf("   Attempting direct write as fallback (file may be locked by editor)")
-
-		// Fallback: try direct write (less safe but better than nothing)
-		if directErr := os.WriteFile(DriverIndexFile, jsonData, 0644); directErr != nil {
-			log.Printf("❌ ERROR: Direct write also failed: %v", directErr)
-			log.Printf("   Please close %s in your editor and try again", DriverIndexFile)
-			os.Remove(tempFile) // Clean up temp file
-			return directErr
+	// Write a gzip-compressed version for faster downloads (only gz is persisted)
+	gzStart := time.Now()
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+	// Set a filename in the gzip header (optional)
+	gzWriter.Name = filepath.Base(DriverIndexFile)
+	if _, err := gzWriter.Write(jsonData); err != nil {
+		log.Printf("❌ Failed to gzip driver index: %v", err)
+		gzWriter.Close()
+		// Proceed without gz if compression fails
+	} else if err := gzWriter.Close(); err != nil {
+		log.Printf("❌ Failed to finalize gzip driver index: %v", err)
+	} else {
+		gzTemp := DriverIndexFile + ".gz.tmp"
+		gzFinal := DriverIndexFile + ".gz"
+		if err := os.WriteFile(gzTemp, buf.Bytes(), 0644); err != nil {
+			log.Printf("❌ Failed to write temporary gz driver index: %v", err)
+		} else if err := os.Rename(gzTemp, gzFinal); err != nil {
+			log.Printf("⚠️ WARNING: Atomic rename failed for gz: %v", err)
+			if directErr := os.WriteFile(gzFinal, buf.Bytes(), 0644); directErr != nil {
+				log.Printf("❌ ERROR: Direct write also failed for gz: %v", directErr)
+				os.Remove(gzTemp)
+			} else {
+				log.Printf("✅ Fallback write successful (gz)")
+				os.Remove(gzTemp)
+			}
 		}
-
-		log.Printf("✅ Fallback write successful")
-		os.Remove(tempFile) // Clean up temp file after successful fallback
+		log.Printf("💾 Driver index exported (gz) to %s (%.3f seconds, %.2f MB → %.2f MB)",
+			gzFinal, time.Since(gzStart).Seconds(), float64(len(jsonData))/(1024*1024), float64(buf.Len())/(1024*1024))
 	}
-
-	exportDuration := time.Since(indexStart)
-	log.Printf("💾 Driver index exported to %s (%.3f seconds, %.2f MB)",
-		DriverIndexFile, exportDuration.Seconds(), float64(len(jsonData))/(1024*1024))
 
 	// Release jsonData memory immediately
 	jsonData = nil
