@@ -15,6 +15,7 @@ type DriverResult struct {
 	Track        string  `json:"track"`
 	TrackID      string  `json:"track_id"`
 	ClassID      string  `json:"class_id"`
+	DateTime     string  `json:"date_time"` // Date and time when the entry was performed
 	Found        bool    `json:"found"`
 	TotalEntries int     `json:"total_entries"`
 }

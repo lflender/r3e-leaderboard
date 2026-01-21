@@ -262,6 +262,11 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				result.Difficulty = drivingModel
 			}
 
+			// Extract date_time
+			if dateTime, dtOk := entry["date_time"].(string); dtOk && dateTime != "" {
+				result.DateTime = dateTime
+			}
+
 			// Add to index (case-insensitive)
 			lowerName := strings.ToLower(name)
 			index[lowerName] = append(index[lowerName], result)
