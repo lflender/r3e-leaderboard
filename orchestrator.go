@@ -179,9 +179,9 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	log.Println("✅ Full refresh completed")
 }
 
-// performTargetedRefresh executes a targeted refresh for specific track IDs
+// performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples
 func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
-	log.Printf("🎯 Starting targeted refresh for %d track(s)...", len(trackIDs))
+	log.Printf("🎯 Starting targeted refresh for %d token(s)...", len(trackIDs))
 	// Don't update lastScrapeStart - that's only for full refreshes
 	o.fetchInProgress = true
 	o.lastIndexedCount = 0
