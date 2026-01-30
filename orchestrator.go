@@ -159,19 +159,20 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	// Perform the actual refresh (delegated to internal package)
 	finalTracks := internal.PerformFullRefresh(o.fetchContext, progressCallback, origin)
 
-	// Build final index
+	// Finalize scrape timestamps BEFORE building index
+	// This ensures UpdateStatusWithIndexMetrics preserves the correct end time
+	o.tracks = finalTracks
+	o.lastScrapeEnd = time.Now()
+	o.fetchInProgress = false
+	o.exportStatus()
+
+	// Build final index (will preserve the scrape timestamps we just wrote)
 	log.Println("🔄 Building final search index...")
 	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
 		o.lastIndexedCount = len(finalTracks)
 	}
-
-	// Finalize
-	o.tracks = finalTracks
-	o.lastScrapeEnd = time.Now()
-	o.fetchInProgress = false
-	o.exportStatus()
 
 	o.CompactTrackData()
 	runtime.GC()

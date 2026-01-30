@@ -22,6 +22,9 @@ var orchestrator *Orchestrator
 var httpServer *http.Server
 
 func main() {
+	// Remove timestamps from log output (systemd/journalctl already provides them)
+	log.SetFlags(0)
+
 	log.Println("🏎️  RaceRoom Leaderboard Cache Generator")
 
 	// Use default Go GC strategy (GOGC ~100). No explicit override.
