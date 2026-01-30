@@ -34,9 +34,12 @@ go.work.sum
 # cache
 *.json
 *.gz
+refresh_now
 
 # front-end
 *.html
 *.css
 *.js
+*.png
+*.ico
 robots.txt

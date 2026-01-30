@@ -159,7 +159,14 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	// Perform the actual refresh (delegated to internal package)
 	finalTracks := internal.PerformFullRefresh(o.fetchContext, progressCallback, origin)
 
-	// Build final index
+	// Finalize scrape timestamps BEFORE building index
+	// This ensures UpdateStatusWithIndexMetrics preserves the correct end time
+	o.tracks = finalTracks
+	o.lastScrapeEnd = time.Now()
+	o.fetchInProgress = false
+	o.exportStatus()
+
+	// Build final index (will preserve the scrape timestamps we just wrote)
 	log.Println("🔄 Building final search index...")
 	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
@@ -167,21 +174,15 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 		o.lastIndexedCount = len(finalTracks)
 	}
 
-	// Finalize
-	o.tracks = finalTracks
-	o.lastScrapeEnd = time.Now()
-	o.fetchInProgress = false
-	o.exportStatus()
-
 	o.CompactTrackData()
 	runtime.GC()
 	debug.FreeOSMemory()
 	log.Println("✅ Full refresh completed")
 }
 
-// performTargetedRefresh executes a targeted refresh for specific track IDs
+// performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples
 func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
-	log.Printf("🎯 Starting targeted refresh for %d track(s)...", len(trackIDs))
+	log.Printf("🎯 Starting targeted refresh for %d token(s)...", len(trackIDs))
 	// Don't update lastScrapeStart - that's only for full refreshes
 	o.fetchInProgress = true
 	o.lastIndexedCount = 0

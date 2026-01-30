@@ -319,9 +319,10 @@ sudo systemctl daemon-reload
 # Full refresh (all tracks)
 touch /cache/refresh_now
 
-# Targeted refresh (specific tracks)
-echo "1693" > /cache/refresh_now
-echo "1778" >> /cache/refresh_now
+# Targeted refresh (specific tracks or track-class couples)
+echo "1693" > /cache/refresh_now       # All classes for track 1693
+echo "1778" >> /cache/refresh_now      # All classes for track 1778
+echo "5276-8600" >> /cache/refresh_now # Only class 8600 for track 5276
 ```
 
 ## � Server Requirements
@@ -423,17 +424,34 @@ The application supports **file-based manual refresh trigger**:
 touch cache/refresh_now
 ```
 
-#### Targeted Refresh (Specific Tracks)
-Create `cache/refresh_now` with track IDs (one per line):
+#### Targeted Refresh (Specific Tracks or Track-Class Combinations)
+Create `cache/refresh_now` with track IDs or track-class couples (one per line):
+
+**Refresh specific tracks (all classes):**
 ```bash
 echo "1693" > cache/refresh_now
 echo "1778" >> cache/refresh_now
+```
+
+**Refresh specific track-class combinations:**
+```bash
+echo "5276-8600" > cache/refresh_now
+echo "1693-8601" >> cache/refresh_now
+```
+
+**Mix both formats:**
+```bash
+echo "1693" > cache/refresh_now        # All classes for track 1693
+echo "5276-8600" >> cache/refresh_now  # Only class 8600 for track 5276
+echo "1778" >> cache/refresh_now       # All classes for track 1778
 ```
 
 The application checks for this file every 60 seconds. When detected:
 - Starts immediate refresh (full or targeted based on file contents)
 - Deletes the trigger file
 - Performs the refresh using the same atomic cache promotion as nightly refresh
+- For track-class couples (format: `trackID-classID`), only refreshes that specific combination
+- For track IDs alone, refreshes all classes for that track
 
 **Note:** Only one refresh can run at a time. If a refresh is already in progress, the trigger is ignored.
 

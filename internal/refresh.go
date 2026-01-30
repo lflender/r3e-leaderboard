@@ -32,7 +32,8 @@ func PerformFullRefresh(ctx context.Context, progressCallback func([]TrackInfo),
 	return finalMerged
 }
 
-// PerformTargetedRefresh executes a targeted refresh for specific track IDs
+// PerformTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples
+// trackIDs can contain "trackID" (all classes) or "trackID-classID" (specific class)
 // Returns the merged result of cached + fetched tracks
 func PerformTargetedRefresh(ctx context.Context, trackIDs []string, progressCallback func([]TrackInfo), origin string) []TrackInfo {
 	// Bootstrap: load ALL cached data first
