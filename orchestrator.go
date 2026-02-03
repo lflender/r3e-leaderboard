@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"r3e-leaderboard/internal"
 	"runtime"
@@ -297,6 +298,21 @@ func (o *Orchestrator) exportStatus() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	// Read Discord races data from cache
+	cache := internal.NewDataCache()
+	discordRaces, _ := cache.LoadDiscordRaces()
+	discordCount := 0
+	discordAge := ""
+	discordTime := time.Time{}
+	if discordRaces != nil {
+		discordCount = len(discordRaces.Races)
+		discordTime = discordRaces.ParsedAt
+		age := cache.GetDiscordRacesAge()
+		if age >= 0 {
+			discordAge = formatDuration(age)
+		}
+	}
+
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
@@ -315,6 +331,10 @@ func (o *Orchestrator) exportStatus() {
 		FailedFetchCount:         existingStatus.FailedFetchCount,  // Preserved from loader
 		FailedFetches:            existingStatus.FailedFetches,     // Preserved from loader
 		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
+		// Discord data
+		DailySprintRacesCount: discordCount,
+		DailySprintRacesAge:   discordAge,
+		DailySprintRacesTime:  discordTime,
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {
@@ -361,6 +381,32 @@ func (o *Orchestrator) CompactTrackData() {
 		// Retain Name/TrackID/ClassID, drop Data to free memory
 		o.tracks[i].Data = nil
 	}
+}
+
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		if mins == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", mins)
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	}
+	days := int(d.Hours() / 24)
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
 }
 
 // buildBootstrapIndex loads cached data and builds an initial search index

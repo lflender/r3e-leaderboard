@@ -421,3 +421,78 @@ func (dc *DataCache) GetCacheInfo() []string {
 
 	return info
 }
+
+// SaveDiscordRaces saves Daily Sprint Races data to cache
+func (dc *DataCache) SaveDiscordRaces(result *DailySprintRacesResult) error {
+	if result == nil {
+		return fmt.Errorf("cannot save nil result")
+	}
+
+	if err := dc.EnsureCacheDir(); err != nil {
+		return err
+	}
+
+	filename := filepath.Join(dc.cacheDir, "daily_sprint_races.json")
+
+	// Write to temporary file first
+	tempFile := filename + ".tmp"
+	file, err := os.Create(tempFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+
+	if err := encoder.Encode(result); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Atomically rename
+	os.Remove(filename) // Remove old file on Windows
+	if err := os.Rename(tempFile, filename); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	return nil
+}
+
+// LoadDiscordRaces loads Daily Sprint Races data from cache
+func (dc *DataCache) LoadDiscordRaces() (*DailySprintRacesResult, error) {
+	filename := filepath.Join(dc.cacheDir, "daily_sprint_races.json")
+
+	file, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No cached data is not an error
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var result DailySprintRacesResult
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// GetDiscordRacesAge returns the age of the cached Discord races data, or -1 if it doesn't exist
+func (dc *DataCache) GetDiscordRacesAge() time.Duration {
+	filename := filepath.Join(dc.cacheDir, "daily_sprint_races.json")
+	info, err := os.Stat(filename)
+	if err != nil {
+		return -1 // doesn't exist
+	}
+	return time.Since(info.ModTime())
+}

@@ -43,6 +43,10 @@ type StatusData struct {
 	FailedFetchCount         int           `json:"failed_fetch_count"`
 	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
+	// Discord Daily Sprint Races data
+	DailySprintRacesCount int       `json:"daily_sprint_races_count"`
+	DailySprintRacesAge   string    `json:"daily_sprint_races_age,omitempty"`
+	DailySprintRacesTime  time.Time `json:"daily_sprint_races_time"`
 }
 
 // TrackCombination represents a track/class combination with entry count
