@@ -29,7 +29,6 @@ func TestStatusData_Struct(t *testing.T) {
 		FailedFetchCount:         5,
 		RetriedFetchCount:        3,
 		DailySprintRacesCount:    6,
-		DailySprintRacesAge:      "2 hours ago",
 	}
 
 	// Test JSON marshaling

@@ -18,9 +18,10 @@ type IndexerState struct {
 
 // IndexerCallbacks provides callback functions for the indexer
 type IndexerCallbacks struct {
-	GetState      func() IndexerState
-	UpdateIndexed func(count int)
-	ExportStatus  func()
+	GetState                   func() IndexerState
+	UpdateIndexed              func(count int)
+	ExportStatus               func()
+	UpdateDailyRaceRefreshTime func() // Update last daily race refresh timestamp
 }
 
 // PeriodicIndexer handles periodic index rebuilding during data fetching
@@ -99,6 +100,8 @@ func (pi *PeriodicIndexer) Start() {
 						log.Println("🏁 Refreshing Daily Race combinations (periodic)...")
 						if _, err := RefreshDailyRaceCombinations(pi.ctx); err != nil {
 							log.Printf("⚠️ Daily Race refresh failed during periodic indexing: %v", err)
+						} else {
+							pi.callbacks.UpdateDailyRaceRefreshTime()
 						}
 					}
 

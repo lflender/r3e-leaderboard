@@ -408,7 +408,7 @@ func findCarClassID(className string, classes []CarClassConfig) string {
 	return ""
 }
 
-// matchYearBasedClass tries to match classes like "WTCR 22" to "WTCC 2022"
+// matchYearBasedClass tries to match classes like "WTCR 22" to "WTCR 2022"
 func matchYearBasedClass(className string, classes []CarClassConfig) string {
 	// Pattern: name + 2-digit year
 	re := regexp.MustCompile(`^(.+?)\s*(\d{2})$`)

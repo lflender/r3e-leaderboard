@@ -36,7 +36,7 @@ func TestParseDailySprintRaces(t *testing.T) {
 		{"GT3", "Autodrom Most", "1703", "7112", true},                            // GTR 3, Autodrom Most - Grand Prix (F2P)
 		{"Super Touring", "Zhejiang Circuit GP", "1710", "8075", false},           // Super Touring
 		{"F4", "Oschersleben GP", "4867", "12506", false},                         // Tatuus F4 Cup
-		{"WTCR 22", "Circuit de Pau-Ville", "11317", "11905", false},              // WTCC 2022
+		{"WTCR 22", "Circuit de Pau-Ville", "11317", "11905", false},              // WTCR 2022
 		{"MX5", "Interlagos", "10977", "10463", false},                            // Mazda MX-5 Cup
 		{"DTM 1995", "Silverstone Classic International", "7075", "12390", false}, // DTM 1995
 	}
@@ -201,7 +201,7 @@ func TestFindCarClassID(t *testing.T) {
 		{"Super Touring", "1710"},
 		{"F4", "4867"},       // Tatuus F4 Cup
 		{"MX5", "10977"},     // Mazda MX-5 Cup
-		{"WTCR 22", "11317"}, // WTCC 2022
+		{"WTCR 22", "11317"}, // WTCR 2022
 		{"DTM 1995", "7075"},
 	}
 
@@ -290,9 +290,9 @@ func TestFindCarClassID_AllAliases(t *testing.T) {
 		{"silhouette series", "1717", "Silhouette Series"},
 		{"group 5", "1708", "Group 5"},
 		{"touring classics", "1712", "Touring Classics"},
-		{"wtcr 22", "11317", "WTCC 2022"},
-		{"wtcr 21", "10344", "WTCC 2021"},
-		{"wtcr 20", "9233", "WTCC 2020"},
+		{"wtcr 22", "11317", "WTCR 2022"},
+		{"wtcr 21", "10344", "WTCR 2021"},
+		{"wtcr 20", "9233", "WTCR 2020"},
 		// New aliases from user-provided messages
 		{"fr junior", "253", "FRJ Cup (FR Junior alias)"},
 		{"porsche 964", "7287", "Porsche 964 Cup"},
@@ -464,9 +464,9 @@ func TestFindCarClassID_WTCRAlias(t *testing.T) {
 		expectedID  string
 		description string
 	}{
-		{"wtcr 22", "11317", "WTCR 22 → WTCC 2022"},
-		{"wtcr 21", "10344", "WTCR 21 → WTCC 2021"},
-		{"wtcr 20", "9233", "WTCR 20 → WTCC 2020"},
+		{"wtcr 22", "11317", "WTCR 22 → WTCR 2022"},
+		{"wtcr 21", "10344", "WTCR 21 → WTCR 2021"},
+		{"wtcr 20", "9233", "WTCR 20 → WTCR 2020"},
 	}
 
 	for _, test := range tests {

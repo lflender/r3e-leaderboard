@@ -295,11 +295,11 @@ func GetCarClasses() []CarClassConfig {
 		{"WTCC 2015", "4517"},
 		{"WTCC 2016", "6036"},
 		{"WTCC 2017", "6309"},
-		{"WTCC 2018", "7009"},
-		{"WTCC 2019", "7844"},
-		{"WTCC 2020", "9233"},
-		{"WTCC 2021", "10344"},
-		{"WTCC 2022", "11317"},
+		{"WTCR 2018", "7009"},
+		{"WTCR 2019", "7844"},
+		{"WTCR 2020", "9233"},
+		{"WTCR 2021", "10344"},
+		{"WTCR 2022", "11317"},
 		{"Zonda R Cup", "7110"},
 	}
 }
@@ -326,9 +326,11 @@ func GetDiscordCarClassAliases() map[string]string {
 		"f4":                 "Tatuus F4 Cup",
 		"f3":                 "FR3 Cup",
 		"wtcr":               "WTCC",
-		"wtcr 22":            "WTCC 2022",
-		"wtcr 21":            "WTCC 2021",
-		"wtcr 20":            "WTCC 2020",
+		"wtcr 22":            "WTCR 2022",
+		"wtcr 21":            "WTCR 2021",
+		"wtcr 20":            "WTCR 2020",
+		"wtcr 19":            "WTCR 2019",
+		"wtcr 18":            "WTCR 2018",
 		"mx5":                "Mazda MX-5 Cup",
 		"mx-5":               "Mazda MX-5 Cup",
 		"super touring":      "Super Touring",
@@ -346,27 +348,27 @@ func GetDiscordCarClassAliases() map[string]string {
 		"group 5":            "Group 5",
 		"touring classics":   "Touring Classics",
 		"frj":                "FRJ Cup",
-		"fr junior":          "FRJ Cup", // Discord uses "FR Junior"
+		"fr junior":          "FRJ Cup",
 		"964":                "Porsche 964 Cup",
-		"porsche 964":        "Porsche 964 Cup", // Discord uses "Porsche 964"
+		"porsche 964":        "Porsche 964 Cup",
 		"tcr":                "Touring Cars Cup",
 		"aquila":             "Aquila CR1 Cup",
 		"992":                "Porsche 992 GT3 Cup",
-		"992 cup":            "Porsche 992 GT3 Cup", // Discord uses "992 Cup"
+		"992 cup":            "Porsche 992 GT3 Cup",
 		"bmw m1 procar":      "Procar",
 		"lmdh":               "Hypercars",
-		"audi tt rs":         "Audi TT RS cup",        // Discord uses "Audi TT RS"
-		"fr 2":               "FR2 Cup",               // Discord uses "FR 2"
-		"fr 3":               "FR3 Cup",               // Discord uses "FR 3"
-		"fr x-17":            "FR X-17 Cup",           // Discord uses "FR X-17"
-		"944":                "Porsche 944 Turbo Cup", // Discord uses "944"
-		"porsche 944 cup":    "Porsche 944 Turbo Cup", // Discord uses "Porsche 944 Cup"
-		"bmw m235i":          "BMW M235i Racing Cup",  // Discord uses "BMW M235i"
-		"silhouettes":        "Silhouette Series",     // Discord uses "Silhouettes"
-		"gtr 2":              "GT2",                   // Discord uses "GTR 2"
-		"praga":              "Praga R1",              // Discord uses "Praga"
-		"wtcc 2013":          "WTCC 2013",             // Discord uses "WTCC 2013"
-		"audi rs 5 dtm 2016": "DTM 2016",              // Discord uses "Audi RS 5 DTM 2016"
+		"audi tt rs":         "Audi TT RS cup",
+		"fr 2":               "FR2 Cup",
+		"fr 3":               "FR3 Cup",
+		"fr x-17":            "FR X-17 Cup",
+		"944":                "Porsche 944 Turbo Cup",
+		"porsche 944 cup":    "Porsche 944 Turbo Cup",
+		"bmw m235i":          "BMW M235i Racing Cup",
+		"silhouettes":        "Silhouette Series",
+		"gtr 2":              "GT2",
+		"praga":              "Praga R1",
+		"wtcc 2013":          "WTCC 2013",
+		"audi rs 5 dtm 2016": "DTM 2016",
 	}
 }
 

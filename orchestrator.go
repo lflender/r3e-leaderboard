@@ -28,10 +28,14 @@ type Orchestrator struct {
 
 // NewOrchestrator creates a new orchestrator instance
 func NewOrchestrator(ctx context.Context, cancel context.CancelFunc) *Orchestrator {
+	// Load last Daily Race refresh time from status file
+	existingStatus := internal.ReadStatusData()
+
 	return &Orchestrator{
-		fetchContext: ctx,
-		fetchCancel:  cancel,
-		tracks:       make([]internal.TrackInfo, 0),
+		fetchContext:         ctx,
+		fetchCancel:          cancel,
+		tracks:               make([]internal.TrackInfo, 0),
+		lastDailyRaceRefresh: existingStatus.LastDailyRaceRefresh,
 	}
 }
 
@@ -283,6 +287,9 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 		ExportStatus: func() {
 			o.exportStatus()
 		},
+		UpdateDailyRaceRefreshTime: func() {
+			o.lastDailyRaceRefresh = time.Now()
+		},
 	})
 	indexer.Start()
 }
@@ -312,15 +319,8 @@ func (o *Orchestrator) exportStatus() {
 	cache := internal.NewDataCache()
 	discordRaces, _ := cache.LoadDiscordRaces()
 	discordCount := 0
-	discordAge := ""
-	discordTime := time.Time{}
 	if discordRaces != nil {
 		discordCount = len(discordRaces.Races)
-		discordTime = discordRaces.ParsedAt
-		age := cache.GetDiscordRacesAge()
-		if age >= 0 {
-			discordAge = formatDuration(age)
-		}
 	}
 
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
@@ -343,10 +343,8 @@ func (o *Orchestrator) exportStatus() {
 		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
 		// Discord data
 		DailySprintRacesCount: discordCount,
-		DailySprintRacesAge:   discordAge,
-		DailySprintRacesTime:  discordTime,
-		// Daily Race refresh tracking (preserved from previous updates)
-		LastDailyRaceRefresh: existingStatus.LastDailyRaceRefresh,
+		// Daily Race refresh tracking (use orchestrator's current value)
+		LastDailyRaceRefresh: o.lastDailyRaceRefresh,
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {

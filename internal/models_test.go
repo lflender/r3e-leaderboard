@@ -104,7 +104,7 @@ func TestGetCarClasses_KnownClasses(t *testing.T) {
 		"Super Touring":  "1710",
 		"DTM 1995":       "7075",
 		"Mazda MX-5 Cup": "10977",
-		"WTCC 2022":      "11317",
+		"WTCR 2022":      "11317",
 		"Tatuus F4 Cup":  "4867",
 	}
 

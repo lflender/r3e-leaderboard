@@ -44,9 +44,7 @@ type StatusData struct {
 	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
 	// Discord Daily Sprint Races data
-	DailySprintRacesCount int       `json:"daily_sprint_races_count"`
-	DailySprintRacesAge   string    `json:"daily_sprint_races_age,omitempty"`
-	DailySprintRacesTime  time.Time `json:"daily_sprint_races_time"`
+	DailySprintRacesCount int `json:"daily_sprint_races_count"`
 	// Daily Race refresh tracking
 	LastDailyRaceRefresh time.Time `json:"last_daily_race_refresh"`
 }
