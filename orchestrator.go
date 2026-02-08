@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"r3e-leaderboard/internal"
 	"runtime"
@@ -11,24 +12,30 @@ import (
 
 // Orchestrator coordinates data loading, refreshing, and indexing
 type Orchestrator struct {
-	fetchContext     context.Context
-	fetchCancel      context.CancelFunc
-	fetchInProgress  bool
-	lastScrapeStart  time.Time
-	lastScrapeEnd    time.Time
-	tracks           []internal.TrackInfo
-	totalDrivers     int
-	totalEntries     int
-	lastIndexedCount int // Track last indexed count to avoid unnecessary rebuilds
-	scheduler        *internal.Scheduler
+	fetchContext         context.Context
+	fetchCancel          context.CancelFunc
+	fetchInProgress      bool
+	lastScrapeStart      time.Time
+	lastScrapeEnd        time.Time
+	tracks               []internal.TrackInfo
+	totalDrivers         int
+	totalEntries         int
+	lastIndexedCount     int // Track last indexed count to avoid unnecessary rebuilds
+	scheduler            *internal.Scheduler
+	lastDailyRaceRefresh time.Time     // Track last Daily Race refresh
+	dailyRaceRefreshStop chan struct{} // Channel to stop daily race refresh loop
 }
 
 // NewOrchestrator creates a new orchestrator instance
 func NewOrchestrator(ctx context.Context, cancel context.CancelFunc) *Orchestrator {
+	// Load last Daily Race refresh time from status file
+	existingStatus := internal.ReadStatusData()
+
 	return &Orchestrator{
-		fetchContext: ctx,
-		fetchCancel:  cancel,
-		tracks:       make([]internal.TrackInfo, 0),
+		fetchContext:         ctx,
+		fetchCancel:          cancel,
+		tracks:               make([]internal.TrackInfo, 0),
+		lastDailyRaceRefresh: existingStatus.LastDailyRaceRefresh,
 	}
 }
 
@@ -48,6 +55,14 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		// Do not mark scrape start yet; only do so if we actually fetch
 		o.fetchInProgress = false
 		o.exportStatus()
+
+		// First, refresh Daily Race combinations before initial index
+		// This ensures the index includes the latest Daily Race data
+		if _, err := internal.RefreshDailyRaceCombinations(o.fetchContext); err != nil {
+			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
+		} else {
+			o.lastDailyRaceRefresh = time.Now()
+		}
 
 		// Create a callback to update status incrementally during loading
 		progressCallback := func(currentTracks []internal.TrackInfo) {
@@ -272,6 +287,9 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 		ExportStatus: func() {
 			o.exportStatus()
 		},
+		UpdateDailyRaceRefreshTime: func() {
+			o.lastDailyRaceRefresh = time.Now()
+		},
 	})
 	indexer.Start()
 }
@@ -297,6 +315,14 @@ func (o *Orchestrator) exportStatus() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
+	// Read Discord races data from cache
+	cache := internal.NewDataCache()
+	discordRaces, _ := cache.LoadDiscordRaces()
+	discordCount := 0
+	if discordRaces != nil {
+		discordCount = len(discordRaces.Races)
+	}
+
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
@@ -315,6 +341,10 @@ func (o *Orchestrator) exportStatus() {
 		FailedFetchCount:         existingStatus.FailedFetchCount,  // Preserved from loader
 		FailedFetches:            existingStatus.FailedFetches,     // Preserved from loader
 		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
+		// Discord data
+		DailySprintRacesCount: discordCount,
+		// Daily Race refresh tracking (use orchestrator's current value)
+		LastDailyRaceRefresh: o.lastDailyRaceRefresh,
 	}
 
 	if err := internal.ExportStatusData(status); err != nil {
@@ -338,6 +368,9 @@ func (o *Orchestrator) Cleanup() {
 		o.scheduler.Stop()
 		o.scheduler = nil
 	}
+
+	// Stop Daily Race refresh loop
+	o.StopDailyRaceRefreshLoop()
 
 	// Cancel any ongoing operations
 	if o.fetchCancel != nil {
@@ -363,6 +396,32 @@ func (o *Orchestrator) CompactTrackData() {
 	}
 }
 
+// formatDuration formats a duration into a human-readable string
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return "just now"
+	}
+	if d < time.Hour {
+		mins := int(d.Minutes())
+		if mins == 1 {
+			return "1 minute ago"
+		}
+		return fmt.Sprintf("%d minutes ago", mins)
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	}
+	days := int(d.Hours() / 24)
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
+}
+
 // buildBootstrapIndex loads cached data and builds an initial search index
 // This is used by refresh operations to provide immediate search results
 func (o *Orchestrator) buildBootstrapIndex() {
@@ -378,5 +437,74 @@ func (o *Orchestrator) buildBootstrapIndex() {
 		o.exportStatus()
 	} else {
 		log.Println("ℹ️ No cached combinations found for bootstrap index")
+	}
+}
+
+// StartDailyRaceRefreshLoop starts a background loop that refreshes Daily Race
+// combinations and rebuilds the index at the specified interval.
+// This runs outside of refresh cycles (when the system is idle).
+func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
+	o.dailyRaceRefreshStop = make(chan struct{})
+
+	go func() {
+		// Validate interval
+		if intervalMinutes < 1 {
+			intervalMinutes = 60 // Default to 1 hour
+		}
+
+		interval := time.Duration(intervalMinutes) * time.Minute
+		log.Printf("🏁 Starting Daily Race refresh loop (every %d minutes)", intervalMinutes)
+
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// Skip if a full refresh is in progress
+				if o.fetchInProgress {
+					log.Println("⏭️ Skipping Daily Race refresh - full refresh in progress")
+					continue
+				}
+
+				// Refresh Daily Race combinations
+				log.Println("🏁 Refreshing Daily Race combinations (standalone loop)...")
+				if _, err := internal.RefreshDailyRaceCombinations(o.fetchContext); err != nil {
+					log.Printf("⚠️ Daily Race refresh failed: %v", err)
+					continue
+				}
+				o.lastDailyRaceRefresh = time.Now()
+
+				// Reload cached data and rebuild index
+				log.Println("🔄 Rebuilding index after Daily Race refresh...")
+				cachedTracks := internal.LoadAllCachedData(o.fetchContext)
+				if len(cachedTracks) > 0 {
+					if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+						log.Printf("⚠️ Failed to rebuild index after Daily Race refresh: %v", err)
+					} else {
+						o.tracks = cachedTracks
+						o.lastIndexedCount = len(cachedTracks)
+						log.Printf("✅ Index rebuilt with %d combinations after Daily Race refresh", len(cachedTracks))
+					}
+					o.exportStatus()
+				}
+
+			case <-o.dailyRaceRefreshStop:
+				log.Println("⏹️ Daily Race refresh loop stopped")
+				return
+
+			case <-o.fetchContext.Done():
+				log.Println("⏹️ Daily Race refresh loop cancelled via context")
+				return
+			}
+		}
+	}()
+}
+
+// StopDailyRaceRefreshLoop stops the Daily Race refresh loop
+func (o *Orchestrator) StopDailyRaceRefreshLoop() {
+	if o.dailyRaceRefreshStop != nil {
+		close(o.dailyRaceRefreshStop)
+		o.dailyRaceRefreshStop = nil
 	}
 }

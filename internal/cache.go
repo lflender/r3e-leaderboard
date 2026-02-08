@@ -293,17 +293,8 @@ func (dc *DataCache) ClearTempCache() error {
 // This ensures the index always sees consistent data
 // Returns the number of files promoted and any critical error
 func (dc *DataCache) PromoteTempCache() (int, error) {
-	// Get absolute paths for diagnostics
-	absTemp, _ := filepath.Abs(dc.tempCacheDir)
-	absCache, _ := filepath.Abs(dc.cacheDir)
-	cwd, _ := os.Getwd()
-
-	log.Printf("🔍 PromoteTempCache: cwd=%s, tempCacheDir=%s (abs: %s), cacheDir=%s (abs: %s)",
-		cwd, dc.tempCacheDir, absTemp, dc.cacheDir, absCache)
-
 	// Check if temp cache exists
 	if _, err := os.Stat(dc.tempCacheDir); os.IsNotExist(err) {
-		log.Printf("ℹ️ No temp cache directory to promote (os.Stat failed on %s)", dc.tempCacheDir)
 		return 0, nil
 	} else if err != nil {
 		log.Printf("⚠️ Error checking temp cache dir %s: %v", dc.tempCacheDir, err)
@@ -318,15 +309,12 @@ func (dc *DataCache) PromoteTempCache() (int, error) {
 	}
 
 	if len(tempFiles) == 0 {
-		log.Println("ℹ️ No temp cache files to promote")
 		// Clean up empty temp cache directory
 		if err := dc.ClearTempCache(); err != nil {
 			log.Printf("⚠️ Warning: Failed to clean up empty temp cache: %v", err)
 		}
 		return 0, nil
 	}
-
-	log.Printf("🔄 Promoting %d temp cache files to main cache...", len(tempFiles))
 
 	// Ensure main cache directory exists
 	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
@@ -380,8 +368,8 @@ func (dc *DataCache) PromoteTempCache() (int, error) {
 	// Log results
 	if failed > 0 {
 		log.Printf("⚠️ Cache promotion completed with issues: %d files promoted, %d failed", promoted, failed)
-	} else {
-		log.Printf("✅ Successfully promoted %d cache files to main cache", promoted)
+	} else if promoted > 0 {
+		log.Printf("✅ Promoted %d cache files", promoted)
 	}
 
 	// Clean up temp cache directory and empty track directories
@@ -420,4 +408,79 @@ func (dc *DataCache) GetCacheInfo() []string {
 	}
 
 	return info
+}
+
+// SaveDiscordRaces saves Daily Sprint Races data to cache
+func (dc *DataCache) SaveDiscordRaces(result *DailySprintRacesResult) error {
+	if result == nil {
+		return fmt.Errorf("cannot save nil result")
+	}
+
+	if err := dc.EnsureCacheDir(); err != nil {
+		return err
+	}
+
+	filename := filepath.Join(dc.cacheDir, "daily_races.json")
+
+	// Write to temporary file first
+	tempFile := filename + ".tmp"
+	file, err := os.Create(tempFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+
+	if err := encoder.Encode(result); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	// Atomically rename
+	os.Remove(filename) // Remove old file on Windows
+	if err := os.Rename(tempFile, filename); err != nil {
+		os.Remove(tempFile)
+		return err
+	}
+
+	return nil
+}
+
+// LoadDiscordRaces loads Daily Sprint Races data from cache
+func (dc *DataCache) LoadDiscordRaces() (*DailySprintRacesResult, error) {
+	filename := filepath.Join(dc.cacheDir, "daily_races.json")
+
+	file, err := os.Open(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No cached data is not an error
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var result DailySprintRacesResult
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return &result, nil
+}
+
+// GetDiscordRacesAge returns the age of the cached Discord races data, or -1 if it doesn't exist
+func (dc *DataCache) GetDiscordRacesAge() time.Duration {
+	filename := filepath.Join(dc.cacheDir, "daily_races.json")
+	info, err := os.Stat(filename)
+	if err != nil {
+		return -1 // doesn't exist
+	}
+	return time.Since(info.ModTime())
 }
