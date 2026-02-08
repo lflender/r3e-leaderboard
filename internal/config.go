@@ -19,9 +19,10 @@ type ServerConfig struct {
 
 // ScheduleConfig holds scheduling configuration
 type ScheduleConfig struct {
-	RefreshHour     int `json:"refresh_hour"`
-	RefreshMinute   int `json:"refresh_minute"`
-	IndexingMinutes int `json:"indexing_minutes"`
+	RefreshHour                  int `json:"refresh_hour"`
+	RefreshMinute                int `json:"refresh_minute"`
+	IndexingMinutes              int `json:"indexing_minutes"`
+	DailyRaceRefreshIntervalMins int `json:"daily_race_refresh_interval_mins"` // How often to refresh Daily Race combinations (minutes)
 }
 
 // DiscordConfig holds Discord integration configuration
@@ -45,9 +46,10 @@ func GetDefaultConfig() Config {
 			Port: 8080,
 		},
 		Schedule: ScheduleConfig{
-			RefreshHour:     4,  // 4 AM
-			RefreshMinute:   45, // At the top of the hour
-			IndexingMinutes: 30, // Every 30 minutes during fetching
+			RefreshHour:                  4,  // 4 AM
+			RefreshMinute:                45, // At the top of the hour
+			IndexingMinutes:              30, // Every 30 minutes during fetching
+			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
 		Discord: DiscordConfig{
 			BotToken:         discordToken,

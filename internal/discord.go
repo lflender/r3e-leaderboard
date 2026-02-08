@@ -93,9 +93,8 @@ func (d *DiscordClient) FetchRecentMessages(ctx context.Context, withinMinutes i
 	}
 	defer resp.Body.Close()
 
-	log.Printf("📡 Discord API response: HTTP %d", resp.StatusCode)
-
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("📡 Discord API response: HTTP %d", resp.StatusCode)
 		body, _ := io.ReadAll(resp.Body)
 		log.Printf("❌ Discord API error details: %s", string(body))
 		return nil, fmt.Errorf("discord API error: %d - %s", resp.StatusCode, string(body))
@@ -106,7 +105,6 @@ func (d *DiscordClient) FetchRecentMessages(ctx context.Context, withinMinutes i
 		return nil, fmt.Errorf("failed to decode messages: %w", err)
 	}
 
-	log.Printf("📥 Received %d messages from Discord API", len(messages))
 	return messages, nil
 }
 
@@ -114,7 +112,6 @@ func (d *DiscordClient) FetchRecentMessages(ctx context.Context, withinMinutes i
 func (d *DiscordClient) FindDailySprintRacesMessage(messages []DiscordMessage) *DiscordMessage {
 	for i := range messages {
 		if strings.Contains(messages[i].Content, "Daily Sprint Races") {
-			log.Printf("✅ Found Daily Sprint Races in message (ID: %s)", messages[i].ID)
 			return &messages[i]
 		}
 	}
@@ -491,23 +488,17 @@ func normalizeForMatching(s string) string {
 // CheckForNewDailySprintRaces checks Discord for new Daily Sprint Races messages
 // and returns the parsed result if found
 func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinMinutes int) (*DailySprintRacesResult, error) {
-	log.Printf("📡 Checking Discord for Daily Sprint Races (last %d minutes)...", withinMinutes)
-
 	messages, err := d.FetchRecentMessages(ctx, withinMinutes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch Discord messages: %w", err)
 	}
 
-	log.Printf("📨 Found %d messages in the last %d minutes", len(messages), withinMinutes)
-
 	// Find message with Daily Sprint Races
 	raceMessage := d.FindDailySprintRacesMessage(messages)
 	if raceMessage == nil {
-		log.Println("ℹ️ No Daily Sprint Races message found in recent messages")
+		log.Println("ℹ️ No Daily Sprint Races message found")
 		return nil, nil
 	}
-
-	log.Printf("🏁 Found Daily Sprint Races message from %s", raceMessage.Timestamp.Format(time.RFC3339))
 
 	// Parse the message
 	result := ParseDailySprintRaces(raceMessage)

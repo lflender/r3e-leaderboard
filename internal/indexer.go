@@ -25,9 +25,10 @@ type IndexerCallbacks struct {
 
 // PeriodicIndexer handles periodic index rebuilding during data fetching
 type PeriodicIndexer struct {
-	ctx       context.Context
-	interval  time.Duration
-	callbacks IndexerCallbacks
+	ctx        context.Context
+	interval   time.Duration
+	callbacks  IndexerCallbacks
+	cycleCount int // Track indexing cycles for Daily Race refresh (every other cycle)
 }
 
 // NewPeriodicIndexer creates a new periodic indexer
@@ -79,6 +80,7 @@ func (pi *PeriodicIndexer) Start() {
 			select {
 			case <-ticker.C:
 				log.Println("⏱️ Periodic indexing tick fired")
+				pi.cycleCount++
 				state = pi.callbacks.GetState()
 
 				// Only index if we're still fetching and have some data
@@ -90,6 +92,14 @@ func (pi *PeriodicIndexer) Start() {
 						log.Printf("⚠️ Failed to promote temp cache: %v", err)
 					} else if promotedCount > 0 {
 						log.Printf("🔄 Promoted %d new cache files before indexing", promotedCount)
+					}
+
+					// Refresh Daily Race combinations every other cycle (e.g., every hour if indexing is every 30 mins)
+					if pi.cycleCount%2 == 0 {
+						log.Println("🏁 Refreshing Daily Race combinations (periodic)...")
+						if _, err := RefreshDailyRaceCombinations(pi.ctx); err != nil {
+							log.Printf("⚠️ Daily Race refresh failed during periodic indexing: %v", err)
+						}
 					}
 
 					// Rebuild index every interval during fetching

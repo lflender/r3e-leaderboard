@@ -47,26 +47,23 @@ func main() {
 	var discordClient *internal.DiscordClient
 	if config.Discord.Enabled {
 		discordClient = internal.NewDiscordClient(config.Discord)
-		log.Println("✅ Discord integration enabled")
+		log.Println("🔄 Phase 0: Fetching Discord schedule and refreshing daily races")
 
-		// Check for initial Daily Sprint Races message at startup
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
+		// Check for initial Daily Sprint Races message at startup (synchronous)
+		// This ensures the cache is updated BEFORE the orchestrator starts
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		result, err := discordClient.CheckForNewDailySprintRaces(ctx, config.Discord.MessageCheckMins)
+		cancel()
 
-			result, err := discordClient.CheckForNewDailySprintRaces(ctx, config.Discord.MessageCheckMins)
-			if err != nil {
-				log.Printf("⚠️ Failed to check Discord at startup: %v", err)
-			} else if result != nil {
-				// Save to cache
-				cache := internal.NewDataCache()
-				if saveErr := cache.SaveDiscordRaces(result); saveErr != nil {
-					log.Printf("⚠️ Failed to save Discord races to cache: %v", saveErr)
-				} else {
-					log.Printf("💾 Saved %d Daily Sprint Races to cache", len(result.Races))
-				}
+		if err != nil {
+			log.Printf("⚠️ Failed to check Discord at startup: %v", err)
+		} else if result != nil {
+			// Save to cache
+			cache := internal.NewDataCache()
+			if saveErr := cache.SaveDiscordRaces(result); saveErr != nil {
+				log.Printf("⚠️ Failed to save Discord races to cache: %v", saveErr)
 			}
-		}()
+		}
 	} else {
 		log.Println("ℹ️ Discord integration disabled (no bot token found)")
 	}
@@ -79,11 +76,9 @@ func main() {
 
 	// Promote any leftover temporary cache from previous runs before starting
 	tempCache := internal.NewTempDataCache()
-	promotedCount, err := tempCache.PromoteTempCache()
+	_, err := tempCache.PromoteTempCache()
 	if err != nil {
 		log.Printf("⚠️ Startup cache promotion error: %v", err)
-	} else if promotedCount > 0 {
-		log.Printf("🔄 Startup: promoted %d temp cache files", promotedCount)
 	}
 
 	// Start background operations
@@ -91,13 +86,15 @@ func main() {
 	orchestrator.StartScheduledRefresh(config.Schedule.RefreshHour, config.Schedule.RefreshMinute, config.Schedule.IndexingMinutes)
 	// Ultra-lightweight manual trigger via file sentinel
 	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60, config.Schedule.IndexingMinutes)
+	// Standalone Daily Race refresh loop (runs when system is idle)
+	orchestrator.StartDailyRaceRefreshLoop(config.Schedule.DailyRaceRefreshIntervalMins)
 
 	// Start periodic memory monitoring and GC
 	go periodicMemoryMonitoring(fetchContext)
 
-	// Start periodic Discord message checking if enabled
+	// Start Discord message checking if enabled (every hour before Daily Race refresh)
 	if config.Discord.Enabled && discordClient != nil {
-		go periodicDiscordChecking(fetchContext, discordClient, config.Discord.MessageCheckMins)
+		go periodicDiscordChecking(fetchContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
 	}
 
 	// Start HTTP server to serve static files
@@ -224,7 +221,7 @@ func periodicDiscordChecking(ctx context.Context, client *internal.DiscordClient
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
-	log.Printf("🔄 Discord message checking started (every %d minutes, looking back %d minutes)", checkMinutes, checkMinutes)
+	log.Printf("🔄 Discord message checking started (every %d minutes)", checkMinutes)
 
 	for {
 		select {
@@ -240,8 +237,6 @@ func periodicDiscordChecking(ctx context.Context, client *internal.DiscordClient
 				cache := internal.NewDataCache()
 				if saveErr := cache.SaveDiscordRaces(result); saveErr != nil {
 					log.Printf("⚠️ Failed to save Discord races to cache: %v", saveErr)
-				} else {
-					log.Printf("💾 Updated Daily Sprint Races cache (%d races)", len(result.Races))
 				}
 			}
 		case <-ctx.Done():

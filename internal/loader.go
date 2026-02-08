@@ -255,13 +255,10 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	log.Println("🔄 Promoting temporary cache to main cache...")
-	promotedCount, err := tempCache.PromoteTempCache()
+	_, err := tempCache.PromoteTempCache()
 	if err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
 		// Continue anyway - we still have the in-memory data
-	} else if promotedCount > 0 {
-		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
 	}
 
 	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
@@ -364,12 +361,9 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	log.Println("🔄 Promoting temporary cache to main cache...")
-	promotedCount, err := tempCache.PromoteTempCache()
+	_, err := tempCache.PromoteTempCache()
 	if err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
-	} else if promotedCount > 0 {
-		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
 	}
 
 	log.Printf("%s: fetched %d combinations (kept %d with data)", logPrefix, totalCombinations, len(allTrackData))
@@ -548,12 +542,9 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	log.Println("🔄 Promoting temporary cache to main cache...")
-	promotedCount, err := tempCache.PromoteTempCache()
+	_, err := tempCache.PromoteTempCache()
 	if err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
-	} else if promotedCount > 0 {
-		log.Printf("✅ Promoted %d cache files successfully", promotedCount)
 	}
 
 	// Export failed fetches
@@ -579,7 +570,6 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 		log.Printf("⚠️ Failed to export failed fetch data: %v", err)
 	}
 
-	log.Printf("✅ Targeted refresh complete: fetched %d combinations", len(allTrackData))
 	return allTrackData
 }
 
@@ -671,7 +661,7 @@ func FetchTargetedTrackDataWithCallback(ctx context.Context, trackIDs []string, 
 		}
 	}
 
-	log.Printf("📊 Targeted refresh: force-fetch %d combinations...", totalCombos)
+	log.Printf("📊 Refreshing %d Daily Race combinations...", totalCombos)
 
 	// Log what we're refreshing
 	for _, combo := range targetCombos {

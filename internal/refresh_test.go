@@ -169,3 +169,47 @@ func TestProgressCallback_Called(t *testing.T) {
 	// In a cancelled context, the callback may or may not be called
 	t.Logf("Progress callback was called %d times", callCount)
 }
+
+// =============================================================================
+// DAILY RACE REFRESH TESTS
+// =============================================================================
+
+func TestRefreshDailyRaceCombinations_NoCachedRaces(t *testing.T) {
+	// With no cached Daily Races, should return nil without error
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Note: This test assumes no daily_races.json exists in the cache directory
+	// In a fresh test environment, this should be the case
+	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+
+	if err != nil {
+		t.Logf("Got error (expected if cache dir doesn't exist): %v", err)
+	}
+
+	// Should return nil or empty when no races cached
+	t.Logf("Returned %d track IDs", len(trackIDs))
+}
+
+func TestRefreshDailyRaceCombinations_CancelledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// Should handle cancelled context gracefully
+	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+
+	if err != nil {
+		t.Logf("Got error with cancelled context: %v", err)
+	}
+
+	t.Logf("Returned %d track IDs with cancelled context", len(trackIDs))
+}
+
+func TestUpdateDailyRaceRefreshTime(t *testing.T) {
+	// This function should not panic even if status file doesn't exist
+	// It's a fire-and-forget operation
+	UpdateDailyRaceRefreshTime()
+
+	// Just verify it doesn't panic
+	t.Log("UpdateDailyRaceRefreshTime completed without panic")
+}

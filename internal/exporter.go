@@ -47,6 +47,8 @@ type StatusData struct {
 	DailySprintRacesCount int       `json:"daily_sprint_races_count"`
 	DailySprintRacesAge   string    `json:"daily_sprint_races_age,omitempty"`
 	DailySprintRacesTime  time.Time `json:"daily_sprint_races_time"`
+	// Daily Race refresh tracking
+	LastDailyRaceRefresh time.Time `json:"last_daily_race_refresh"`
 }
 
 // TrackCombination represents a track/class combination with entry count

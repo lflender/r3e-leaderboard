@@ -3,7 +3,78 @@ package internal
 import (
 	"context"
 	"log"
+	"time"
 )
+
+// RefreshDailyRaceCombinations refreshes only the track/class combinations
+// from the cached Daily Races data. Returns the track IDs that were refreshed.
+// This is a lightweight refresh that only fetches a few combinations (typically 5-6).
+func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
+	cache := NewDataCache()
+	dailyRaces, err := cache.LoadDiscordRaces()
+	if err != nil {
+		return nil, err
+	}
+
+	if dailyRaces == nil || len(dailyRaces.Races) == 0 {
+		log.Println("ℹ️ No Daily Races cached - skipping Daily Race refresh")
+		return nil, nil
+	}
+
+	// Extract unique track-class combinations that are fully matched
+	seen := make(map[string]bool)
+	var trackIDs []string
+
+	for _, race := range dailyRaces.Races {
+		if !race.MatchedOK || race.TrackID == "" || race.CarClassID == "" {
+			continue
+		}
+
+		// Format: "trackID-classID" for targeted refresh
+		key := race.TrackID + "-" + race.CarClassID
+		if !seen[key] {
+			seen[key] = true
+			trackIDs = append(trackIDs, key)
+		}
+	}
+
+	if len(trackIDs) == 0 {
+		log.Println("ℹ️ No matched Daily Race combinations to refresh")
+		return nil, nil
+	}
+
+	// Fetch fresh data for these specific combinations
+	// Use FetchTargetedTrackDataWithCallback but without triggering indexing
+	tempCache := NewTempDataCache()
+	fetchedTracks := FetchTargetedTrackDataWithCallback(ctx, trackIDs, nil, "daily-races")
+
+	// Save fetched data to temp cache, then promote
+	for _, track := range fetchedTracks {
+		if err := tempCache.SaveTrackData(track); err != nil {
+			log.Printf("⚠️ Failed to save Daily Race data: %v", err)
+		}
+	}
+
+	// Promote temp cache to main cache
+	_, err = tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Failed to promote Daily Race cache: %v", err)
+	}
+
+	// Update status with last refresh time
+	UpdateDailyRaceRefreshTime()
+
+	return trackIDs, nil
+}
+
+// UpdateDailyRaceRefreshTime updates the status.json with the current Daily Race refresh timestamp
+func UpdateDailyRaceRefreshTime() {
+	existingStatus := ReadStatusData()
+	existingStatus.LastDailyRaceRefresh = time.Now()
+	if err := ExportStatusData(existingStatus); err != nil {
+		log.Printf("⚠️ Failed to update Daily Race refresh time: %v", err)
+	}
+}
 
 // PerformFullRefresh executes a full force-fetch refresh of all combinations
 // Returns the merged result of cached + fetched tracks
@@ -52,8 +123,6 @@ func PerformTargetedRefresh(ctx context.Context, trackIDs []string, progressCall
 
 	// Build final merged result
 	finalMerged := MergeTracks(cachedTracks, fetchedTracks)
-
-	log.Printf("✅ Targeted refresh complete: %d total combinations", len(finalMerged))
 
 	return finalMerged
 }
