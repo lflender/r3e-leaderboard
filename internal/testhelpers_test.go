@@ -21,6 +21,7 @@ type TestFixtures struct {
 	SampleDiscordMessage11 string // Nov 3, 2025 - Praga, Carrera Cup, Norisring
 	SampleDiscordMessage12 string // Oct 27, 2025 - Audi TT Cup, Falkenberg, Group C
 	SampleDiscordMessage13 string // Oct 20, 2025 - Audi RS 5 DTM 2016, FRX 22, Watkins Glen
+	SampleDiscordMessage14 string // Feb 9, 2026 - WTCR 18-22 range, DTM 2016, Nürburgring typo
 	SampleTrackData        []map[string]interface{}
 }
 
@@ -343,6 +344,25 @@ Every half hour (--:15, --:45) LB fixed setup
 Every hour (--:30) LB open setup
 🏁 F4 – Suzuka GP
 Every hour (--:00) LB fixed setup`,
+
+		// Feb 9, 2026 - WTCR 18-22 range, DTM 2016, Nürburgring typo, Gelleråsen
+		SampleDiscordMessage14: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+ 
+Daily Sprint Races (15 min)
+🆓 GT4 – Sachsenring
+Every hour (--:20, --:50) LB fixed setup Weekly F2P
+
+🏁 F4 – Zandvoort GP
+Every hour (--:25) LB fixed setup
+🏁 Super Touring – Watkins Glen
+Every hour (--:10, --:40) LB fixed setup
+🏁 WTCR 18-22 – Gelleråsen GP
+Every other hour (--:35) LB fixed setup
+🏁 MX5 – Monza GP
+Every other hour (--:55) LB fixed setup
+:DTM:  DTM 2016 – Nürbrugring GP fast Chicane
+Every half hour (--:15, --:45) LB fixed setup`,
 
 		// Sample leaderboard data matching real API structure
 		SampleTrackData: []map[string]interface{}{

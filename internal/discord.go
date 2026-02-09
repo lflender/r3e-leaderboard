@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -146,6 +147,8 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 
 	// Common section headers that might follow Daily Sprint Races
 	endMarkers := []string{
+		"Daily Feature Races",
+		"Weekly Races",
 		"Special Events",
 		"Endurance Races",
 		"Daily Endurance",
@@ -320,13 +323,13 @@ func extractSchedule(line string) string {
 }
 
 // matchRaceIDs matches car classes and tracks to their IDs from models.go
-// Also handles multi-class aliases (e.g., "TT Cup" → both 2015 and 2016 versions)
+// Handles multi-class aliases (e.g., "TT Cup" → both 2015 and 2016 versions)
+// and range patterns (e.g., "WTCR 18-22" → WTCR 2018, 2019, 2020, 2021, 2022)
 func matchRaceIDs(result *DailySprintRacesResult) {
 	tracks := GetTracks()
 	carClasses := GetCarClasses()
 	multiClassAliases := GetDiscordMultiClassAliases()
 
-	// First pass: expand multi-class aliases
 	var expandedRaces []DailySprintRace
 	for _, race := range result.Races {
 		if !race.ParsedOK {
@@ -334,15 +337,27 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 			continue
 		}
 
-		// Check if this race uses a multi-class alias
 		normalizedClass := normalizeForMatching(race.CarClass)
+
 		if classNames, ok := multiClassAliases[normalizedClass]; ok {
-			// Create a race entry for each class
+			// Multi-class alias expansion (e.g., "TT Cup" → 2015 + 2016)
+			trackID := findTrackID(race.Track, tracks)
 			for _, className := range classNames {
-				newRace := race // Copy the race
+				newRace := race
 				newRace.CarClass = className
 				newRace.CarClassID = findCarClassIDByExactName(className, carClasses)
-				newRace.TrackID = findTrackID(race.Track, tracks)
+				newRace.TrackID = trackID
+				newRace.MatchedOK = newRace.CarClassID != "" && newRace.TrackID != ""
+				expandedRaces = append(expandedRaces, newRace)
+			}
+		} else if rangeClasses := expandCarClassRange(race.CarClass); rangeClasses != nil {
+			// Range expansion (e.g., "WTCR 18-22" → WTCR 2018..2022)
+			trackID := findTrackID(race.Track, tracks)
+			for _, className := range rangeClasses {
+				newRace := race
+				newRace.CarClass = className
+				newRace.CarClassID = findCarClassID(className, carClasses)
+				newRace.TrackID = trackID
 				newRace.MatchedOK = newRace.CarClassID != "" && newRace.TrackID != ""
 				expandedRaces = append(expandedRaces, newRace)
 			}
@@ -356,6 +371,54 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 	}
 
 	result.Races = expandedRaces
+}
+
+// expandCarClassRange detects range patterns like "WTCR 18-22" and returns
+// expanded class names ["WTCR 2018", "WTCR 2019", "WTCR 2020", "WTCR 2021", "WTCR 2022"].
+// Returns nil if the className is not a range pattern.
+func expandCarClassRange(className string) []string {
+	trimmed := strings.TrimSpace(className)
+
+	// Match "BaseName YY-YY" where YY are 2-digit year numbers
+	// Support regular hyphen, en-dash, and em-dash as range separators
+	re := regexp.MustCompile(`^(.+?)\s+(\d{2})\s*[-–—]\s*(\d{2})$`)
+	matches := re.FindStringSubmatch(trimmed)
+	if len(matches) != 4 {
+		return nil
+	}
+
+	baseName := strings.TrimSpace(matches[1])
+	startYearShort, err1 := strconv.Atoi(matches[2])
+	endYearShort, err2 := strconv.Atoi(matches[3])
+	if err1 != nil || err2 != nil {
+		return nil
+	}
+
+	startYear := toFullYear(startYearShort)
+	endYear := toFullYear(endYearShort)
+
+	if startYear > endYear || endYear-startYear > 20 {
+		return nil
+	}
+
+	var result []string
+	for year := startYear; year <= endYear; year++ {
+		result = append(result, fmt.Sprintf("%s %d", baseName, year))
+	}
+
+	return result
+}
+
+// toFullYear converts a 2-digit year to a 4-digit year.
+// Years 0-49 map to 2000-2049, years 50-99 map to 1950-1999.
+func toFullYear(shortYear int) int {
+	if shortYear >= 100 {
+		return shortYear
+	}
+	if shortYear < 50 {
+		return 2000 + shortYear
+	}
+	return 1900 + shortYear
 }
 
 // findCarClassIDByExactName finds the class ID for an exact class name match
