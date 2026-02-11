@@ -32,15 +32,16 @@ type DiscordMessage struct {
 
 // DailySprintRace represents a parsed race from the Daily Sprint Races section
 type DailySprintRace struct {
-	RawLine      string `json:"raw_line"`        // Original line from Discord
-	CarClass     string `json:"car_class"`       // Parsed car class name
-	CarClassID   string `json:"car_class_id"`    // Matched class ID from models.go
-	Track        string `json:"track"`           // Parsed track name
-	TrackID      string `json:"track_id"`        // Matched track ID from models.go
-	IsFreeToPlay bool   `json:"is_free_to_play"` // Whether marked as F2P (🆓)
-	Schedule     string `json:"schedule"`        // e.g., "Every hour (--:20, --:50)"
-	ParsedOK     bool   `json:"parsed_ok"`       // Whether parsing was successful
-	MatchedOK    bool   `json:"matched_ok"`      // Whether IDs were found
+	RawLine      string   `json:"raw_line"`                     // Original line from Discord
+	CarClass     string   `json:"car_class"`                    // Parsed car class name
+	CarClassID   string   `json:"car_class_id"`                 // Matched class ID from models.go
+	CategoryIDs  []string `json:"category_class_ids,omitempty"` // Optional combined class IDs
+	Track        string   `json:"track"`                        // Parsed track name
+	TrackID      string   `json:"track_id"`                     // Matched track ID from models.go
+	IsFreeToPlay bool     `json:"is_free_to_play"`              // Whether marked as F2P (🆓)
+	Schedule     string   `json:"schedule"`                     // e.g., "Every hour (--:20, --:50)"
+	ParsedOK     bool     `json:"parsed_ok"`                    // Whether parsing was successful
+	MatchedOK    bool     `json:"matched_ok"`                   // Whether IDs were found
 }
 
 // DailySprintRacesResult holds the parsed Daily Sprint Races data
@@ -225,6 +226,11 @@ func isRaceLine(line string) bool {
 		return true
 	}
 
+	// Check for custom Discord emoji format <:name:id> or <a:name:id>
+	if matched, _ := regexp.MatchString(`^<a?:[a-zA-Z0-9_]+:\d+>`, line); matched {
+		return true
+	}
+
 	return false
 }
 
@@ -272,6 +278,10 @@ func parseRaceLine(line string) *DailySprintRace {
 
 // cleanRaceLine removes emoji and special characters from the line
 func cleanRaceLine(line string) string {
+	// Remove custom Discord emoji <:name:id> or <a:name:id>
+	reCustom := regexp.MustCompile(`<a?:[a-zA-Z0-9_]+:\d+>`)
+	line = reCustom.ReplaceAllString(line, "")
+
 	// Remove custom Discord emoji :name:
 	re := regexp.MustCompile(`:[a-zA-Z0-9_]+:`)
 	line = re.ReplaceAllString(line, "")
@@ -338,6 +348,17 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 		}
 
 		normalizedClass := normalizeForMatching(race.CarClass)
+		if category := rangeClassCategory(normalizedClass); category != "" {
+			// Treat certain ranges as a single category entry for the frontend
+			newRace := race
+			newRace.CarClass = category
+			newRace.CarClassID = category
+			newRace.CategoryIDs = getCategoryClassIDs(category, carClasses)
+			newRace.TrackID = findTrackID(race.Track, tracks)
+			newRace.MatchedOK = newRace.TrackID != ""
+			expandedRaces = append(expandedRaces, newRace)
+			continue
+		}
 
 		if classNames, ok := multiClassAliases[normalizedClass]; ok {
 			// Multi-class alias expansion (e.g., "TT Cup" → 2015 + 2016)
@@ -394,6 +415,10 @@ func expandCarClassRange(className string) []string {
 		return nil
 	}
 
+	if isWTCRCategoryRange(baseName, startYearShort, endYearShort) {
+		return nil
+	}
+
 	startYear := toFullYear(startYearShort)
 	endYear := toFullYear(endYearShort)
 
@@ -407,6 +432,54 @@ func expandCarClassRange(className string) []string {
 	}
 
 	return result
+}
+
+func rangeClassCategory(normalizedClass string) string {
+	re := regexp.MustCompile(`^(.+?)\s+(\d{2})\s*-\s*(\d{2})$`)
+	matches := re.FindStringSubmatch(normalizedClass)
+	if len(matches) != 4 {
+		return ""
+	}
+	baseName := strings.TrimSpace(matches[1])
+	startYearShort, err1 := strconv.Atoi(matches[2])
+	endYearShort, err2 := strconv.Atoi(matches[3])
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	if isWTCRCategoryRange(baseName, startYearShort, endYearShort) {
+		return "WTCR"
+	}
+	return ""
+}
+
+func isWTCRCategoryRange(baseName string, startYearShort int, endYearShort int) bool {
+	if normalizeForMatching(baseName) != "wtcr" {
+		return false
+	}
+	return startYearShort == 18 && endYearShort == 22
+}
+
+func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
+	if normalizeForMatching(category) != "wtcr" {
+		return nil
+	}
+
+	classNames := []string{
+		"WTCR 2018",
+		"WTCR 2019",
+		"WTCR 2020",
+		"WTCR 2021",
+		"WTCR 2022",
+	}
+
+	ids := make([]string, 0, len(classNames))
+	for _, name := range classNames {
+		if id := findCarClassIDByExactName(name, classes); id != "" {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
 }
 
 // toFullYear converts a 2-digit year to a 4-digit year.

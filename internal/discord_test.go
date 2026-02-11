@@ -1316,19 +1316,17 @@ func TestParseDailySprintRaces_Feb9Message(t *testing.T) {
 	// GT4 – Sachsenring: class=5825, track=3538
 	// F4 – Zandvoort GP: class=4867, track=10782
 	// Super Touring – Watkins Glen: class=1710, track=9344
-	// WTCR 18-22 – Gelleråsen GP: expands to 5 classes (7009, 7844, 9233, 10344, 11317), track=5925
+	// WTCR 18-22 – Gelleråsen GP: treated as a single WTCR category, track=5925
 	// MX5 – Monza GP: class=10977, track=1671
 	// DTM 2016 – Nürbrugring GP fast Chicane: class=5262, track=2010
-	// Total: 3 single + N WTCR expanded + 1 MX5 + 1 DTM
-	wtcrExpanded := expandCarClassRange("WTCR 18-22")
-	expectedRaceCount := 3 + len(wtcrExpanded) + 1 + 1 // GT4+F4+ST, WTCR range, MX5, DTM
+	// Total: 6 races (WTCR 18-22 is now treated as a single category, not expanded)
+	expectedRaceCount := 6
 	if len(result.Races) != expectedRaceCount {
-		t.Errorf("Expected %d races (WTCR 18-22 expanded to %d), got %d",
-			expectedRaceCount, len(wtcrExpanded), len(result.Races))
+		t.Errorf("Expected %d races, got %d", expectedRaceCount, len(result.Races))
 	}
 
-	// Verify non-expanded races
-	singleClassExpected := []struct {
+	// Verify all races including the WTCR category
+	racesExpected := []struct {
 		carClass string
 		classID  string
 		trackID  string
@@ -1336,11 +1334,12 @@ func TestParseDailySprintRaces_Feb9Message(t *testing.T) {
 		{"GT4", "5825", "3538"},           // Sachsenring
 		{"F4", "4867", "10782"},           // Zandvoort GP
 		{"Super Touring", "1710", "9344"}, // Watkins Glen
+		{"WTCR", "WTCR", "5925"},          // Gelleråsen GP category (not expanded)
 		{"MX5", "10977", "1671"},          // Monza GP
 		{"DTM 2016", "5262", "2010"},      // Nürbrugring GP fast Chicane (typo)
 	}
 
-	for _, expected := range singleClassExpected {
+	for _, expected := range racesExpected {
 		found := false
 		for _, race := range result.Races {
 			if race.CarClass == expected.carClass {
@@ -1364,40 +1363,27 @@ func TestParseDailySprintRaces_Feb9Message(t *testing.T) {
 		}
 	}
 
-	// Verify WTCR range expansion: all 5 classes should be present with Gelleråsen track
-	wtcrExpected := []struct {
-		className string
-		classID   string
-	}{
-		{"WTCR 2018", "7009"},
-		{"WTCR 2019", "7844"},
-		{"WTCR 2020", "9233"},
-		{"WTCR 2021", "10344"},
-		{"WTCR 2022", "11317"},
-	}
-
-	for _, expected := range wtcrExpected {
-		found := false
-		for _, race := range result.Races {
-			if race.CarClass == expected.className {
-				found = true
-				if race.CarClassID != expected.classID {
-					t.Errorf("WTCR range: %s expected classID '%s', got '%s'",
-						expected.className, expected.classID, race.CarClassID)
+	// Verify WTCR category has all 5 class IDs in CategoryIDs field
+	wtcrFound := false
+	wtcrExpectedIDs := []string{"7009", "7844", "9233", "10344", "11317"}
+	for _, race := range result.Races {
+		if race.CarClass == "WTCR" {
+			wtcrFound = true
+			if len(race.CategoryIDs) != 5 {
+				t.Errorf("WTCR category expected 5 class IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			} else {
+				// Verify the specific IDs are present
+				for i, expectedID := range wtcrExpectedIDs {
+					if i < len(race.CategoryIDs) && race.CategoryIDs[i] != expectedID {
+						t.Errorf("WTCR CategoryIDs[%d]: expected '%s', got '%s'", i, expectedID, race.CategoryIDs[i])
+					}
 				}
-				if race.TrackID != "5925" {
-					t.Errorf("WTCR range: %s expected trackID '5925' (Gelleråsen GP), got '%s'",
-						expected.className, race.TrackID)
-				}
-				if !race.MatchedOK {
-					t.Errorf("WTCR range: %s should be MatchedOK", expected.className)
-				}
-				break
 			}
+			break
 		}
-		if !found {
-			t.Errorf("WTCR range expansion: expected class '%s' not found", expected.className)
-		}
+	}
+	if !wtcrFound {
+		t.Error("WTCR category race not found")
 	}
 
 	// Verify all races are matched
@@ -1421,8 +1407,8 @@ func TestExpandCarClassRange(t *testing.T) {
 	}{
 		{
 			input:    "WTCR 18-22",
-			expected: []string{"WTCR 2018", "WTCR 2019", "WTCR 2020", "WTCR 2021", "WTCR 2022"},
-			desc:     "WTCR range 2018-2022",
+			expected: nil,
+			desc:     "WTCR 18-22 handled as category",
 		},
 		{
 			input:    "DTM 92-95",
@@ -1506,6 +1492,201 @@ func TestToFullYear(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("toFullYear(%d) = %d, expected %d", test.input, result, test.expected)
 		}
+	}
+}
+
+// =============================================================================
+// CATEGORY RANGE TESTS
+// =============================================================================
+
+func TestRangeClassCategory(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		desc     string
+	}{
+		{
+			input:    "wtcr 18-22",
+			expected: "WTCR",
+			desc:     "WTCR 18-22 returns WTCR category",
+		},
+		{
+			input:    "WTCR 18-22",
+			expected: "WTCR",
+			desc:     "WTCR 18-22 (uppercase) returns WTCR category",
+		},
+		{
+			input:    "wtcr 20-22",
+			expected: "",
+			desc:     "WTCR 20-22 (different range) returns empty",
+		},
+		{
+			input:    "dtm 18-22",
+			expected: "",
+			desc:     "DTM 18-22 (different class) returns empty",
+		},
+		{
+			input:    "wtcr 2018-2022",
+			expected: "",
+			desc:     "WTCR 2018-2022 (4-digit years) returns empty",
+		},
+		{
+			input:    "GT3",
+			expected: "",
+			desc:     "Non-range pattern returns empty",
+		},
+		{
+			input:    "",
+			expected: "",
+			desc:     "Empty string returns empty",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			result := rangeClassCategory(test.input)
+			if result != test.expected {
+				t.Errorf("rangeClassCategory(%q) = %q, expected %q",
+					test.input, result, test.expected)
+			}
+		})
+	}
+}
+
+func TestIsWTCRCategoryRange(t *testing.T) {
+	tests := []struct {
+		baseName  string
+		startYear int
+		endYear   int
+		expected  bool
+		desc      string
+	}{
+		{
+			baseName:  "wtcr",
+			startYear: 18,
+			endYear:   22,
+			expected:  true,
+			desc:      "WTCR 18-22 is a category range",
+		},
+		{
+			baseName:  "WTCR",
+			startYear: 18,
+			endYear:   22,
+			expected:  true,
+			desc:      "WTCR 18-22 (uppercase) is a category range",
+		},
+		{
+			baseName:  "wtcr",
+			startYear: 20,
+			endYear:   22,
+			expected:  false,
+			desc:      "WTCR 20-22 is not the category range",
+		},
+		{
+			baseName:  "wtcr",
+			startYear: 18,
+			endYear:   21,
+			expected:  false,
+			desc:      "WTCR 18-21 is not the category range",
+		},
+		{
+			baseName:  "dtm",
+			startYear: 18,
+			endYear:   22,
+			expected:  false,
+			desc:      "DTM 18-22 is not a WTCR category range",
+		},
+		{
+			baseName:  "gt3",
+			startYear: 18,
+			endYear:   22,
+			expected:  false,
+			desc:      "GT3 18-22 is not a WTCR category range",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			result := isWTCRCategoryRange(test.baseName, test.startYear, test.endYear)
+			if result != test.expected {
+				t.Errorf("isWTCRCategoryRange(%q, %d, %d) = %v, expected %v",
+					test.baseName, test.startYear, test.endYear, result, test.expected)
+			}
+		})
+	}
+}
+
+func TestGetCategoryClassIDs(t *testing.T) {
+	classes := GetCarClasses()
+
+	tests := []struct {
+		category    string
+		expectedIDs []string
+		desc        string
+	}{
+		{
+			category: "WTCR",
+			expectedIDs: []string{
+				"7009",  // WTCR 2018
+				"7844",  // WTCR 2019
+				"9233",  // WTCR 2020
+				"10344", // WTCR 2021
+				"11317", // WTCR 2022
+			},
+			desc: "WTCR category returns all 5 class IDs",
+		},
+		{
+			category: "wtcr",
+			expectedIDs: []string{
+				"7009",  // WTCR 2018
+				"7844",  // WTCR 2019
+				"9233",  // WTCR 2020
+				"10344", // WTCR 2021
+				"11317", // WTCR 2022
+			},
+			desc: "wtcr (lowercase) category returns all 5 class IDs",
+		},
+		{
+			category:    "DTM",
+			expectedIDs: nil,
+			desc:        "Non-WTCR category returns nil",
+		},
+		{
+			category:    "GT3",
+			expectedIDs: nil,
+			desc:        "GT3 category returns nil",
+		},
+		{
+			category:    "",
+			expectedIDs: nil,
+			desc:        "Empty category returns nil",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			result := getCategoryClassIDs(test.category, classes)
+
+			if test.expectedIDs == nil {
+				if result != nil {
+					t.Errorf("getCategoryClassIDs(%q) = %v, expected nil", test.category, result)
+				}
+				return
+			}
+
+			if len(result) != len(test.expectedIDs) {
+				t.Errorf("getCategoryClassIDs(%q) returned %d IDs, expected %d: %v",
+					test.category, len(result), len(test.expectedIDs), result)
+				return
+			}
+
+			for i, expectedID := range test.expectedIDs {
+				if result[i] != expectedID {
+					t.Errorf("getCategoryClassIDs(%q)[%d] = %q, expected %q",
+						test.category, i, result[i], expectedID)
+				}
+			}
+		})
 	}
 }
 
