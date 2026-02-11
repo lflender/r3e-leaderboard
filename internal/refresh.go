@@ -30,6 +30,24 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 			continue
 		}
 
+		if len(race.CategoryIDs) > 0 {
+			for _, classID := range race.CategoryIDs {
+				if !isNumericID(classID) {
+					continue
+				}
+				key := race.TrackID + "-" + classID
+				if !seen[key] {
+					seen[key] = true
+					trackIDs = append(trackIDs, key)
+				}
+			}
+			continue
+		}
+
+		if !isNumericID(race.CarClassID) {
+			continue
+		}
+
 		// Format: "trackID-classID" for targeted refresh
 		key := race.TrackID + "-" + race.CarClassID
 		if !seen[key] {
@@ -65,6 +83,18 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 	UpdateDailyRaceRefreshTime()
 
 	return trackIDs, nil
+}
+
+func isNumericID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // UpdateDailyRaceRefreshTime updates the status.json with the current Daily Race refresh timestamp

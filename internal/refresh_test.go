@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // =============================================================================
@@ -212,4 +213,111 @@ func TestUpdateDailyRaceRefreshTime(t *testing.T) {
 
 	// Just verify it doesn't panic
 	t.Log("UpdateDailyRaceRefreshTime completed without panic")
+}
+
+// =============================================================================
+// CATEGORY HANDLING TESTS
+// =============================================================================
+
+func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
+	// Test that races with CategoryIDs (like WTCR 18-22) are correctly expanded
+	// into multiple track-class combinations for refresh
+
+	cache := NewDataCache()
+
+	// Create a mock daily races result with a category
+	mockRaces := &DailySprintRacesResult{
+		Races: []DailySprintRace{
+			// Normal single-class race
+			{
+				CarClass:    "GT3",
+				CarClassID:  "1703",
+				TrackID:     "7112",
+				MatchedOK:   true,
+				CategoryIDs: nil,
+			},
+			// WTCR category race with multiple class IDs
+			{
+				CarClass:   "WTCR",
+				CarClassID: "WTCR",
+				TrackID:    "5925",
+				CategoryIDs: []string{
+					"7009",  // WTCR 2018
+					"7844",  // WTCR 2019
+					"9233",  // WTCR 2020
+					"10344", // WTCR 2021
+					"11317", // WTCR 2022
+				},
+				MatchedOK: true,
+			},
+			// Another normal race
+			{
+				CarClass:    "F4",
+				CarClassID:  "4867",
+				TrackID:     "10782",
+				MatchedOK:   true,
+				CategoryIDs: nil,
+			},
+		},
+		MessageID:   "test_msg",
+		MessageTime: time.Now(),
+		ParsedAt:    time.Now(),
+	}
+
+	// Save the mock races to cache
+	if err := cache.SaveDiscordRaces(mockRaces); err != nil {
+		t.Fatalf("Failed to save mock races: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancel() // Cancel immediately to prevent actual API fetches
+
+	// Call RefreshDailyRaceCombinations
+	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+
+	// We expect it to identify all track-class combinations
+	// The error might be context cancelled, but we should still get the trackIDs
+	if err != nil && err != context.Canceled {
+		t.Logf("Got non-cancellation error: %v", err)
+	}
+
+	// Expected combinations:
+	// 1. GT3: 7112-1703
+	// 2. WTCR 2018: 5925-7009
+	// 3. WTCR 2019: 5925-7844
+	// 4. WTCR 2020: 5925-9233
+	// 5. WTCR 2021: 5925-10344
+	// 6. WTCR 2022: 5925-11317
+	// 7. F4: 10782-4867
+	// Total: 7 combinations
+
+	expectedCombinations := []string{
+		"7112-1703",  // GT3
+		"5925-7009",  // WTCR 2018
+		"5925-7844",  // WTCR 2019
+		"5925-9233",  // WTCR 2020
+		"5925-10344", // WTCR 2021
+		"5925-11317", // WTCR 2022
+		"10782-4867", // F4
+	}
+
+	if len(trackIDs) != len(expectedCombinations) {
+		t.Errorf("Expected %d track-class combinations, got %d: %v",
+			len(expectedCombinations), len(trackIDs), trackIDs)
+	}
+
+	// Verify each expected combination is present
+	foundCombos := make(map[string]bool)
+	for _, id := range trackIDs {
+		foundCombos[id] = true
+	}
+
+	for _, expected := range expectedCombinations {
+		if !foundCombos[expected] {
+			t.Errorf("Expected combination '%s' not found in results", expected)
+		}
+	}
+
+	t.Logf("✅ Successfully identified %d track-class combinations from category races", len(trackIDs))
 }

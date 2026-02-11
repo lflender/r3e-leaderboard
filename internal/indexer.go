@@ -98,10 +98,14 @@ func (pi *PeriodicIndexer) Start() {
 					// Refresh Daily Race combinations every other cycle (e.g., every hour if indexing is every 30 mins)
 					if pi.cycleCount%2 == 0 {
 						log.Println("🏁 Refreshing Daily Race combinations (periodic)...")
-						if _, err := RefreshDailyRaceCombinations(pi.ctx); err != nil {
+						trackIDs, err := RefreshDailyRaceCombinations(pi.ctx)
+						if err != nil {
 							log.Printf("⚠️ Daily Race refresh failed during periodic indexing: %v", err)
 						} else {
 							pi.callbacks.UpdateDailyRaceRefreshTime()
+							if len(trackIDs) > 0 {
+								state.Tracks = mergeCachedCombinations(state.Tracks, trackIDs)
+							}
 						}
 					}
 
@@ -123,6 +127,41 @@ func (pi *PeriodicIndexer) Start() {
 			}
 		}
 	}()
+}
+
+func mergeCachedCombinations(tracks []TrackInfo, comboIDs []string) []TrackInfo {
+	if len(comboIDs) == 0 {
+		return tracks
+	}
+
+	updated := make(map[string]TrackInfo, len(tracks)+len(comboIDs))
+	for _, track := range tracks {
+		key := track.TrackID + "_" + track.ClassID
+		updated[key] = track
+	}
+
+	cache := NewDataCache()
+	for _, token := range comboIDs {
+		parts := strings.Split(token, "-")
+		if len(parts) != 2 {
+			continue
+		}
+		trackID := parts[0]
+		classID := parts[1]
+		trackInfo, err := cache.LoadTrackData(trackID, classID)
+		if err != nil {
+			continue
+		}
+		key := trackInfo.TrackID + "_" + trackInfo.ClassID
+		updated[key] = trackInfo
+	}
+
+	merged := make([]TrackInfo, 0, len(updated))
+	for _, track := range updated {
+		merged = append(merged, track)
+	}
+
+	return merged
 }
 
 // buildDriverIndex builds a driver index from track data

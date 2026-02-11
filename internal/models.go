@@ -457,5 +457,11 @@ func GetDiscordTrackAliases() map[string]string {
 		"macau":                             "Macau - Guia Circuit",
 		"mid ohio full":                     "Mid Ohio - Full",
 		"nürburgring gp fc":                 "Nürburgring - Grand Prix Fast Chicane",
+		"nürburgring gp fast chicane":       "Nürburgring - Grand Prix Fast Chicane",
+		"nürbrugring gp fast chicane":       "Nürburgring - Grand Prix Fast Chicane",
+		"monza gp":                          "Monza Circuit - Grand Prix",
+		"gelleråsen gp":                     "Gelleråsen Arena - Grand Prix Circuit",
+		"gellerasen gp":                     "Gelleråsen Arena - Grand Prix Circuit",
+		"watkins glen gp":                   "Watkins Glen International - Grand Prix",
 	}
 }
