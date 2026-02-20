@@ -348,6 +348,9 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 		}
 
 		normalizedClass := normalizeForMatching(race.CarClass)
+		// Also try stripping metadata in parentheses for matching
+		normalizedClassNoMeta := stripMetadata(normalizedClass)
+		
 		if category := rangeClassCategory(normalizedClass); category != "" {
 			// Treat certain ranges as a single category entry for the frontend
 			newRace := race
@@ -360,17 +363,39 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 			continue
 		}
 
-		if classNames, ok := multiClassAliases[normalizedClass]; ok {
-			// Multi-class alias expansion (e.g., "TT Cup" → 2015 + 2016)
-			trackID := findTrackID(race.Track, tracks)
-			for _, className := range classNames {
-				newRace := race
-				newRace.CarClass = className
-				newRace.CarClassID = findCarClassIDByExactName(className, carClasses)
-				newRace.TrackID = trackID
-				newRace.MatchedOK = newRace.CarClassID != "" && newRace.TrackID != ""
-				expandedRaces = append(expandedRaces, newRace)
+		// Try multi-class aliases with both full normalized string and stripped metadata version
+		var classNames []string
+		if names, ok := multiClassAliases[normalizedClass]; ok {
+			classNames = names
+		} else if normalizedClassNoMeta != normalizedClass {
+			if names, ok := multiClassAliases[normalizedClassNoMeta]; ok {
+				classNames = names
 			}
+		}
+
+		if len(classNames) > 0 {
+			// Multi-class alias becomes a single category entry (e.g., "TT Cup" → 2015 + 2016)
+			newRace := race
+			// For multi-class aliases, use the cleaned base name for CarClass
+			carClassName := normalizedClassNoMeta
+			if carClassName == "gt3" {
+				carClassName = "GT3"
+			} else if carClassName == "tt cup" {
+				carClassName = "TT Cup"
+			} else if carClassName == "audi tt cup" {
+				carClassName = "Audi TT Cup"
+			}
+			newRace.CarClass = carClassName
+			newRace.CarClassID = carClassName
+			newRace.TrackID = findTrackID(race.Track, tracks)
+			newRace.CategoryIDs = nil
+			for _, className := range classNames {
+				if id := findCarClassIDByExactName(className, carClasses); id != "" {
+					newRace.CategoryIDs = append(newRace.CategoryIDs, id)
+				}
+			}
+			newRace.MatchedOK = newRace.TrackID != "" && len(newRace.CategoryIDs) > 0
+			expandedRaces = append(expandedRaces, newRace)
 		} else if rangeClasses := expandCarClassRange(race.CarClass); rangeClasses != nil {
 			// Range expansion (e.g., "WTCR 18-22" → WTCR 2018..2022)
 			trackID := findTrackID(race.Track, tracks)
@@ -618,6 +643,15 @@ func normalizeForMatching(s string) string {
 	s = strings.ReplaceAll(s, "—", "-")
 	// Remove extra spaces
 	s = strings.Join(strings.Fields(s), " ")
+	return s
+}
+
+// stripMetadata removes metadata in parentheses from a car class name
+// e.g., "gt3 (huracan)" → "gt3"
+func stripMetadata(s string) string {
+	if idx := strings.Index(s, "("); idx >= 0 {
+		return strings.TrimSpace(s[:idx])
+	}
 	return s
 }
 

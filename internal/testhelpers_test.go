@@ -22,6 +22,7 @@ type TestFixtures struct {
 	SampleDiscordMessage12 string // Oct 27, 2025 - Audi TT Cup, Falkenberg, Group C
 	SampleDiscordMessage13 string // Oct 20, 2025 - Audi RS 5 DTM 2016, FRX 22, Watkins Glen
 	SampleDiscordMessage14 string // Feb 9, 2026 - WTCR 18-22 range, DTM 2016, Nürburgring typo
+	SampleDiscordMessage15 string // Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
 	SampleTrackData        []map[string]interface{}
 }
 
@@ -68,7 +69,7 @@ Every other hour (--:35) LB fixed setup
 :DTM:  DTM 1995 – Hockenheimring Classic
 Every half hour (--:15, --:45) LB fixed setup`,
 
-		// Message with TT Cup - should expand to TWO race entries (2015 and 2016)
+		// Message with TT Cup - should remain a single category entry
 		SampleDiscordMessage3: `📅 This Week in Ranked Multiplayer
  
 Daily Sprint Races (15 min)
@@ -363,6 +364,43 @@ Every other hour (--:35) LB fixed setup
 Every other hour (--:55) LB fixed setup
 :DTM:  DTM 2016 – Nürbrugring GP fast Chicane
 Every half hour (--:15, --:45) LB fixed setup`,
+
+		// Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
+		SampleDiscordMessage15: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+ 
+Daily Sprint Races (15 min)
+🆓 Audi TT Cup – Interlagos
+Every hour (--:20, --:50) LB fixed setup Weekly F2P
+
+🏁 F4 – Mid Ohio
+Every hour (--:25) LB fixed setup
+🏁 Super Touring – Norisring
+Every hour (--:10, --:40) LB fixed setup
+🏁 GT3 – Suzuka GP
+Every other hour (--:35) LB fixed setup
+🏁 MX5 – Daytona Road Course
+Every other hour (--:55) LB fixed setup
+:DTM:  DTM 2016 – Hockenheimring GP
+Every half hour (--:15, --:45) LB fixed setup
+
+ 
+ 
+Daily Feature Races (~30 min)
+🔥 DTM 1995 - Silverstone International
+30 min (17:30, 19:30, 21:30) LB open setup
+🔥 M235i – Nordschleife NLS
+3 laps (~20 min) (18:00, 20:00, 22:00) LB open setup
+
+ 
+ 
+Weekly Races (45–60 min)
+🏆 Friday: WTCR 18-22 - Road America 
+45 min (17:00, 19:00, 21:00) open setup
+🏆 Saturday: GT3 - Bathurst
+60 min (17:00, 19:00, 21:00) open setup
+🏆 Sunday: PCCD + PCCNA + GTR4 - Imola
+45 min (17:00, 19:00, 21:00) open setup`,
 
 		// Sample leaderboard data matching real API structure
 		SampleTrackData: []map[string]interface{}{

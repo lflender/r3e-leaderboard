@@ -29,16 +29,17 @@ func TestParseDailySprintRaces(t *testing.T) {
 	expectedRaces := []struct {
 		carClass      string
 		track         string
-		expectedClass string // Expected class ID
+		expectedClass string // Expected class ID or category name for multi-class
 		expectedTrack string // Expected track ID
 		isFreeToPlay  bool
+		isCategory    bool // Is this a category entry (GT3, TT Cup, etc)?
 	}{
-		{"GT3", "Autodrom Most", "1703", "7112", true},                            // GTR 3, Autodrom Most - Grand Prix (F2P)
-		{"Super Touring", "Zhejiang Circuit GP", "1710", "8075", false},           // Super Touring
-		{"F4", "Oschersleben GP", "4867", "12506", false},                         // Tatuus F4 Cup
-		{"WTCR 22", "Circuit de Pau-Ville", "11317", "11905", false},              // WTCR 2022
-		{"MX5", "Interlagos", "10977", "10463", false},                            // Mazda MX-5 Cup
-		{"DTM 1995", "Silverstone Classic International", "7075", "12390", false}, // DTM 1995
+		{"GT3", "Autodrom Most", "GT3", "7112", true, true},                       // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"Super Touring", "Zhejiang Circuit GP", "1710", "8075", false, false},    // Super Touring
+		{"F4", "Oschersleben GP", "4867", "12506", false, false},                  // Tatuus F4 Cup
+		{"WTCR 22", "Circuit de Pau-Ville", "11317", "11905", false, false},       // WTCR 2022
+		{"MX5", "Interlagos", "10977", "10463", false, false},                     // Mazda MX-5 Cup
+		{"DTM 1995", "Silverstone Classic International", "7075", "12390", false, false}, // DTM 1995
 	}
 
 	if len(result.Races) != len(expectedRaces) {
@@ -58,9 +59,23 @@ func TestParseDailySprintRaces(t *testing.T) {
 			continue
 		}
 
-		if expected.expectedClass != "" && race.CarClassID != expected.expectedClass {
-			t.Errorf("Race %d: expected class ID '%s', got '%s' (car class: '%s')",
-				i, expected.expectedClass, race.CarClassID, race.CarClass)
+		if expected.expectedClass != "" {
+			if expected.isCategory {
+				if race.CarClassID != expected.expectedClass {
+					t.Errorf("Race %d: expected category ID '%s', got '%s' (car class: '%s')",
+						i, expected.expectedClass, race.CarClassID, race.CarClass)
+				}
+				// For GT3, verify it contains the three class IDs
+				if expected.expectedClass == "GT3" {
+					expectedIDs := []string{"1703", "12770", "13136"}
+					if len(race.CategoryIDs) != 3 || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] || race.CategoryIDs[2] != expectedIDs[2] {
+						t.Errorf("Race %d: expected GT3 CategoryIDs %v, got %v", i, expectedIDs, race.CategoryIDs)
+					}
+				}
+			} else if race.CarClassID != expected.expectedClass {
+				t.Errorf("Race %d: expected class ID '%s', got '%s' (car class: '%s')",
+					i, expected.expectedClass, race.CarClassID, race.CarClass)
+			}
 		}
 
 		if expected.expectedTrack != "" && race.TrackID != expected.expectedTrack {
@@ -534,41 +549,37 @@ func TestParseDailySprintRaces_MultiClassAlias(t *testing.T) {
 		t.Fatal("ParseDailySprintRaces returned nil")
 	}
 
-	// TT Cup should expand to 2 races (2015 and 2016), so we expect 7 races total
+	// TT Cup should remain a single category entry, so we expect 6 races total
 	// Original: TT Cup, FRJ, TCR, 964, LMDH, 992 = 6 lines
-	// After expansion: TT Cup 2015, TT Cup 2016, FRJ, TCR, 964, LMDH, 992 = 7 races
-	expectedRaceCount := 7
+	expectedRaceCount := 6
 	if len(result.Races) != expectedRaceCount {
-		t.Errorf("Expected %d races (TT Cup expanded to 2), got %d", expectedRaceCount, len(result.Races))
+		t.Errorf("Expected %d races (TT Cup category), got %d", expectedRaceCount, len(result.Races))
 		for i, race := range result.Races {
 			t.Logf("  Race %d: CarClass='%s' ClassID='%s' Track='%s' TrackID='%s'",
 				i, race.CarClass, race.CarClassID, race.Track, race.TrackID)
 		}
 	}
 
-	// Check that we have both TT Cup 2015 and 2016
-	foundTT2015 := false
-	foundTT2016 := false
+	// Check that TT Cup is a category entry with both IDs
+	foundTTCup := false
 	for _, race := range result.Races {
-		if race.CarClass == "Audi Sport TT Cup 2015" {
-			foundTT2015 = true
-			if race.CarClassID != "4680" {
-				t.Errorf("TT Cup 2015 expected classID '4680', got '%s'", race.CarClassID)
+		if race.CarClass == "TT Cup" {
+			foundTTCup = true
+			if race.CarClassID != "TT Cup" {
+				t.Errorf("TT Cup expected classID 'TT Cup', got '%s'", race.CarClassID)
 			}
-		}
-		if race.CarClass == "Audi Sport TT Cup 2016" {
-			foundTT2016 = true
-			if race.CarClassID != "5726" {
-				t.Errorf("TT Cup 2016 expected classID '5726', got '%s'", race.CarClassID)
+			if len(race.CategoryIDs) != 2 {
+				t.Errorf("TT Cup expected 2 category IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			} else {
+				if race.CategoryIDs[0] != "4680" || race.CategoryIDs[1] != "5726" {
+					t.Errorf("TT Cup CategoryIDs expected ['4680','5726'], got %v", race.CategoryIDs)
+				}
 			}
 		}
 	}
 
-	if !foundTT2015 {
-		t.Error("TT Cup should have expanded to include 'Audi Sport TT Cup 2015'")
-	}
-	if !foundTT2016 {
-		t.Error("TT Cup should have expanded to include 'Audi Sport TT Cup 2016'")
+	if !foundTTCup {
+		t.Error("TT Cup category race not found")
 	}
 }
 
@@ -592,13 +603,11 @@ func TestParseDailySprintRaces_FixedAliasesInMessage(t *testing.T) {
 		classID string
 		trackID string
 	}{
-		"FRJ Cup":                {classID: "253", trackID: "1671"},   // Monza
-		"Touring Cars Cup":       {classID: "8660", trackID: "1850"},  // Imola
-		"Porsche 964 Cup":        {classID: "7287", trackID: "2556"},  // Red Bull Ring
-		"Hypercars":              {classID: "13129", trackID: "5276"}, // Road America
-		"Porsche 992 GT3 Cup":    {classID: "12302", trackID: "3538"}, // Sachsenring
-		"Audi Sport TT Cup 2015": {classID: "4680", trackID: "1866"},  // Hungaroring
-		"Audi Sport TT Cup 2016": {classID: "5726", trackID: "1866"},  // Hungaroring
+		"FRJ Cup":             {classID: "253", trackID: "1671"},   // Monza
+		"Touring Cars Cup":    {classID: "8660", trackID: "1850"},  // Imola
+		"Porsche 964 Cup":     {classID: "7287", trackID: "2556"},  // Red Bull Ring
+		"Hypercars":           {classID: "13129", trackID: "5276"}, // Road America
+		"Porsche 992 GT3 Cup": {classID: "12302", trackID: "3538"}, // Sachsenring
 	}
 
 	for _, race := range result.Races {
@@ -613,6 +622,24 @@ func TestParseDailySprintRaces_FixedAliasesInMessage(t *testing.T) {
 			}
 		}
 	}
+
+	// Verify TT Cup is treated as a category entry
+	for _, race := range result.Races {
+		if race.CarClass == "TT Cup" {
+			if race.TrackID != "1866" {
+				t.Errorf("TT Cup: expected trackID '1866', got '%s'", race.TrackID)
+			}
+			if race.CarClassID != "TT Cup" {
+				t.Errorf("TT Cup: expected classID 'TT Cup', got '%s'", race.CarClassID)
+			}
+			if len(race.CategoryIDs) != 2 {
+				t.Errorf("TT Cup: expected 2 category IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			}
+			return
+		}
+	}
+
+	t.Error("TT Cup category race not found")
 }
 
 // =============================================================================
@@ -717,16 +744,17 @@ func TestParseDailySprintRaces_Dec23Message(t *testing.T) {
 	// The CarClass field contains the ORIGINAL class name from Discord
 	// CarClassID contains the resolved ID
 	expectedMatches := []struct {
-		carClass string // What appears in Discord message
-		classID  string // Expected resolved class ID
+		carClass   string // What appears in Discord message
+		classID    string // Expected resolved class ID
+		isCategory bool   // Is this a multi-class category?
 	}{
-		{"GT3", "1703"},
-		{"TCR", "8660"}, // TCR alias → Touring Cars Cup
-		{"F4", "4867"},
-		{"GT4", "5825"},
-		{"MX5", "10977"},
-		{"DTM 2025", "13136"},
-		{"DTM 2002", "13264"},
+		{"GT3", "GT3", true},           // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"TCR", "8660", false},         // TCR alias → Touring Cars Cup
+		{"F4", "4867", false},
+		{"GT4", "5825", false},
+		{"MX5", "10977", false},
+		{"DTM 2025", "13136", false},
+		{"DTM 2002", "13264", false},
 		// 992 Cup and LMDh appear in Feature Races, not Sprint Races
 	}
 
@@ -738,6 +766,13 @@ func TestParseDailySprintRaces_Dec23Message(t *testing.T) {
 				if race.CarClassID != expected.classID {
 					t.Errorf("%s: expected classID '%s', got '%s'",
 						expected.carClass, expected.classID, race.CarClassID)
+				}
+				if expected.isCategory && expected.carClass == "GT3" {
+					expectedIDs := []string{"1703", "12770", "13136"}
+					if len(race.CategoryIDs) != 3 || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] || race.CategoryIDs[2] != expectedIDs[2] {
+						t.Errorf("%s: expected CategoryIDs %v, got %v",
+							expected.carClass, expectedIDs, race.CategoryIDs)
+					}
 				}
 				break
 			}
@@ -773,16 +808,17 @@ func TestParseDailySprintRaces_Dec15Message(t *testing.T) {
 
 	// Check specific key races
 	expectedMatches := []struct {
-		carClass string
-		classID  string
+		carClass   string
+		classID    string
+		isCategory bool
 	}{
-		{"GT4", "5825"},
-		{"TCR", "8660"}, // TCR alias
-		{"F4", "4867"},
-		{"GT3", "1703"},
-		{"MX5", "10977"},
-		{"DTM 2025", "13136"}, // Lausitzring
-		{"DTM 2002", "13264"}, // Zolder
+		{"GT4", "5825", false},
+		{"TCR", "8660", false}, // TCR alias
+		{"F4", "4867", false},
+		{"GT3", "GT3", true},   // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"MX5", "10977", false},
+		{"DTM 2025", "13136", false}, // Lausitzring
+		{"DTM 2002", "13264", false}, // Zolder
 	}
 
 	for _, expected := range expectedMatches {
@@ -793,6 +829,13 @@ func TestParseDailySprintRaces_Dec15Message(t *testing.T) {
 				if race.CarClassID != expected.classID {
 					t.Errorf("%s: expected classID '%s', got '%s'",
 						expected.carClass, expected.classID, race.CarClassID)
+				}
+				if expected.isCategory && expected.carClass == "GT3" {
+					expectedIDs := []string{"1703", "12770", "13136"}
+					if len(race.CategoryIDs) != 3 || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] || race.CategoryIDs[2] != expectedIDs[2] {
+						t.Errorf("%s: expected CategoryIDs %v, got %v",
+							expected.carClass, expectedIDs, race.CategoryIDs)
+					}
 				}
 				break
 			}
@@ -889,15 +932,16 @@ func TestParseDailySprintRaces_Dec1Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"Porsche 964", "7287", false}, // Direct match
-		{"FR Junior", "253", false},    // FR Junior alias → FRJ Cup
-		{"DTM 2002", "13264", false},
-		{"DTM 2025", "13136", false},
-		{"MX5", "10977", false},
-		{"Super Touring", "1710", false},
-		{"GT3", "1703", false},
-		{"BMW M235i", "6344", false}, // Direct match
+		{"Porsche 964", "7287", false, false}, // Direct match
+		{"FR Junior", "253", false, false},    // FR Junior alias → FRJ Cup
+		{"DTM 2002", "13264", false, false},
+		{"DTM 2025", "13136", false, false},
+		{"MX5", "10977", false, false},
+		{"Super Touring", "1710", false, false},
+		{"GT3", "GT3", false, true},           // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"BMW M235i", "6344", false, false},   // Direct match
 	}
 
 	for _, expected := range expectedMatches {
@@ -908,6 +952,13 @@ func TestParseDailySprintRaces_Dec1Message(t *testing.T) {
 				if expected.classID != "" && race.CarClassID != expected.classID {
 					t.Errorf("%s: expected classID '%s', got '%s'",
 						expected.carClass, expected.classID, race.CarClassID)
+				}
+				if expected.isCategory && expected.carClass == "GT3" {
+					expectedIDs := []string{"1703", "12770", "13136"}
+					if len(race.CategoryIDs) != 3 || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] || race.CategoryIDs[2] != expectedIDs[2] {
+						t.Errorf("%s: expected CategoryIDs %v, got %v",
+							expected.carClass, expectedIDs, race.CategoryIDs)
+					}
 				}
 				if expected.needsNewAlias && race.CarClassID == "" {
 					t.Logf("⚠️  %s needs a new alias (currently unresolved)", expected.carClass)
@@ -950,13 +1001,14 @@ func TestParseDailySprintRaces_Nov24Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"GT4", "5825", false},
-		{"FR Junior", "253", false}, // FR Junior alias now works!
-		{"GT3", "1703", false},
-		{"Super Touring", "1710", false},
-		{"MX5", "10977", false},
-		{"944", "11564", false}, // 944 alias works
+		{"GT4", "5825", false, false},
+		{"FR Junior", "253", false, false}, // FR Junior alias now works!
+		{"GT3", "GT3", false, true},        // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"Super Touring", "1710", false, false},
+		{"MX5", "10977", false, false},
+		{"944", "11564", false, false}, // 944 alias works
 	}
 
 	for _, expected := range expectedMatches {
@@ -1008,13 +1060,14 @@ func TestParseDailySprintRaces_Nov17Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"Aquila", "255", false}, // Aquila CR1 Cup
-		{"GTR 2", "8248", false}, // GTR 2 alias → GT2
-		{"GT3", "1703", false},
-		{"Super Touring", "1710", false},
-		{"MX-5", "10977", false},
-		{"Porsche 944 Cup", "11564", false}, // Porsche 944 Cup alias → Porsche 944 Turbo Cup
+		{"Aquila", "255", false, false}, // Aquila CR1 Cup
+		{"GTR 2", "8248", false, false}, // GTR 2 alias → GT2
+		{"GT3", "GT3", false, true},     // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"Super Touring", "1710", false, false},
+		{"MX-5", "10977", false, false},
+		{"Porsche 944 Cup", "11564", false, false}, // Porsche 944 Cup alias → Porsche 944 Turbo Cup
 	}
 
 	for _, expected := range expectedMatches {
@@ -1066,13 +1119,14 @@ func TestParseDailySprintRaces_Nov10Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"WTCC 2013", "1922", false},   // WTCC 2013 alias
-		{"Silhouettes", "1717", false}, // Silhouettes alias → Silhouette Series
-		{"GT3", "1703", false},
-		{"Super Touring", "1710", false},
-		{"MX-5", "10977", false},
-		{"F3", "5652", false}, // FR3 Cup alias
+		{"WTCC 2013", "1922", false, false},   // WTCC 2013 alias
+		{"Silhouettes", "1717", false, false}, // Silhouettes alias → Silhouette Series
+		{"GT3", "GT3", false, true},          // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"Super Touring", "1710", false, false},
+		{"MX-5", "10977", false, false},
+		{"F3", "5652", false, false}, // FR3 Cup alias
 	}
 
 	for _, expected := range expectedMatches {
@@ -1124,13 +1178,14 @@ func TestParseDailySprintRaces_Nov3Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"Praga", "11055", false}, // Praga alias → Praga R1
-		{"Silhouette Series", "1717", false},
-		{"MX-5", "10977", false},
-		{"Super Touring", "1710", false},
-		{"GT3", "1703", false},
-		{"F4", "4867", false},
+		{"Praga", "11055", false, false}, // Praga alias → Praga R1
+		{"Silhouette Series", "1717", false, false},
+		{"MX-5", "10977", false, false},
+		{"Super Touring", "1710", false, false},
+		{"GT3", "GT3", false, true},      // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"F4", "4867", false, false},
 	}
 
 	for _, expected := range expectedMatches {
@@ -1178,7 +1233,7 @@ func TestParseDailySprintRaces_Oct27Message(t *testing.T) {
 	}
 
 	// Check specific races
-	// Note: "Audi TT Cup" is a multi-class alias expanding to 2015 and 2016 versions
+	// Note: "Audi TT Cup" should remain a category entry
 	expectedMatches := []struct {
 		carClass      string
 		classID       string
@@ -1211,23 +1266,20 @@ func TestParseDailySprintRaces_Oct27Message(t *testing.T) {
 		}
 	}
 
-	// Check that Audi TT Cup expanded to both versions
-	foundTT2015 := false
-	foundTT2016 := false
+	// Check that Audi TT Cup is a category entry
 	for _, race := range result.Races {
-		if race.CarClass == "Audi Sport TT Cup 2015" {
-			foundTT2015 = true
+		if race.CarClass == "Audi TT Cup" {
+			if race.CarClassID != "Audi TT Cup" {
+				t.Errorf("Audi TT Cup: expected classID 'Audi TT Cup', got '%s'", race.CarClassID)
+			}
+			if len(race.CategoryIDs) != 2 {
+				t.Errorf("Audi TT Cup: expected 2 category IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			}
+			return
 		}
-		if race.CarClass == "Audi Sport TT Cup 2016" {
-			foundTT2016 = true
-		}
 	}
-	if !foundTT2015 {
-		t.Logf("⚠️  Audi TT Cup did not expand to include 2015 version")
-	}
-	if !foundTT2016 {
-		t.Logf("⚠️  Audi TT Cup did not expand to include 2016 version")
-	}
+
+	t.Logf("⚠️  Audi TT Cup category entry not found")
 }
 
 func TestParseDailySprintRaces_Oct20Message(t *testing.T) {
@@ -1258,12 +1310,13 @@ func TestParseDailySprintRaces_Oct20Message(t *testing.T) {
 		carClass      string
 		classID       string
 		needsNewAlias bool
+		isCategory    bool
 	}{
-		{"Audi RS 5 DTM 2016", "5262", false}, // Alias → DTM 2016
-		{"MX-5", "10977", false},
-		{"Super Touring", "1710", false},
-		{"GT3", "1703", false},
-		{"F4", "4867", false},
+		{"Audi RS 5 DTM 2016", "5262", false, false}, // Alias → DTM 2016
+		{"MX-5", "10977", false, false},
+		{"Super Touring", "1710", false, false},
+		{"GT3", "GT3", false, true},                  // GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"F4", "4867", false, false},
 	}
 
 	for _, expected := range expectedMatches {
@@ -1393,6 +1446,101 @@ func TestParseDailySprintRaces_Feb9Message(t *testing.T) {
 				i, race.CarClass, race.Track, race.CarClassID, race.TrackID)
 		}
 	}
+}
+
+// =============================================================================
+// FEB 16, 2026 MESSAGE TEST - TT Cup category, DTM 2016, weekly races
+// =============================================================================
+
+func TestParseDailySprintRaces_Feb16Message(t *testing.T) {
+	fixtures := GetTestFixtures()
+
+	msg := &DiscordMessage{
+		ID:        "feb16_test",
+		Content:   fixtures.SampleDiscordMessage15,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	// Daily Sprint races only
+	// Audi TT Cup – Interlagos (category), F4 – Mid Ohio, Super Touring – Norisring,
+	// GT3 – Suzuka GP, MX5 – Daytona Road Course, DTM 2016 – Hockenheimring GP
+	expectedRaceCount := 6
+	if len(result.Races) != expectedRaceCount {
+		t.Errorf("Expected %d races, got %d", expectedRaceCount, len(result.Races))
+	}
+
+	// Verify all races including the TT Cup category
+	racesExpected := []struct {
+		carClass     string
+		classID      string
+		trackID      string
+		isFreeToPlay bool
+		isCategory   bool
+	}{
+		{"Audi TT Cup", "Audi TT Cup", "10463", true, true},   // Interlagos category
+		{"F4", "4867", "1674", false, false},                  // Mid Ohio
+		{"Super Touring", "1710", "2518", false, false},       // Norisring
+		{"GT3", "GT3", "1841", false, true},                   // Suzuka GP - GT3 category (GTR 3, DTM 2024, DTM 2025)
+		{"MX5", "10977", "8367", false, false},                // Daytona Road Course
+		{"DTM 2016", "5262", "1693", false, false},            // Hockenheimring GP
+	}
+
+	for _, expected := range racesExpected {
+		found := false
+		for _, race := range result.Races {
+			if race.CarClass == expected.carClass {
+				found = true
+				if race.CarClassID != expected.classID {
+					t.Errorf("%s: expected classID '%s', got '%s'",
+						expected.carClass, expected.classID, race.CarClassID)
+				}
+				if race.TrackID != expected.trackID {
+					t.Errorf("%s: expected trackID '%s', got '%s'",
+						expected.carClass, expected.trackID, race.TrackID)
+				}
+				if race.IsFreeToPlay != expected.isFreeToPlay {
+					t.Errorf("%s: expected F2P=%v, got %v",
+						expected.carClass, expected.isFreeToPlay, race.IsFreeToPlay)
+				}
+				if expected.isCategory && expected.carClass == "GT3" {
+					expectedIDs := []string{"1703", "12770", "13136"}
+					if len(race.CategoryIDs) != 3 || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] || race.CategoryIDs[2] != expectedIDs[2] {
+						t.Errorf("%s: expected CategoryIDs %v, got %v",
+							expected.carClass, expectedIDs, race.CategoryIDs)
+					}
+				}
+				if !race.MatchedOK {
+					t.Errorf("%s: expected MatchedOK=true, got false", expected.carClass)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Expected to find race with car class '%s'", expected.carClass)
+		}
+	}
+
+	// Verify TT Cup category has both class IDs
+	for _, race := range result.Races {
+		if race.CarClass == "Audi TT Cup" {
+			if len(race.CategoryIDs) != 2 {
+				t.Errorf("Audi TT Cup category expected 2 class IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			} else {
+				if race.CategoryIDs[0] != "4680" || race.CategoryIDs[1] != "5726" {
+					t.Errorf("Audi TT Cup CategoryIDs expected ['4680','5726'], got %v", race.CategoryIDs)
+				}
+			}
+			return
+		}
+	}
+
+	t.Error("Audi TT Cup category race not found")
 }
 
 // =============================================================================

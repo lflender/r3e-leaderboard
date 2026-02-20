@@ -373,11 +373,12 @@ func GetDiscordCarClassAliases() map[string]string {
 }
 
 // GetDiscordMultiClassAliases returns aliases that map to MULTIPLE car classes
-// These need special handling in Discord parsing - one line creates multiple race entries
+// These need special handling in Discord parsing - one line becomes a category entry
 func GetDiscordMultiClassAliases() map[string][]string {
 	return map[string][]string{
 		"tt cup":      {"Audi Sport TT Cup 2015", "Audi Sport TT Cup 2016"},
 		"audi tt cup": {"Audi Sport TT Cup 2015", "Audi Sport TT Cup 2016"}, // Discord uses "Audi TT Cup"
+		"gt3":         {"GTR 3", "DTM 2024", "DTM 2025"},
 	}
 }
 
