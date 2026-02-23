@@ -11,8 +11,11 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
+
+var indexUpdateMu sync.Mutex
 
 // IndexerState provides the current state needed for periodic indexing
 type IndexerState struct {
@@ -23,18 +26,16 @@ type IndexerState struct {
 
 // IndexerCallbacks provides callback functions for the indexer
 type IndexerCallbacks struct {
-	GetState                   func() IndexerState
-	UpdateIndexed              func(count int)
-	ExportStatus               func()
-	UpdateDailyRaceRefreshTime func() // Update last daily race refresh timestamp
+	GetState      func() IndexerState
+	UpdateIndexed func(count int)
+	ExportStatus  func()
 }
 
 // PeriodicIndexer handles periodic index rebuilding during data fetching
 type PeriodicIndexer struct {
-	ctx        context.Context
-	interval   time.Duration
-	callbacks  IndexerCallbacks
-	cycleCount int // Track indexing cycles for Daily Race refresh (every other cycle)
+	ctx       context.Context
+	interval  time.Duration
+	callbacks IndexerCallbacks
 }
 
 // NewPeriodicIndexer creates a new periodic indexer
@@ -86,40 +87,36 @@ func (pi *PeriodicIndexer) Start() {
 			select {
 			case <-ticker.C:
 				log.Println("⏱️ Periodic indexing tick fired")
-				pi.cycleCount++
 				state = pi.callbacks.GetState()
 
 				// Only index if we're still fetching and have some data
 				if state.FetchInProgress && len(state.Tracks) > 0 {
-					// Promote temp cache before indexing to ensure consistency
+					// Promote temp cache and get the list of changed combo IDs
 					tempCache := NewTempDataCache()
-					promotedCount, err := tempCache.PromoteTempCache()
+					promotedCombos, err := tempCache.PromoteTempCache()
 					if err != nil {
 						log.Printf("⚠️ Failed to promote temp cache: %v", err)
-					} else if promotedCount > 0 {
-						log.Printf("🔄 Promoted %d new cache files before indexing", promotedCount)
+					} else if len(promotedCombos) > 0 {
+						log.Printf("🔄 Promoted %d new cache files before indexing", len(promotedCombos))
 					}
 
-					// Refresh Daily Race combinations every other cycle (e.g., every hour if indexing is every 30 mins)
-					if pi.cycleCount%2 == 0 {
-						log.Println("🏁 Refreshing Daily Race combinations (periodic)...")
-						trackIDs, err := RefreshDailyRaceCombinations(pi.ctx)
-						if err != nil {
-							log.Printf("⚠️ Daily Race refresh failed during periodic indexing: %v", err)
-						} else {
-							pi.callbacks.UpdateDailyRaceRefreshTime()
-							if len(trackIDs) > 0 {
-								state.Tracks = mergeCachedCombinations(state.Tracks, trackIDs)
+					// Use incremental index update if we have promoted combos and an existing index
+					if len(promotedCombos) > 0 {
+						if err := IncrementalIndexUpdate(promotedCombos); err != nil {
+							log.Printf("⚠️ Incremental index update failed, falling back to full rebuild: %v", err)
+							// Fallback: full rebuild
+							if err := BuildAndExportIndex(state.Tracks); err != nil {
+								log.Printf("⚠️ Failed to export index: %v", err)
+							} else {
+								log.Printf("🔍 Index rebuilt (fallback): %d track/class combinations", len(state.Tracks))
+								pi.callbacks.UpdateIndexed(len(state.Tracks))
 							}
+						} else {
+							log.Printf("🔍 Index incrementally updated with %d changed combos", len(promotedCombos))
+							pi.callbacks.UpdateIndexed(len(state.Tracks))
 						}
-					}
-
-					// Rebuild index every interval during fetching
-					if err := BuildAndExportIndex(state.Tracks); err != nil {
-						log.Printf("⚠️ Failed to export index: %v", err)
 					} else {
-						log.Printf("🔍 Index updated: %d track/class combinations", len(state.Tracks))
-						pi.callbacks.UpdateIndexed(len(state.Tracks))
+						log.Println("ℹ️ No new cache files to index — skipping")
 					}
 					pi.callbacks.ExportStatus()
 				} else if !state.FetchInProgress {
@@ -339,6 +336,9 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 // BuildAndExportIndex builds the driver index and exports all related files
 // This is the main entry point that coordinates index building, exporting, and status updates
 func BuildAndExportIndex(tracks []TrackInfo) error {
+	indexUpdateMu.Lock()
+	defer indexUpdateMu.Unlock()
+
 	if len(tracks) == 0 {
 		log.Println("⚠️ No tracks to index - skipping export")
 		return nil
@@ -420,6 +420,9 @@ func LoadDriverIndexFromDisk() (DriverIndex, error) {
 //
 // This reduces peak memory by ~2 GB compared to a full BuildAndExportIndex.
 func IncrementalIndexUpdate(changedCombos []string) error {
+	indexUpdateMu.Lock()
+	defer indexUpdateMu.Unlock()
+
 	if len(changedCombos) == 0 {
 		log.Println("ℹ️ No changed combos for incremental update — skipping")
 		return nil
@@ -574,24 +577,22 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 	log.Printf("🔍 Incremental index update: %.3f seconds (%d drivers, %d entries, -%d/+%d changed)",
 		buildDuration.Seconds(), len(index), totalEntries, removedEntries, addedEntries)
 
-	// 5. Export
+	// 5. Capture stats we need BEFORE export, then nil the index immediately after
+	driverCount := len(index)
+
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
 		index = nil
 		runtime.GC()
 		return err
 	}
 
-	// Update status
-	uniqueTracks := make(map[string]bool)
-	for _, results := range index {
-		for _, r := range results {
-			if r.TrackID != "" {
-				uniqueTracks[r.TrackID] = true
-			}
-		}
-	}
+	// Free the large index map IMMEDIATELY after export
+	index = nil
+	runtime.GC()
+	debug.FreeOSMemory()
 
-	// Lightweight status update (avoid the heavy CountCachedCombinations)
+	// Lightweight status update — preserve existing values for fields we can't
+	// compute cheaply (uniqueTracks, totalFetchedCombinations, etc.)
 	existingStatus := ReadStatusData()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -601,8 +602,8 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		LastScrapeEnd:            existingStatus.LastScrapeEnd,
 		TrackCount:               existingStatus.TrackCount,
 		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations,
-		TotalUniqueTracks:        len(uniqueTracks),
-		TotalDrivers:             len(index),
+		TotalUniqueTracks:        existingStatus.TotalUniqueTracks, // preserved — avoid iterating entire index
+		TotalDrivers:             driverCount,
 		TotalEntries:             totalEntries,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
@@ -618,19 +619,8 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		log.Printf("⚠️ Failed to update status after incremental index: %v", err)
 	}
 
-	// Clean up
-	index = nil
-	uniqueTracks = nil
-
-	var mBefore runtime.MemStats
-	runtime.ReadMemStats(&mBefore)
-	runtime.GC()
-	debug.FreeOSMemory()
-	var mAfter runtime.MemStats
-	runtime.ReadMemStats(&mAfter)
-	log.Printf("💾 Memory after incremental index: %.1f MB allocated, %.1f MB freed by GC",
-		float64(mAfter.Alloc)/(1024*1024),
-		float64(mBefore.Alloc-mAfter.Alloc)/(1024*1024))
+	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
+		float64(m.Alloc)/(1024*1024))
 
 	return nil
 }

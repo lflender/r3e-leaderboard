@@ -113,8 +113,10 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		}
 		log.Println("✅ Final index complete")
 
-		// Final update with all data
-		o.tracks = tracks
+		// Don't keep tracks in memory after initial load — only needed during active refresh
+		o.lastIndexedCount = len(tracks)
+		tracks = nil
+		o.tracks = nil
 
 		// Don't update scrape timestamps during normal startup loading
 		// Only explicit refresh operations (full/targeted) should update these
@@ -123,14 +125,12 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		}
 		o.exportStatus()
 
-		// Compact in-memory track data after indexing to reduce memory footprint
-		o.CompactTrackData()
+		// Free memory after startup
 		runtime.GC()
-		// Proactively return unused memory to the OS after heavy work
 		debug.FreeOSMemory()
-		log.Printf("🧹 Compacted in-memory track data. %d combinations retained (metadata only)", len(o.tracks))
+		log.Printf("🧹 Memory released after initial load")
 
-		log.Printf("✅ Data loading complete! %d track/class combinations indexed", len(tracks))
+		log.Printf("✅ Data loading complete! %d track/class combinations indexed", o.lastIndexedCount)
 	}()
 }
 
@@ -194,10 +194,12 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 		o.lastIndexedCount = len(finalTracks)
 	}
 
-	o.CompactTrackData()
+	// Free all track data after refresh completes
+	finalTracks = nil
+	o.tracks = nil
 	runtime.GC()
 	debug.FreeOSMemory()
-	log.Println("✅ Full refresh completed")
+	log.Println("✅ Full refresh completed, memory released")
 }
 
 // performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples
@@ -240,17 +242,15 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	log.Println("✅ Final index complete (targeted refresh)")
 
 	// Finalize
-	o.tracks = finalTracks
+	finalTracks = nil
+	o.tracks = nil
 	o.fetchInProgress = false
 	o.exportStatus()
 
-	// Compact memory
-	o.CompactTrackData()
+	// Free memory after targeted refresh
 	runtime.GC()
 	debug.FreeOSMemory()
-	log.Println("🧹 Compacted in-memory track data after targeted refresh")
-
-	log.Println("✅ Targeted refresh completed")
+	log.Println("✅ Targeted refresh completed, memory released")
 }
 
 // StartRefreshFileTrigger watches for a lightweight file trigger to start a full refresh
@@ -295,9 +295,6 @@ func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
 		ExportStatus: func() {
 			o.exportStatus()
 		},
-		UpdateDailyRaceRefreshTime: func() {
-			o.lastDailyRaceRefresh = time.Now()
-		},
 	})
 	indexer.Start()
 }
@@ -331,13 +328,19 @@ func (o *Orchestrator) exportStatus() {
 		discordCount = len(discordRaces.Races)
 	}
 
+	// TrackCount: use in-memory count if available, otherwise use lastIndexedCount
+	trackCount := len(o.tracks)
+	if trackCount == 0 {
+		trackCount = o.lastIndexedCount
+	}
+
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
 	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
 	status := internal.StatusData{
 		FetchInProgress:          o.fetchInProgress,
 		LastScrapeStart:          scrapeStart,
 		LastScrapeEnd:            scrapeEnd,
-		TrackCount:               len(o.tracks),
+		TrackCount:               trackCount,
 		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations, // Preserved from indexing
 		TotalUniqueTracks:        existingStatus.TotalUniqueTracks,        // Preserved from indexing
 		TotalDrivers:             existingStatus.TotalDrivers,             // Preserved from indexing
@@ -435,7 +438,7 @@ func formatDuration(d time.Duration) string {
 // CALLER MUST hold o.rebuildMu.
 func (o *Orchestrator) buildBootstrapIndex() {
 	// Free memory before loading all cached data to reduce swap pressure
-	o.CompactTrackData()
+	o.tracks = nil
 	runtime.GC()
 	debug.FreeOSMemory()
 
@@ -447,8 +450,10 @@ func (o *Orchestrator) buildBootstrapIndex() {
 		} else {
 			o.lastIndexedCount = len(cachedTracks)
 		}
-		o.tracks = cachedTracks
-		o.exportStatus()
+		// Free immediately after index is built
+		cachedTracks = nil
+		runtime.GC()
+		debug.FreeOSMemory()
 	} else {
 		log.Println("ℹ️ No cached combinations found for bootstrap index")
 	}
@@ -456,7 +461,8 @@ func (o *Orchestrator) buildBootstrapIndex() {
 
 // StartDailyRaceRefreshLoop starts a background loop that refreshes Daily Race
 // combinations and incrementally updates the index at the specified interval.
-// This runs outside of refresh cycles (when the system is idle).
+// When a full refresh is in progress, it pauses fetching, updates Daily Races,
+// then resumes the long-running refresh.
 func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 	o.dailyRaceRefreshStop = make(chan struct{})
 
@@ -472,62 +478,46 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
+		runDailyRaceRefresh := func(reason string) {
+			paused := false
+			if o.fetchInProgress {
+				// Pause the long-running full refresh loop while we update Daily Races
+				internal.PauseFetches("daily race refresh")
+				paused = true
+			}
+			if paused {
+				defer internal.ResumeFetches()
+			}
+
+			log.Printf("🏁 Refreshing Daily Race combinations (%s)...", reason)
+			changedCombos, err := internal.RefreshDailyRaceCombinations(o.fetchContext)
+			if err != nil {
+				log.Printf("⚠️ Daily Race refresh failed: %v", err)
+				return
+			}
+			o.lastDailyRaceRefresh = time.Now()
+
+			if len(changedCombos) > 0 {
+				log.Printf("🔄 Incrementally updating index for %d changed combos after Daily Race refresh...", len(changedCombos))
+				if err := internal.IncrementalIndexUpdate(changedCombos); err != nil {
+					// Don't fall back to full rebuild — that loads ALL ~10K cache files
+					// and would OOM a 4 GB server. The index on disk is still valid;
+					// just retry next cycle.
+					log.Printf("⚠️ Incremental index update failed (will retry next cycle): %v", err)
+				} else {
+					log.Printf("✅ Incremental index updated with %d changed combos after Daily Race refresh", len(changedCombos))
+				}
+			} else {
+				log.Println("ℹ️ No combos changed in Daily Race refresh — index unchanged")
+			}
+
+			o.exportStatus()
+		}
+
 		for {
 			select {
 			case <-ticker.C:
-				// Skip if a full refresh is in progress
-				if o.fetchInProgress {
-					log.Println("⏭️ Skipping Daily Race refresh - full refresh in progress")
-					continue
-				}
-
-				// Try to acquire the rebuild mutex; skip if another rebuild is running
-				if !o.rebuildMu.TryLock() {
-					log.Println("⏭️ Skipping Daily Race refresh - another rebuild is in progress")
-					continue
-				}
-
-				// Refresh Daily Race combinations
-				log.Println("🏁 Refreshing Daily Race combinations (standalone loop)...")
-				changedCombos, err := internal.RefreshDailyRaceCombinations(o.fetchContext)
-				if err != nil {
-					log.Printf("⚠️ Daily Race refresh failed: %v", err)
-					o.rebuildMu.Unlock()
-					continue
-				}
-				o.lastDailyRaceRefresh = time.Now()
-
-				// Use incremental index update instead of full rebuild
-				// This only loads the ~10 changed cache files + the existing driver_index.json.gz
-				// instead of loading ALL ~10K cache files from disk (saves ~2 GB peak memory)
-				if len(changedCombos) > 0 {
-					log.Printf("🔄 Incrementally updating index for %d changed combos after Daily Race refresh...", len(changedCombos))
-					if err := internal.IncrementalIndexUpdate(changedCombos); err != nil {
-						log.Printf("⚠️ Incremental index update failed, falling back to full rebuild: %v", err)
-						// Fallback: full rebuild (but free memory first)
-						o.CompactTrackData()
-						runtime.GC()
-						debug.FreeOSMemory()
-						cachedTracks := internal.LoadAllCachedData(o.fetchContext)
-						if len(cachedTracks) > 0 {
-							if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
-								log.Printf("⚠️ Failed to rebuild index after Daily Race refresh: %v", err)
-							} else {
-								o.tracks = cachedTracks
-								o.lastIndexedCount = len(cachedTracks)
-								log.Printf("✅ Index rebuilt with %d combinations after Daily Race refresh (fallback)", len(cachedTracks))
-							}
-							o.CompactTrackData()
-						}
-					} else {
-						log.Printf("✅ Incremental index updated with %d changed combos after Daily Race refresh", len(changedCombos))
-					}
-				} else {
-					log.Println("ℹ️ No combos changed in Daily Race refresh — index unchanged")
-				}
-
-				o.exportStatus()
-				o.rebuildMu.Unlock()
+				runDailyRaceRefresh("hourly")
 
 			case <-o.dailyRaceRefreshStop:
 				log.Println("⏹️ Daily Race refresh loop stopped")

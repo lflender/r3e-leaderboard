@@ -350,7 +350,7 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 		normalizedClass := normalizeForMatching(race.CarClass)
 		// Also try stripping metadata in parentheses for matching
 		normalizedClassNoMeta := stripMetadata(normalizedClass)
-		
+
 		if category := rangeClassCategory(normalizedClass); category != "" {
 			// Treat certain ranges as a single category entry for the frontend
 			newRace := race

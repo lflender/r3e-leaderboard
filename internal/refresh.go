@@ -10,6 +10,7 @@ import (
 // from the cached Daily Races data. Returns the track IDs that were refreshed.
 // This is a lightweight refresh that only fetches a few combinations (typically 5-6).
 func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
+	ctx = WithFetchPauseBypass(ctx)
 	cache := NewDataCache()
 	dailyRaces, err := cache.LoadDiscordRaces()
 	if err != nil {
@@ -74,13 +75,19 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 	}
 
 	// Promote temp cache to main cache
-	_, err = tempCache.PromoteTempCache()
-	if err != nil {
+	if _, err := tempCache.PromoteTempCache(); err != nil {
 		log.Printf("⚠️ Failed to promote Daily Race cache: %v", err)
 	}
 
 	// Update status with last refresh time
 	UpdateDailyRaceRefreshTime()
+
+	// Refresh multiplayer positions at the end of Daily Race refresh
+	mpCtx, mpCancel := context.WithTimeout(ctx, 30*time.Second)
+	if err := RefreshMultiplayerPositions(mpCtx); err != nil {
+		log.Printf("⚠️ Failed to refresh multiplayer positions: %v", err)
+	}
+	mpCancel()
 
 	return trackIDs, nil
 }

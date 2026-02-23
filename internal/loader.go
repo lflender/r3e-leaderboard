@@ -255,8 +255,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	_, err := tempCache.PromoteTempCache()
-	if err != nil {
+	if _, err := tempCache.PromoteTempCache(); err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
 		// Continue anyway - we still have the in-memory data
 	}
@@ -298,6 +297,12 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 				log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
 				return allTrackData
 			default:
+			}
+
+			// Pause long-running fetches if requested
+			if !WaitIfFetchPaused(ctx) {
+				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", processed, totalCombinations)
+				return allTrackData
 			}
 
 			data, duration, err := fetchWithTimeout(ctx, apiClient, track, class)
@@ -361,8 +366,7 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	_, err := tempCache.PromoteTempCache()
-	if err != nil {
+	if _, err := tempCache.PromoteTempCache(); err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
 	}
 
@@ -479,6 +483,12 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 			default:
 			}
 
+			// Pause long-running fetches if requested
+			if !WaitIfFetchPaused(ctx) {
+				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", processed, totalCombinations)
+				return allTrackData
+			}
+
 			data, duration, err := fetchWithTimeout(ctx, apiClient, *trackConfig, class)
 			if err != nil {
 				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", trackConfig.Name, class.Name, err)
@@ -542,8 +552,7 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
-	_, err := tempCache.PromoteTempCache()
-	if err != nil {
+	if _, err := tempCache.PromoteTempCache(); err != nil {
 		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
 	}
 
