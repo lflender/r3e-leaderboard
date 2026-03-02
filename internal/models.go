@@ -369,7 +369,12 @@ func GetDiscordCarClassAliases() map[string]string {
 		"praga":              "Praga R1",
 		"wtcc 2013":          "WTCC 2013",
 		"audi rs 5 dtm 2016": "DTM 2016",
+		"truck":              "Truck Racing",
+		"pccd":               "Porsche Carrera Cup Deutschland 2023",
+		"pccna":              "Porsche Carrera Cup North America 2024",
+		"pccs":               "Porsche Carrera Cup Scandinavia",
 	}
+
 }
 
 // GetDiscordMultiClassAliases returns aliases that map to MULTIPLE car classes
@@ -451,6 +456,7 @@ func GetDiscordTrackAliases() map[string]string {
 		"indianapolis road":                 "Indianapolis Motor Speedway - Road Course",
 		"indianapolis":                      "Indianapolis Motor Speedway - Road Course",
 		"watkins glen gp il":                "Watkins Glen International - Grand Prix with Inner Loop",
+		"watkins glen gp w loop":            "Watkins Glen International - Grand Prix with Inner Loop",
 		"watkins glen":                      "Watkins Glen International - Grand Prix",
 		"daytona road":                      "Daytona International Speedway - Road Course",
 		"nürburgring sprint":                "Nürburgring - Sprint",
@@ -464,5 +470,8 @@ func GetDiscordTrackAliases() map[string]string {
 		"gelleråsen gp":                     "Gelleråsen Arena - Grand Prix Circuit",
 		"gellerasen gp":                     "Gelleråsen Arena - Grand Prix Circuit",
 		"watkins glen gp":                   "Watkins Glen International - Grand Prix",
+		"assen gp":                          "TT Circuit Assen - Grand Prix",
+		"sonoma long":                       "Sonoma Raceway - Long",
+		"red bull ring südschleife":         "Red Bull Ring Spielberg - Südschleife National Circuit",
 	}
 }

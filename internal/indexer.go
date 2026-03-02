@@ -8,7 +8,6 @@ import (
 	"log"
 	"os"
 	"runtime"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -430,9 +429,11 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 
 	indexStart := time.Now()
 
-	// Free as much memory as possible before loading the index
-	runtime.GC()
-	debug.FreeOSMemory()
+	// NOTE: Do NOT call runtime.GC() or debug.FreeOSMemory() before loading the
+	// index. During the fetch phase the loader holds ~2-4 GB of live data, so a
+	// GC cycle scales with that live set (10-30+ seconds on a large heap) without
+	// freeing meaningful memory. FreeOSMemory is even worse — it releases pages
+	// via madvise that must be immediately re-acquired for the index allocation.
 
 	// 1. Load existing index from disk
 	index, err := LoadDriverIndexFromDisk()
@@ -450,10 +451,31 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		}
 	}
 
-	// 3. Remove stale entries from the index for changed combos
+	// 3. Remove stale entries from the index for changed combos.
+	//    We count totalEntries here to avoid a separate O(N) pass later.
 	removedEntries := 0
+	totalEntries := 0
 	for driver, results := range index {
-		filtered := results[:0] // reuse backing array
+		// Fast path: check if this driver has ANY entries matching changed combos.
+		// The vast majority of drivers (~99%+) will have zero matching entries,
+		// so this avoids unnecessary slice allocation and map writes.
+		hasChanged := false
+		for _, r := range results {
+			if changed[comboKey{r.TrackID, r.ClassID}] {
+				hasChanged = true
+				break
+			}
+		}
+		if !hasChanged {
+			totalEntries += len(results)
+			continue
+		}
+
+		// This driver has entries for changed combos — filter them out.
+		// Use a NEW slice so the old backing array (and its dead DriverResult
+		// structs with string pointers) can be GC'd promptly, rather than
+		// lingering in the slack space of a reused backing array.
+		filtered := make([]DriverResult, 0, len(results))
 		for _, r := range results {
 			if !changed[comboKey{r.TrackID, r.ClassID}] {
 				filtered = append(filtered, r)
@@ -465,13 +487,13 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 			delete(index, driver)
 		} else {
 			index[driver] = filtered
+			totalEntries += len(filtered)
 		}
 	}
 
 	// 4. Load new data for changed combos and add to index
 	cache := NewDataCache()
 	addedEntries := 0
-	totalEntries := 0
 	for combo := range changed {
 		trackInfo, err := cache.LoadTrackData(combo.trackID, combo.classID)
 		if err != nil {
@@ -568,10 +590,8 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		trackInfo.Data = nil
 	}
 
-	// Count totals for logging
-	for _, results := range index {
-		totalEntries += len(results)
-	}
+	// totalEntries was counted during the filter step; adjust for added entries.
+	totalEntries += addedEntries
 
 	buildDuration := time.Since(indexStart)
 	log.Printf("🔍 Incremental index update: %.3f seconds (%d drivers, %d entries, -%d/+%d changed)",
@@ -586,10 +606,12 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		return err
 	}
 
-	// Free the large index map IMMEDIATELY after export
+	// Free the large index map after export. Use GC only — skip
+	// debug.FreeOSMemory() which does expensive madvise() syscalls on every
+	// freed page (scales with heap size) and releases pages that will just
+	// need to be re-acquired for the next cycle.
 	index = nil
 	runtime.GC()
-	debug.FreeOSMemory()
 
 	// Lightweight status update — preserve existing values for fields we can't
 	// compute cheaply (uniqueTracks, totalFetchedCombinations, etc.)

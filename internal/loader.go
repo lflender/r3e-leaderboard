@@ -551,10 +551,12 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	allTrackData = append(allTrackData, retriedTracks...)
 
-	// Promote temp cache to main cache atomically
-	if _, err := tempCache.PromoteTempCache(); err != nil {
-		log.Printf("⚠️ Critical error promoting temp cache: %v", err)
-	}
+	// NOTE: We intentionally do NOT call tempCache.PromoteTempCache() here.
+	// Promotion is the responsibility of the caller (e.g., RefreshDailyRaceCombinations,
+	// PerformTargetedRefresh) so it can capture ALL promoted combo IDs for incremental
+	// indexing. Calling PromoteTempCache() here would silently promote files from
+	// concurrent operations (like the startup loader) without passing their combo IDs
+	// to IncrementalIndexUpdate, causing those entries to be missing from the search index.
 
 	// Export failed fetches
 	if len(failedFetches) > 0 {

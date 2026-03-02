@@ -17,7 +17,7 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 
-	if dailyRaces == nil || len(dailyRaces.Races) == 0 {
+	if dailyRaces == nil || (len(dailyRaces.Races) == 0 && len(dailyRaces.FeatureRaces) == 0) {
 		log.Println("ℹ️ No Daily Races cached - skipping Daily Race refresh")
 		return nil, nil
 	}
@@ -26,7 +26,11 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 	seen := make(map[string]bool)
 	var trackIDs []string
 
-	for _, race := range dailyRaces.Races {
+	allRaces := make([]DailySprintRace, 0, len(dailyRaces.Races)+len(dailyRaces.FeatureRaces))
+	allRaces = append(allRaces, dailyRaces.Races...)
+	allRaces = append(allRaces, dailyRaces.FeatureRaces...)
+
+	for _, race := range allRaces {
 		if !race.MatchedOK || race.TrackID == "" || race.CarClassID == "" {
 			continue
 		}
@@ -64,20 +68,24 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 
 	// Fetch fresh data for these specific combinations
 	// Use FetchTargetedTrackDataWithCallback but without triggering indexing
+	FetchTargetedTrackDataWithCallback(ctx, trackIDs, nil, "daily-races")
+
+	// FetchTargetedTrackDataWithCallback saves fetched data to cache_temp but
+	// does NOT promote (to avoid stealing files from concurrent operations).
+	// We promote here and capture ALL promoted combo IDs — this includes both
+	// the daily race files AND any pending files from the main loader.
+	// This is critical: if we only returned trackIDs (the daily race combos),
+	// the caller's IncrementalIndexUpdate would miss the loader's combos,
+	// causing those entries to be absent from the search index.
 	tempCache := NewTempDataCache()
-	fetchedTracks := FetchTargetedTrackDataWithCallback(ctx, trackIDs, nil, "daily-races")
-
-	// Save fetched data to temp cache, then promote
-	for _, track := range fetchedTracks {
-		if err := tempCache.SaveTrackData(track); err != nil {
-			log.Printf("⚠️ Failed to save Daily Race data: %v", err)
-		}
+	promotedIDs, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Failed to promote cache: %v", err)
 	}
 
-	// Promote temp cache to main cache
-	if _, err := tempCache.PromoteTempCache(); err != nil {
-		log.Printf("⚠️ Failed to promote Daily Race cache: %v", err)
-	}
+	// Merge promoted IDs with daily race trackIDs to ensure all are included,
+	// even if some daily race files were already in main cache
+	allIDs := mergeUniqueStrings(promotedIDs, trackIDs)
 
 	// Update status with last refresh time
 	UpdateDailyRaceRefreshTime()
@@ -89,7 +97,27 @@ func RefreshDailyRaceCombinations(ctx context.Context) ([]string, error) {
 	}
 	mpCancel()
 
-	return trackIDs, nil
+	if len(allIDs) != len(trackIDs) {
+		log.Printf("🔄 Returning %d combo IDs (%d daily race + %d from pending cache)",
+			len(allIDs), len(trackIDs), len(allIDs)-len(trackIDs))
+	}
+
+	return allIDs, nil
+}
+
+// mergeUniqueStrings combines multiple string slices, removing duplicates.
+func mergeUniqueStrings(slices ...[]string) []string {
+	seen := make(map[string]bool)
+	for _, s := range slices {
+		for _, v := range s {
+			seen[v] = true
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for v := range seen {
+		result = append(result, v)
+	}
+	return result
 }
 
 func isNumericID(value string) bool {
@@ -157,6 +185,14 @@ func PerformTargetedRefresh(ctx context.Context, trackIDs []string, progressCall
 
 	// Perform targeted refresh for specific tracks
 	fetchedTracks := FetchTargetedTrackDataWithCallback(ctx, trackIDs, mergedProgressCallback, origin)
+
+	// Promote temp cache to main cache for persistence.
+	// fetchSpecificCombinations no longer promotes internally to avoid stealing
+	// files from concurrent operations, so we promote here.
+	tempCache := NewTempDataCache()
+	if _, err := tempCache.PromoteTempCache(); err != nil {
+		log.Printf("⚠️ Failed to promote temp cache in targeted refresh: %v", err)
+	}
 
 	// Build final merged result
 	finalMerged := MergeTracks(cachedTracks, fetchedTracks)
