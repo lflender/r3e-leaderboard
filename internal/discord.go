@@ -601,6 +601,7 @@ func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
 			"WTCR 2020",
 			"WTCR 2021",
 			"WTCR 2022",
+			"Touring Cars Cup",
 		}
 	} else if category == "dtm 2013-16" {
 		classNames = []string{

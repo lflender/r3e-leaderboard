@@ -499,7 +499,7 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 
 			if len(changedCombos) > 0 {
 				log.Printf("🔄 Incrementally updating index for %d changed combos after Daily Race refresh...", len(changedCombos))
-				if err := internal.IncrementalIndexUpdate(changedCombos); err != nil {
+				if err := internal.IncrementalIndexUpdate(changedCombos, o.lastDailyRaceRefresh); err != nil {
 					// Don't fall back to full rebuild — that loads ALL ~10K cache files
 					// and would OOM a 4 GB server. The index on disk is still valid;
 					// just retry next cycle.

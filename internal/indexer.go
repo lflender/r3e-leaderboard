@@ -418,9 +418,17 @@ func LoadDriverIndexFromDisk() (DriverIndex, error) {
 //  4. Re-exports the updated index
 //
 // This reduces peak memory by ~2 GB compared to a full BuildAndExportIndex.
-func IncrementalIndexUpdate(changedCombos []string) error {
+// The lastDailyRaceRefresh parameter allows the caller to preserve/update this
+// timestamp; if zero, it reads from the current status file on disk.
+func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time.Time) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
+
+	// Extract the optional lastDailyRaceRefresh parameter if provided
+	var dailyRaceRefresh time.Time
+	if len(lastDailyRaceRefresh) > 0 {
+		dailyRaceRefresh = lastDailyRaceRefresh[0]
+	}
 
 	if len(changedCombos) == 0 {
 		log.Println("ℹ️ No changed combos for incremental update — skipping")
@@ -618,6 +626,13 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 	existingStatus := ReadStatusData()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+
+	// Use provided lastDailyRaceRefresh if specified, otherwise preserve from disk
+	dailyRaceTS := dailyRaceRefresh
+	if dailyRaceTS.IsZero() {
+		dailyRaceTS = existingStatus.LastDailyRaceRefresh
+	}
+
 	status := StatusData{
 		FetchInProgress:          existingStatus.FetchInProgress,
 		LastScrapeStart:          existingStatus.LastScrapeStart,
@@ -635,7 +650,7 @@ func IncrementalIndexUpdate(changedCombos []string) error {
 		FailedFetches:            existingStatus.FailedFetches,
 		RetriedFetchCount:        existingStatus.RetriedFetchCount,
 		DailySprintRacesCount:    existingStatus.DailySprintRacesCount,
-		LastDailyRaceRefresh:     existingStatus.LastDailyRaceRefresh,
+		LastDailyRaceRefresh:     dailyRaceTS,
 	}
 	if err := ExportStatusData(status); err != nil {
 		log.Printf("⚠️ Failed to update status after incremental index: %v", err)
