@@ -72,7 +72,7 @@ func main() {
 	fetchContext, fetchCancel := context.WithCancel(context.Background())
 
 	// Create orchestrator to coordinate all operations
-	orchestrator = NewOrchestrator(fetchContext, fetchCancel)
+	orchestrator = NewOrchestrator(fetchContext, fetchCancel, config)
 
 	// Promote any leftover temporary cache from previous runs before starting
 	tempCache := internal.NewTempDataCache()
@@ -82,7 +82,7 @@ func main() {
 
 	// Always refresh multiplayer positions at startup
 	mpCtx, mpCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	if err := internal.RefreshMultiplayerPositions(mpCtx); err != nil {
+	if err := internal.RefreshMultiplayerPositions(mpCtx, config.Data.MultiplayerPositionLimit); err != nil {
 		log.Printf("⚠️ Failed to refresh mp_pos.json at startup: %v", err)
 		// Fall back to ensuring the file at least exists
 		if ensureErr := internal.EnsureMultiplayerPositionsCache(mpCtx); ensureErr != nil {

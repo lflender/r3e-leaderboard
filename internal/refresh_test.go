@@ -180,9 +180,11 @@ func TestRefreshDailyRaceCombinations_NoCachedRaces(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	cfg := GetDefaultConfig()
+
 	// Note: This test assumes no daily_races.json exists in the cache directory
 	// In a fresh test environment, this should be the case
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	if err != nil {
 		t.Logf("Got error (expected if cache dir doesn't exist): %v", err)
@@ -196,8 +198,10 @@ func TestRefreshDailyRaceCombinations_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
+	cfg := GetDefaultConfig()
+
 	// Should handle cancelled context gracefully
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	if err != nil {
 		t.Logf("Got error with cancelled context: %v", err)
@@ -273,8 +277,9 @@ func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
 	defer cancel()
 	cancel() // Cancel immediately to prevent actual API fetches
 
+	cfg := GetDefaultConfig()
 	// Call RefreshDailyRaceCombinations
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	// We expect it to identify all track-class combinations
 	// The error might be context cancelled, but we should still get the trackIDs

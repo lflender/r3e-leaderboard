@@ -39,6 +39,11 @@ func TestGetDefaultConfig(t *testing.T) {
 	if config.Discord.MessageCheckMins <= 0 {
 		t.Errorf("Default MessageCheckMins = %d, should be positive", config.Discord.MessageCheckMins)
 	}
+
+	// Data config
+	if config.Data.MultiplayerPositionLimit != 3000 {
+		t.Errorf("Default MultiplayerPositionLimit = %d, expected 3000", config.Data.MultiplayerPositionLimit)
+	}
 }
 
 func TestConfig_DiscordEnabledWhenTokenSet(t *testing.T) {
@@ -187,5 +192,32 @@ func TestDiscordConfig(t *testing.T) {
 
 	if !cfg.Enabled {
 		t.Error("Enabled should be true")
+	}
+}
+
+func TestDataConfig(t *testing.T) {
+	cfg := DataConfig{
+		MultiplayerPositionLimit: 3000,
+	}
+
+	if cfg.MultiplayerPositionLimit != 3000 {
+		t.Errorf("MultiplayerPositionLimit = %d, expected 3000", cfg.MultiplayerPositionLimit)
+	}
+}
+
+func TestDataConfig_CustomLimit(t *testing.T) {
+	cfg := DataConfig{
+		MultiplayerPositionLimit: 5000,
+	}
+
+	if cfg.MultiplayerPositionLimit != 5000 {
+		t.Errorf("MultiplayerPositionLimit = %d, expected 5000", cfg.MultiplayerPositionLimit)
+	}
+
+	// Test that pages would be calculated correctly for this limit
+	// (approximately 500 entries per page)
+	expectedPages := (cfg.MultiplayerPositionLimit + 499) / 500
+	if expectedPages <= 0 {
+		t.Error("Pages calculation should result in positive number")
 	}
 }

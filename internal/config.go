@@ -10,6 +10,7 @@ type Config struct {
 	Server   ServerConfig   `json:"server"`
 	Schedule ScheduleConfig `json:"schedule"`
 	Discord  DiscordConfig  `json:"discord"`
+	Data     DataConfig     `json:"data"`
 }
 
 // ServerConfig holds server-specific configuration
@@ -33,6 +34,11 @@ type DiscordConfig struct {
 	Enabled          bool   `json:"enabled"`            // Whether Discord integration is enabled
 }
 
+// DataConfig holds data fetching configuration
+type DataConfig struct {
+	MultiplayerPositionLimit int `json:"multiplayer_position_limit"` // Maximum number of multiplayer positions to track
+}
+
 // GetDefaultConfig returns default configuration
 func GetDefaultConfig() Config {
 	// Try to read Discord bot token from discord_token file
@@ -47,7 +53,7 @@ func GetDefaultConfig() Config {
 		},
 		Schedule: ScheduleConfig{
 			RefreshHour:                  4,  // 4 AM
-			RefreshMinute:                45, // At the top of the hour
+			RefreshMinute:                30, // At the top of the hour
 			IndexingMinutes:              30, // Every 30 minutes during fetching
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
@@ -56,6 +62,9 @@ func GetDefaultConfig() Config {
 			ChannelID:        "1468248477736894648", // Your Discord channel
 			MessageCheckMins: 15,                    // Check messages from last 5 minutes
 			Enabled:          discordToken != "",    // Enable only if token is set
+		},
+		Data: DataConfig{
+			MultiplayerPositionLimit: 5000, // Track top 5000 multiplayer positions
 		},
 	}
 }

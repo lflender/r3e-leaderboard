@@ -50,21 +50,26 @@ func EnsureMultiplayerPositionsCache(ctx context.Context) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return RefreshMultiplayerPositions(ctx)
+	return RefreshMultiplayerPositions(ctx, 3000)
 }
 
-// RefreshMultiplayerPositions fetches the top 2000 multiplayer positions and writes mp_pos.json.
-func RefreshMultiplayerPositions(ctx context.Context) error {
-	pages := []string{
-		"https://game.raceroom.com/multiplayer-rating/1.html",
-		"https://game.raceroom.com/multiplayer-rating/2.html",
-		"https://game.raceroom.com/multiplayer-rating/3.html",
-		"https://game.raceroom.com/multiplayer-rating/4.html",
+// RefreshMultiplayerPositions fetches the top `limit` multiplayer positions and writes mp_pos.json.
+// It calculates the number of pages needed (~500 entries per page) and fetches accordingly.
+func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
+	if limit < 1 {
+		return fmt.Errorf("limit must be at least 1")
 	}
 
-	log.Printf("🔍 Fetching multiplayer positions from %d pages", len(pages))
+	// Calculate number of pages needed (approximately 500 entries per page)
+	pagesNeeded := (limit + 499) / 500
+	pages := make([]string, pagesNeeded)
+	for i := 0; i < pagesNeeded; i++ {
+		pages[i] = fmt.Sprintf("https://game.raceroom.com/multiplayer-rating/%d.html", i+1)
+	}
 
-	positions := make(map[int]string, 2000)
+	log.Printf("🔍 Fetching multiplayer positions from %d pages (limit: %d)", len(pages), limit)
+
+	positions := make(map[int]string, limit)
 	for _, pageURL := range pages {
 		entries, err := fetchMultiplayerPositionsPage(ctx, pageURL)
 		if err != nil {
@@ -72,7 +77,7 @@ func RefreshMultiplayerPositions(ctx context.Context) error {
 		}
 		log.Printf("✅ Parsed %d entries from %s", len(entries), pageURL)
 		for _, entry := range entries {
-			if entry.Position < 1 || entry.Position > 2000 {
+			if entry.Position < 1 || entry.Position > limit {
 				continue
 			}
 			if _, exists := positions[entry.Position]; !exists {
@@ -88,8 +93,8 @@ func RefreshMultiplayerPositions(ctx context.Context) error {
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Position < results[j].Position
 	})
-	if len(results) > 2000 {
-		results = results[:2000]
+	if len(results) > limit {
+		results = results[:limit]
 	}
 
 	if len(results) == 0 {

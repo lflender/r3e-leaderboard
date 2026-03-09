@@ -26,10 +26,11 @@ type Orchestrator struct {
 	lastDailyRaceRefresh time.Time     // Track last Daily Race refresh
 	dailyRaceRefreshStop chan struct{} // Channel to stop daily race refresh loop
 	rebuildMu            sync.Mutex    // Prevents concurrent index rebuilds
+	config               internal.Config
 }
 
 // NewOrchestrator creates a new orchestrator instance
-func NewOrchestrator(ctx context.Context, cancel context.CancelFunc) *Orchestrator {
+func NewOrchestrator(ctx context.Context, cancel context.CancelFunc, cfg internal.Config) *Orchestrator {
 	// Load last Daily Race refresh time from status file
 	existingStatus := internal.ReadStatusData()
 
@@ -38,6 +39,7 @@ func NewOrchestrator(ctx context.Context, cancel context.CancelFunc) *Orchestrat
 		fetchCancel:          cancel,
 		tracks:               make([]internal.TrackInfo, 0),
 		lastDailyRaceRefresh: existingStatus.LastDailyRaceRefresh,
+		config:               cfg,
 	}
 }
 
@@ -60,7 +62,7 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		// First, refresh Daily Race combinations before initial index
 		// This ensures the index includes the latest Daily Race data
-		if _, err := internal.RefreshDailyRaceCombinations(o.fetchContext); err != nil {
+		if _, err := internal.RefreshDailyRaceCombinations(o.fetchContext, o.config); err != nil {
 			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
 		} else {
 			o.lastDailyRaceRefresh = time.Now()
@@ -490,7 +492,7 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 			}
 
 			log.Printf("🏁 Refreshing Daily Race combinations (%s)...", reason)
-			changedCombos, err := internal.RefreshDailyRaceCombinations(o.fetchContext)
+			changedCombos, err := internal.RefreshDailyRaceCombinations(o.fetchContext, o.config)
 			if err != nil {
 				log.Printf("⚠️ Daily Race refresh failed: %v", err)
 				return
