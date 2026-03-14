@@ -429,6 +429,8 @@ func GetDiscordTrackAliases() map[string]string {
 		"hungaroring":                       "Hungaroring - Grand Prix",
 		"zandvoort":                         "Circuit Zandvoort - Grand Prix",
 		"zandvoort gp":                      "Circuit Zandvoort - Grand Prix",
+		"circuit zandvoort 2019":            "Circuit Zandvoort 2019 - Grand Prix",
+		"zandvoort 2019":                    "Circuit Zandvoort 2019 - Grand Prix",
 		"donington national":                "Donington Park - National",
 		"donington gp":                      "Donington Park - Grand Prix",
 		"portimao gp":                       "Portimao Circuit - Grand Prix",

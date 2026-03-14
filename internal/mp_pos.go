@@ -21,16 +21,18 @@ import (
 const MultiplayerPositionsFile = "cache/mp_pos.json"
 
 var (
-	mpPosRowRe  = regexp.MustCompile(`(?is)<tr[^>]*>(.*?)</tr>`)
-	mpPosCellRe = regexp.MustCompile(`(?is)<td[^>]*>(.*?)</td>`)
-	mpPosTagRe  = regexp.MustCompile(`(?is)<[^>]+>`)
-	mpPosNumRe  = regexp.MustCompile(`\d+`)
+	mpPosRowRe     = regexp.MustCompile(`(?is)<tr[^>]*>(.*?)</tr>`)
+	mpPosCellRe    = regexp.MustCompile(`(?is)<td[^>]*>(.*?)</td>`)
+	mpPosTagRe     = regexp.MustCompile(`(?is)<[^>]+>`)
+	mpPosNumRe     = regexp.MustCompile(`\d+`)
+	mpPosCountryRe = regexp.MustCompile(`flags/([a-z]{2})\.svg`)
 )
 
 // MultiplayerPosition represents a driver's multiplayer position.
 type MultiplayerPosition struct {
 	Position int    `json:"position"`
 	Name     string `json:"name"`
+	Country  string `json:"country"` // Two-letter country code (e.g., "nl", "gb", "pt")
 }
 
 // MultiplayerPositionsData represents the exported top positions data.
@@ -69,7 +71,7 @@ func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
 
 	log.Printf("🔍 Fetching multiplayer positions from %d pages (limit: %d)", len(pages), limit)
 
-	positions := make(map[int]string, limit)
+	positions := make(map[int]MultiplayerPosition, limit)
 	for _, pageURL := range pages {
 		entries, err := fetchMultiplayerPositionsPage(ctx, pageURL)
 		if err != nil {
@@ -81,14 +83,14 @@ func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
 				continue
 			}
 			if _, exists := positions[entry.Position]; !exists {
-				positions[entry.Position] = entry.Name
+				positions[entry.Position] = entry
 			}
 		}
 	}
 
 	results := make([]MultiplayerPosition, 0, len(positions))
-	for pos, name := range positions {
-		results = append(results, MultiplayerPosition{Position: pos, Name: name})
+	for _, entry := range positions {
+		results = append(results, entry)
 	}
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Position < results[j].Position
@@ -151,6 +153,14 @@ func fetchMultiplayerPositionsPage(ctx context.Context, url string) ([]Multiplay
 			continue
 		}
 
+		// Extract country code from the first cell (flag cell) before cleaning
+		country := ""
+		if len(cells) > 0 {
+			if match := mpPosCountryRe.FindStringSubmatch(cells[0][1]); len(match) > 1 {
+				country = strings.ToUpper(match[1])
+			}
+		}
+
 		cellTexts := make([]string, 0, len(cells))
 		for _, cell := range cells {
 			text := cleanMPPosCell(cell[1])
@@ -194,7 +204,7 @@ func fetchMultiplayerPositionsPage(ctx context.Context, url string) ([]Multiplay
 			continue
 		}
 
-		entries = append(entries, MultiplayerPosition{Position: posVal, Name: name})
+		entries = append(entries, MultiplayerPosition{Position: posVal, Name: name, Country: country})
 	}
 
 	if len(entries) == 0 {

@@ -54,7 +54,7 @@ func GetDefaultConfig() Config {
 		Schedule: ScheduleConfig{
 			RefreshHour:                  4,  // 4 AM
 			RefreshMinute:                30, // At the top of the hour
-			IndexingMinutes:              30, // Every 30 minutes during fetching
+			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
 		Discord: DiscordConfig{
