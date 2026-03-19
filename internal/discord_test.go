@@ -516,6 +516,7 @@ func TestFindCarClassID_FixedAliases(t *testing.T) {
 		{"992", "12302", "992 → Porsche 992 GT3 Cup"},
 		{"aquila", "255", "Aquila → Aquila CR1 Cup"},
 		{"bmw m1 procar", "2378", "BMW M1 Procar → Procar"},
+		{"m1 cup", "2378", "M1 Cup → Procar"},
 		{"m235i", "6344", "M235i → BMW M235i Racing Cup"},
 	}
 

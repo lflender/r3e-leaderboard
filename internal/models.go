@@ -356,6 +356,7 @@ func GetDiscordCarClassAliases() map[string]string {
 		"992":                "Porsche 992 GT3 Cup",
 		"992 cup":            "Porsche 992 GT3 Cup",
 		"bmw m1 procar":      "Procar",
+		"m1 cup":             "Procar",
 		"lmdh":               "Hypercars",
 		"audi tt rs":         "Audi TT RS cup",
 		"fr 2":               "FR2 Cup",

@@ -188,6 +188,7 @@ func TestGetDiscordCarClassAliases(t *testing.T) {
 		"gt4":           "GTR 4",
 		"mx5":           "Mazda MX-5 Cup",
 		"dtm 1995":      "DTM 1995",
+		"m1 cup":        "Procar",
 		"super touring": "Super Touring",
 	}
 
