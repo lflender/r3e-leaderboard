@@ -123,10 +123,6 @@ stat /var/www/html/nginx-dashboard.html
 
 If that timestamp changes after running `/root/update-nginx-dashboard.sh`, the page source is being updated correctly.
 
-**Current day looks abnormally low**
-
-That is expected if the report is regenerated shortly after midnight. The current day is still in progress, so the last point on the graph may be much lower than previous days.
-
 ---
 
 ## Checking the timer schedule

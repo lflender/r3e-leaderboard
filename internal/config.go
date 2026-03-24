@@ -52,15 +52,15 @@ func GetDefaultConfig() Config {
 			Port: 8080,
 		},
 		Schedule: ScheduleConfig{
-			RefreshHour:                  4,  // 4 AM
-			RefreshMinute:                00, // At the top of the hour
+			RefreshHour:                  3,  // 3 AM
+			RefreshMinute:                30, // At the half hour
 			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
 		Discord: DiscordConfig{
 			BotToken:         discordToken,
 			ChannelID:        "1468248477736894648", // Your Discord channel
-			MessageCheckMins: 15,                    // Check messages from last 5 minutes
+			MessageCheckMins: 70,                    // Check messages from last 70 minutes
 			Enabled:          discordToken != "",    // Enable only if token is set
 		},
 		Data: DataConfig{
