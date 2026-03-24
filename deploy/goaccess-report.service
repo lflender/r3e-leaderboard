@@ -1,0 +1,14 @@
+[Unit]
+Description=Regenerate GoAccess nginx dashboard report
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/root/update-nginx-dashboard.sh
+# Run as root so goaccess can read /var/log/nginx/access.log
+# (or change to a dedicated user that is in the adm group)
+User=root
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=goaccess-report

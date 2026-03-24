@@ -23,12 +23,12 @@ func TestGetDefaultConfig(t *testing.T) {
 		t.Errorf("Default RefreshHour = %d, expected 4", config.Schedule.RefreshHour)
 	}
 
-	if config.Schedule.RefreshMinute != 45 {
-		t.Errorf("Default RefreshMinute = %d, expected 45", config.Schedule.RefreshMinute)
+	if config.Schedule.RefreshMinute != 30 {
+		t.Errorf("Default RefreshMinute = %d, expected 30", config.Schedule.RefreshMinute)
 	}
 
-	if config.Schedule.IndexingMinutes != 30 {
-		t.Errorf("Default IndexingMinutes = %d, expected 30", config.Schedule.IndexingMinutes)
+	if config.Schedule.IndexingMinutes != 60 {
+		t.Errorf("Default IndexingMinutes = %d, expected 60", config.Schedule.IndexingMinutes)
 	}
 
 	// Discord config
@@ -41,8 +41,8 @@ func TestGetDefaultConfig(t *testing.T) {
 	}
 
 	// Data config
-	if config.Data.MultiplayerPositionLimit != 3000 {
-		t.Errorf("Default MultiplayerPositionLimit = %d, expected 3000", config.Data.MultiplayerPositionLimit)
+	if config.Data.MultiplayerPositionLimit != 5000 {
+		t.Errorf("Default MultiplayerPositionLimit = %d, expected 5000", config.Data.MultiplayerPositionLimit)
 	}
 }
 

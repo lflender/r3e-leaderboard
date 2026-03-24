@@ -1417,14 +1417,14 @@ func TestParseDailySprintRaces_Feb9Message(t *testing.T) {
 		}
 	}
 
-	// Verify WTCR category has all 5 class IDs in CategoryIDs field
+	// Verify WTCR category has all 6 class IDs in CategoryIDs field
 	wtcrFound := false
-	wtcrExpectedIDs := []string{"7009", "7844", "9233", "10344", "11317"}
+	wtcrExpectedIDs := []string{"7009", "7844", "9233", "10344", "11317", "8660"}
 	for _, race := range result.Races {
 		if race.CarClass == "WTCR" {
 			wtcrFound = true
-			if len(race.CategoryIDs) != 5 {
-				t.Errorf("WTCR category expected 5 class IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+			if len(race.CategoryIDs) != 6 {
+				t.Errorf("WTCR category expected 6 class IDs, got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
 			} else {
 				// Verify the specific IDs are present
 				for i, expectedID := range wtcrExpectedIDs {
@@ -1764,7 +1764,7 @@ func TestParseDailySprintRaces_Mar2Message(t *testing.T) {
 		{"GT3", "GT3", "Red Bull Ring", "2556", true, []string{"1703", "12770", "13136"}},
 		{"F4", "4867", "Silverstone International", "5816", false, nil},
 		{"Super Touring", "1710", "Twin Ring Motegi", "7027", false, nil},
-		{"WTCR", "WTCR", "Imola", "1850", true, []string{"7009", "7844", "9233", "10344", "11317"}},
+		{"WTCR", "WTCR", "Imola", "1850", true, []string{"7009", "7844", "9233", "10344", "11317", "8660"}},
 		{"MX5", "10977", "Knutstorp Ring", "6137", false, nil},
 		{"DTM 2013-16", "DTM 2013-16", "Watkins Glen GP w Loop", "9324", true, []string{"1921", "3086", "4260", "5262"}},
 	}
@@ -2271,8 +2271,9 @@ func TestGetCategoryClassIDs(t *testing.T) {
 				"9233",  // WTCR 2020
 				"10344", // WTCR 2021
 				"11317", // WTCR 2022
+				"8660",  // Touring Cars Cup
 			},
-			desc: "WTCR category returns all 5 class IDs",
+			desc: "WTCR category returns all 6 class IDs",
 		},
 		{
 			category: "wtcr",
@@ -2282,8 +2283,9 @@ func TestGetCategoryClassIDs(t *testing.T) {
 				"9233",  // WTCR 2020
 				"10344", // WTCR 2021
 				"11317", // WTCR 2022
+				"8660",  // Touring Cars Cup
 			},
-			desc: "wtcr (lowercase) category returns all 5 class IDs",
+			desc: "wtcr (lowercase) category returns all 6 class IDs",
 		},
 		{
 			category:    "DTM",

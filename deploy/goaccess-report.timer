@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily nginx dashboard report (GoAccess)
+# Requires the .service of the same name
+Requires=goaccess-report.service
+
+[Timer]
+# Run once per day at 00:05 UTC (5 minutes after midnight so nginx has finished
+# writing any final log entries for the previous day before log rotation kicks in)
+OnCalendar=*-*-* 00:05:00 UTC
+# If the system was off at the scheduled time, run immediately on next boot
+Persistent=true
+
+[Install]
+WantedBy=timers.target
