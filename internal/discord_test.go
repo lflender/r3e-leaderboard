@@ -1064,7 +1064,7 @@ func TestParseDailySprintRaces_Nov17Message(t *testing.T) {
 		isCategory    bool
 	}{
 		{"Aquila", "255", false, false}, // Aquila CR1 Cup
-		{"GTR 2", "8248", false, false}, // GTR 2 alias → GT2
+		{"GTR 2", "1704", false, false}, // GTR 2 alias
 		{"GT3", "GT3", false, true},     // GT3 category (GTR 3, DTM 2024, DTM 2025)
 		{"Super Touring", "1710", false, false},
 		{"MX-5", "10977", false, false},

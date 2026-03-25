@@ -143,10 +143,12 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, indexingIntervalMinutes int) {
 	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute)
 	o.scheduler.Start(func() {
-		// Skip scheduled refresh if manual fetch is already in progress
+		// If a fetch is already in progress, cancel it and start the daily refresh instead
 		if o.fetchInProgress {
-			log.Println("⏭️ Skipping scheduled refresh - manual fetch already in progress")
-			return
+			log.Println("⏹️ Cancelling in-progress fetch to start scheduled daily refresh")
+			o.fetchCancel()
+			// Give the fetch a moment to stop
+			time.Sleep(500 * time.Millisecond)
 		}
 		o.performFullRefresh(indexingIntervalMinutes, "nightly")
 	})
