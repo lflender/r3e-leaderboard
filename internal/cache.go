@@ -8,8 +8,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"time"
 )
+
+// promoteMu protects concurrent calls to PromoteTempCache to prevent duplicate promotions
+var promoteMu sync.Mutex
 
 // TrackInfo represents information about a track+class combination
 type TrackInfo struct {
@@ -291,21 +296,26 @@ func (dc *DataCache) ClearTempCache() error {
 
 // PromoteTempCache atomically moves temp cache to main cache
 // This ensures the index always sees consistent data
-// Returns the number of files promoted and any critical error
-func (dc *DataCache) PromoteTempCache() (int, error) {
+// Returns the list of promoted combo IDs ("trackID-classID" format) and any critical error
+func (dc *DataCache) PromoteTempCache() ([]string, error) {
+	// Serialize promotion to prevent concurrent calls from two parts of the code
+	// (e.g., daily race refresh + periodic indexer) both trying to promote the same files
+	promoteMu.Lock()
+	defer promoteMu.Unlock()
+
 	// Check if temp cache exists
 	if _, err := os.Stat(dc.tempCacheDir); os.IsNotExist(err) {
-		return 0, nil
+		return nil, nil
 	} else if err != nil {
 		log.Printf("⚠️ Error checking temp cache dir %s: %v", dc.tempCacheDir, err)
-		return 0, nil
+		return nil, nil
 	}
 
 	// Read all temp cache entries
 	tempFiles, err := filepath.Glob(filepath.Join(dc.tempCacheDir, "track_*", "class_*.json.gz"))
 	if err != nil {
 		log.Printf("⚠️ Failed to list temp cache files: %v", err)
-		return 0, fmt.Errorf("failed to list temp cache files: %w", err)
+		return nil, fmt.Errorf("failed to list temp cache files: %w", err)
 	}
 
 	if len(tempFiles) == 0 {
@@ -313,16 +323,16 @@ func (dc *DataCache) PromoteTempCache() (int, error) {
 		if err := dc.ClearTempCache(); err != nil {
 			log.Printf("⚠️ Warning: Failed to clean up empty temp cache: %v", err)
 		}
-		return 0, nil
+		return nil, nil
 	}
 
 	// Ensure main cache directory exists
 	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
 		log.Printf("⚠️ Failed to create main cache directory: %v", err)
-		return 0, fmt.Errorf("failed to create cache dir: %w", err)
+		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
 
-	promoted := 0
+	var promotedIDs []string
 	failed := 0
 
 	// Move each temp file to main cache
@@ -362,14 +372,18 @@ func (dc *DataCache) PromoteTempCache() (int, error) {
 			// Don't break - continue with other files
 			continue
 		}
-		promoted++
+
+		// Extract combo ID from path: track_XXXX/class_YYYY.json.gz → "XXXX-YYYY"
+		if comboID := extractComboID(relPath); comboID != "" {
+			promotedIDs = append(promotedIDs, comboID)
+		}
 	}
 
 	// Log results
 	if failed > 0 {
-		log.Printf("⚠️ Cache promotion completed with issues: %d files promoted, %d failed", promoted, failed)
-	} else if promoted > 0 {
-		log.Printf("✅ Promoted %d cache files", promoted)
+		log.Printf("⚠️ Cache promotion completed with issues: %d files promoted, %d failed", len(promotedIDs), failed)
+	} else if len(promotedIDs) > 0 {
+		log.Printf("✅ Promoted %d cache files", len(promotedIDs))
 	}
 
 	// Clean up temp cache directory and empty track directories
@@ -381,11 +395,42 @@ func (dc *DataCache) PromoteTempCache() (int, error) {
 
 	// Return success even if some files failed - partial promotion is better than none
 	// Only return error if NO files were promoted and we expected some
-	if promoted == 0 && len(tempFiles) > 0 {
-		return 0, fmt.Errorf("failed to promote any cache files (%d attempted)", len(tempFiles))
+	if len(promotedIDs) == 0 && len(tempFiles) > 0 {
+		return nil, fmt.Errorf("failed to promote any cache files (%d attempted)", len(tempFiles))
 	}
 
-	return promoted, nil
+	return promotedIDs, nil
+}
+
+// extractComboID extracts a "trackID-classID" combo identifier from a relative cache path.
+// Expected format: track_XXXX/class_YYYY.json.gz → "XXXX-YYYY"
+func extractComboID(relPath string) string {
+	// Normalize path separators
+	normalized := filepath.ToSlash(relPath)
+	parts := strings.Split(normalized, "/")
+	if len(parts) != 2 {
+		return ""
+	}
+
+	trackPart := parts[0] // "track_XXXX"
+	classPart := parts[1] // "class_YYYY.json.gz"
+
+	if !strings.HasPrefix(trackPart, "track_") {
+		return ""
+	}
+	trackID := strings.TrimPrefix(trackPart, "track_")
+
+	if !strings.HasPrefix(classPart, "class_") {
+		return ""
+	}
+	classID := strings.TrimPrefix(classPart, "class_")
+	classID = strings.TrimSuffix(classID, ".json.gz")
+
+	if trackID == "" || classID == "" {
+		return ""
+	}
+
+	return trackID + "-" + classID
 }
 
 // GetCacheInfo returns information about cached files
@@ -443,11 +488,55 @@ func (dc *DataCache) SaveDiscordRaces(result *DailySprintRacesResult) error {
 		return err
 	}
 
-	// Atomically rename
-	os.Remove(filename) // Remove old file on Windows
+	// Atomically rename (without removing original first - it's overwritten on success)
 	if err := os.Rename(tempFile, filename); err != nil {
-		os.Remove(tempFile)
-		return err
+		log.Printf("⚠️ WARNING: Atomic rename failed for %s: %v", filename, err)
+
+		// Fallback: try direct write (file may be locked by editor/client)
+		file, reopenErr := os.Open(tempFile)
+		if reopenErr != nil {
+			log.Printf("❌ ERROR: Failed to reopen temp file: %v", reopenErr)
+			os.Remove(tempFile)
+			return reopenErr
+		}
+
+		var reencoded DailySprintRacesResult
+		decoder := json.NewDecoder(file)
+		if decodeErr := decoder.Decode(&reencoded); decodeErr != nil {
+			file.Close()
+			log.Printf("❌ ERROR: Failed to decode temp file: %v", decodeErr)
+			os.Remove(tempFile)
+			return decodeErr
+		}
+		file.Close()
+
+		// Re-encode and write directly
+		directFile, createErr := os.Create(filename)
+		if createErr != nil {
+			log.Printf("❌ ERROR: Direct write also failed: %v", createErr)
+			log.Printf("   Please close %s in your editor and try again", filename)
+			os.Remove(tempFile)
+			return createErr
+		}
+
+		directEncoder := json.NewEncoder(directFile)
+		directEncoder.SetIndent("", "  ")
+		if encodeErr := directEncoder.Encode(&reencoded); encodeErr != nil {
+			directFile.Close()
+			log.Printf("❌ ERROR: Failed to encode during direct write: %v", encodeErr)
+			os.Remove(tempFile)
+			return encodeErr
+		}
+
+		if closeErr := directFile.Close(); closeErr != nil {
+			log.Printf("⚠️ WARNING: Failed to close file after direct write: %v", closeErr)
+		}
+
+		log.Printf("✅ Fallback write successful")
+		os.Remove(tempFile) // Clean up temp file after successful fallback
+	} else {
+		// Rename succeeded, temp file is now the main file
+		// (temp file is automatically "removed" by the rename operation)
 	}
 
 	return nil

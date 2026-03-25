@@ -46,11 +46,12 @@ type DailySprintRace struct {
 
 // DailySprintRacesResult holds the parsed Daily Sprint Races data
 type DailySprintRacesResult struct {
-	Races       []DailySprintRace `json:"races"`
-	MessageID   string            `json:"message_id"`
-	MessageTime time.Time         `json:"message_time"`
-	ParsedAt    time.Time         `json:"parsed_at"`
-	RawContent  string            `json:"raw_content"`
+	Races        []DailySprintRace `json:"races"`
+	FeatureRaces []DailySprintRace `json:"feature-races,omitempty"`
+	MessageID    string            `json:"message_id"`
+	MessageTime  time.Time         `json:"message_time"`
+	ParsedAt     time.Time         `json:"parsed_at"`
+	RawContent   string            `json:"raw_content"`
 }
 
 // DiscordClient handles Discord API interactions
@@ -127,27 +128,18 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 	}
 
 	result := &DailySprintRacesResult{
-		MessageID:   message.ID,
-		MessageTime: message.Timestamp,
-		ParsedAt:    time.Now(),
-		RawContent:  message.Content,
-		Races:       []DailySprintRace{},
+		MessageID:    message.ID,
+		MessageTime:  message.Timestamp,
+		ParsedAt:     time.Now(),
+		RawContent:   message.Content,
+		Races:        []DailySprintRace{},
+		FeatureRaces: []DailySprintRace{},
 	}
 
-	// Extract the Daily Sprint Races section
 	content := message.Content
 
-	// Find the start of Daily Sprint Races section
-	startIdx := strings.Index(content, "Daily Sprint Races")
-	if startIdx == -1 {
-		return result
-	}
-
-	// Extract from the section header to the next major section or end
-	sectionContent := content[startIdx:]
-
-	// Common section headers that might follow Daily Sprint Races
-	endMarkers := []string{
+	// Parse Daily Sprint Races section
+	result.Races = parseRaceSection(content, "Daily Sprint Races", []string{
 		"Daily Feature Races",
 		"Weekly Races",
 		"Special Events",
@@ -156,7 +148,32 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 		"Weekly Events",
 		"Championship",
 		"Competition",
+	})
+
+	// Parse Daily Feature Races section
+	result.FeatureRaces = parseRaceSection(content, "Daily Feature Races", []string{
+		"Weekly Races",
+		"Special Events",
+		"Endurance Races",
+		"Daily Endurance",
+		"Weekly Events",
+		"Championship",
+		"Competition",
+	})
+
+	// Match car classes and tracks to their IDs
+	matchRaceIDs(result)
+
+	return result
+}
+
+func parseRaceSection(content string, sectionTitle string, endMarkers []string) []DailySprintRace {
+	startIdx := strings.Index(content, sectionTitle)
+	if startIdx == -1 {
+		return []DailySprintRace{}
 	}
+
+	sectionContent := content[startIdx:]
 
 	endIdx := len(sectionContent)
 	for _, marker := range endMarkers {
@@ -166,9 +183,9 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 	}
 	sectionContent = sectionContent[:endIdx]
 
-	// Parse each race line
 	lines := strings.Split(sectionContent, "\n")
 
+	var races []DailySprintRace
 	var currentRace *DailySprintRace
 
 	for _, line := range lines {
@@ -177,32 +194,25 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 			continue
 		}
 
-		// Skip the section header
-		if strings.Contains(line, "Daily Sprint Races") {
+		if strings.Contains(line, sectionTitle) {
 			continue
 		}
 
-		// Check if this is a race line (starts with emoji indicators)
 		if isRaceLine(line) {
 			if currentRace != nil {
-				result.Races = append(result.Races, *currentRace)
+				races = append(races, *currentRace)
 			}
 			currentRace = parseRaceLine(line)
 		} else if currentRace != nil && isScheduleLine(line) {
-			// This is a schedule line for the current race
 			currentRace.Schedule = extractSchedule(line)
 		}
 	}
 
-	// Don't forget the last race
 	if currentRace != nil {
-		result.Races = append(result.Races, *currentRace)
+		races = append(races, *currentRace)
 	}
 
-	// Match car classes and tracks to their IDs
-	matchRaceIDs(result)
-
-	return result
+	return races
 }
 
 // isRaceLine checks if a line is a race entry (starts with emoji like 🆓, 🏁, or custom emoji)
@@ -213,7 +223,7 @@ func isRaceLine(line string) bool {
 	}
 
 	// Common race line indicators (at the start)
-	indicators := []string{"🆓", "🏁"}
+	indicators := []string{"🆓", "🏁", "🔥"}
 
 	for _, ind := range indicators {
 		if strings.HasPrefix(line, ind) {
@@ -236,12 +246,25 @@ func isRaceLine(line string) bool {
 
 // isScheduleLine checks if a line contains schedule information
 func isScheduleLine(line string) bool {
-	scheduleKeywords := []string{"Every hour", "Every other hour", "Every half hour", "⁨Every"}
+	cleaned := strings.ReplaceAll(line, "⁨", "")
+	cleaned = strings.ReplaceAll(cleaned, "⁩", "")
+	lower := strings.ToLower(cleaned)
+
+	scheduleKeywords := []string{"every hour", "every other hour", "every half hour"}
 	for _, kw := range scheduleKeywords {
-		if strings.Contains(line, kw) {
+		if strings.Contains(lower, kw) {
 			return true
 		}
 	}
+
+	if strings.Contains(lower, "min") || strings.Contains(lower, "laps") {
+		return true
+	}
+
+	if matched, _ := regexp.MatchString(`\(\d{2}:\d{2}`, cleaned); matched {
+		return true
+	}
+
 	return false
 }
 
@@ -287,7 +310,7 @@ func cleanRaceLine(line string) string {
 	line = re.ReplaceAllString(line, "")
 
 	// Remove common emoji characters
-	emojis := []string{"🆓", "🏁", "⁨", "⁩"}
+	emojis := []string{"🆓", "🏁", "🔥", "⁨", "⁩"}
 	for _, e := range emojis {
 		line = strings.ReplaceAll(line, e, "")
 	}
@@ -297,7 +320,7 @@ func cleanRaceLine(line string) string {
 	for _, r := range line {
 		// Keep alphanumeric, spaces, common punctuation
 		if unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsSpace(r) ||
-			r == '-' || r == '–' || r == '—' || r == '(' || r == ')' || r == '.' || r == '\'' {
+			r == '-' || r == '–' || r == '—' || r == '(' || r == ')' || r == '.' || r == '\'' || r == '+' {
 			result.WriteRune(r)
 		}
 	}
@@ -340,14 +363,64 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 	carClasses := GetCarClasses()
 	multiClassAliases := GetDiscordMultiClassAliases()
 
+	result.Races = matchRaceIDsForList(result.Races, tracks, carClasses, multiClassAliases)
+	result.FeatureRaces = matchRaceIDsForList(result.FeatureRaces, tracks, carClasses, multiClassAliases)
+}
+
+func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClasses []CarClassConfig, multiClassAliases map[string][]string) []DailySprintRace {
 	var expandedRaces []DailySprintRace
-	for _, race := range result.Races {
+	for _, race := range races {
 		if !race.ParsedOK {
 			expandedRaces = append(expandedRaces, race)
 			continue
 		}
 
 		normalizedClass := normalizeForMatching(race.CarClass)
+		// Also try stripping metadata in parentheses for matching
+		normalizedClassNoMeta := stripMetadata(normalizedClass)
+
+		// Check for + combo (e.g., "PCCD + PCCNA", "GT4 + TCR")
+		if strings.Contains(race.CarClass, "+") {
+			parts := strings.Split(race.CarClass, "+")
+			trackID := findTrackID(race.Track, tracks)
+
+			newRace := race
+			var categoryIDs []string
+			var displayParts []string
+			allResolved := true
+
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				classID := findCarClassID(part, carClasses)
+				if classID == "" {
+					allResolved = false
+					break
+				}
+				categoryIDs = append(categoryIDs, classID)
+				displayParts = append(displayParts, part)
+			}
+
+			if allResolved && len(categoryIDs) > 0 {
+				displayName := strings.Join(displayParts, " + ")
+				newRace.CarClass = displayName
+				newRace.CarClassID = displayName
+				newRace.CategoryIDs = categoryIDs
+				newRace.TrackID = trackID
+				newRace.MatchedOK = trackID != "" && len(categoryIDs) > 0
+				expandedRaces = append(expandedRaces, newRace)
+			} else {
+				// Fallback: treat as single class
+				race.CarClassID = findCarClassID(race.CarClass, carClasses)
+				race.TrackID = findTrackID(race.Track, tracks)
+				race.MatchedOK = race.CarClassID != "" && race.TrackID != ""
+				expandedRaces = append(expandedRaces, race)
+			}
+			continue
+		}
+
 		if category := rangeClassCategory(normalizedClass); category != "" {
 			// Treat certain ranges as a single category entry for the frontend
 			newRace := race
@@ -360,17 +433,39 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 			continue
 		}
 
-		if classNames, ok := multiClassAliases[normalizedClass]; ok {
-			// Multi-class alias expansion (e.g., "TT Cup" → 2015 + 2016)
-			trackID := findTrackID(race.Track, tracks)
-			for _, className := range classNames {
-				newRace := race
-				newRace.CarClass = className
-				newRace.CarClassID = findCarClassIDByExactName(className, carClasses)
-				newRace.TrackID = trackID
-				newRace.MatchedOK = newRace.CarClassID != "" && newRace.TrackID != ""
-				expandedRaces = append(expandedRaces, newRace)
+		// Try multi-class aliases with both full normalized string and stripped metadata version
+		var classNames []string
+		if names, ok := multiClassAliases[normalizedClass]; ok {
+			classNames = names
+		} else if normalizedClassNoMeta != normalizedClass {
+			if names, ok := multiClassAliases[normalizedClassNoMeta]; ok {
+				classNames = names
 			}
+		}
+
+		if len(classNames) > 0 {
+			// Multi-class alias becomes a single category entry (e.g., "TT Cup" → 2015 + 2016)
+			newRace := race
+			// For multi-class aliases, use the cleaned base name for CarClass
+			carClassName := normalizedClassNoMeta
+			if carClassName == "gt3" {
+				carClassName = "GT3"
+			} else if carClassName == "tt cup" {
+				carClassName = "TT Cup"
+			} else if carClassName == "audi tt cup" {
+				carClassName = "Audi TT Cup"
+			}
+			newRace.CarClass = carClassName
+			newRace.CarClassID = carClassName
+			newRace.TrackID = findTrackID(race.Track, tracks)
+			newRace.CategoryIDs = nil
+			for _, className := range classNames {
+				if id := findCarClassIDByExactName(className, carClasses); id != "" {
+					newRace.CategoryIDs = append(newRace.CategoryIDs, id)
+				}
+			}
+			newRace.MatchedOK = newRace.TrackID != "" && len(newRace.CategoryIDs) > 0
+			expandedRaces = append(expandedRaces, newRace)
 		} else if rangeClasses := expandCarClassRange(race.CarClass); rangeClasses != nil {
 			// Range expansion (e.g., "WTCR 18-22" → WTCR 2018..2022)
 			trackID := findTrackID(race.Track, tracks)
@@ -391,7 +486,7 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 		}
 	}
 
-	result.Races = expandedRaces
+	return expandedRaces
 }
 
 // expandCarClassRange detects range patterns like "WTCR 18-22" and returns
@@ -400,27 +495,52 @@ func matchRaceIDs(result *DailySprintRacesResult) {
 func expandCarClassRange(className string) []string {
 	trimmed := strings.TrimSpace(className)
 
-	// Match "BaseName YY-YY" where YY are 2-digit year numbers
+	// Match "BaseName YY-YY" or "BaseName YYYY-YY/ YYYY-YYYY"
 	// Support regular hyphen, en-dash, and em-dash as range separators
-	re := regexp.MustCompile(`^(.+?)\s+(\d{2})\s*[-–—]\s*(\d{2})$`)
+	re := regexp.MustCompile(`^(.+?)\s+(\d{2,4})\s*[-–—]\s*(\d{2,4})$`)
 	matches := re.FindStringSubmatch(trimmed)
 	if len(matches) != 4 {
 		return nil
 	}
 
 	baseName := strings.TrimSpace(matches[1])
-	startYearShort, err1 := strconv.Atoi(matches[2])
-	endYearShort, err2 := strconv.Atoi(matches[3])
+	startStr := matches[2]
+	endStr := matches[3]
+
+	startVal, err1 := strconv.Atoi(startStr)
+	endVal, err2 := strconv.Atoi(endStr)
 	if err1 != nil || err2 != nil {
 		return nil
 	}
 
-	if isWTCRCategoryRange(baseName, startYearShort, endYearShort) {
+	if len(startStr) == 2 && len(endStr) == 2 {
+		if isWTCRCategoryRange(baseName, startVal, endVal) {
+			return nil
+		}
+	}
+
+	// Check if this is a DTM category range before expanding
+	if isDTMCategoryRange(baseName, startVal, endVal) {
 		return nil
 	}
 
-	startYear := toFullYear(startYearShort)
-	endYear := toFullYear(endYearShort)
+	var startYear int
+	var endYear int
+	if len(startStr) == 2 {
+		startYear = toFullYear(startVal)
+	} else {
+		startYear = startVal
+	}
+
+	if len(endStr) == 2 {
+		if startYear >= 100 {
+			endYear = (startYear/100)*100 + endVal
+		} else {
+			endYear = toFullYear(endVal)
+		}
+	} else {
+		endYear = endVal
+	}
 
 	if startYear > endYear || endYear-startYear > 20 {
 		return nil
@@ -435,20 +555,32 @@ func expandCarClassRange(className string) []string {
 }
 
 func rangeClassCategory(normalizedClass string) string {
-	re := regexp.MustCompile(`^(.+?)\s+(\d{2})\s*-\s*(\d{2})$`)
+	// Match both 2-digit and 4-digit year ranges
+	re := regexp.MustCompile(`^(.+?)\s+(\d{2,4})\s*[-–—]\s*(\d{2,4})$`)
 	matches := re.FindStringSubmatch(normalizedClass)
 	if len(matches) != 4 {
 		return ""
 	}
 	baseName := strings.TrimSpace(matches[1])
-	startYearShort, err1 := strconv.Atoi(matches[2])
-	endYearShort, err2 := strconv.Atoi(matches[3])
+	startStr := matches[2]
+	endStr := matches[3]
+
+	startVal, err1 := strconv.Atoi(startStr)
+	endVal, err2 := strconv.Atoi(endStr)
 	if err1 != nil || err2 != nil {
 		return ""
 	}
-	if isWTCRCategoryRange(baseName, startYearShort, endYearShort) {
+
+	// Check for WTCR 18-22 category
+	if isWTCRCategoryRange(baseName, startVal, endVal) {
 		return "WTCR"
 	}
+
+	// Check for DTM 2013-16 category
+	if isDTMCategoryRange(baseName, startVal, endVal) {
+		return "DTM 2013-16"
+	}
+
 	return ""
 }
 
@@ -460,16 +592,26 @@ func isWTCRCategoryRange(baseName string, startYearShort int, endYearShort int) 
 }
 
 func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
-	if normalizeForMatching(category) != "wtcr" {
+	category = normalizeForMatching(category)
+	var classNames []string
+	if category == "wtcr" {
+		classNames = []string{
+			"WTCR 2018",
+			"WTCR 2019",
+			"WTCR 2020",
+			"WTCR 2021",
+			"WTCR 2022",
+			"Touring Cars Cup",
+		}
+	} else if category == "dtm 2013-16" {
+		classNames = []string{
+			"DTM 2013",
+			"DTM 2014",
+			"DTM 2015",
+			"DTM 2016",
+		}
+	} else {
 		return nil
-	}
-
-	classNames := []string{
-		"WTCR 2018",
-		"WTCR 2019",
-		"WTCR 2020",
-		"WTCR 2021",
-		"WTCR 2022",
 	}
 
 	ids := make([]string, 0, len(classNames))
@@ -480,6 +622,23 @@ func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
 	}
 
 	return ids
+}
+
+func isDTMCategoryRange(baseName string, startVal int, endVal int) bool {
+	if normalizeForMatching(baseName) != "dtm" {
+		return false
+	}
+	// Support both DTM 13-16 and DTM 2013-16
+	if startVal == 13 && endVal == 16 {
+		return true
+	}
+	if startVal == 2013 && endVal == 16 {
+		return true
+	}
+	if startVal == 2013 && endVal == 2016 {
+		return true
+	}
+	return false
 }
 
 // toFullYear converts a 2-digit year to a 4-digit year.
@@ -544,16 +703,19 @@ func findCarClassID(className string, classes []CarClassConfig) string {
 	return ""
 }
 
-// matchYearBasedClass tries to match classes like "WTCR 22" to "WTCR 2022"
+// matchYearBasedClass tries to match classes like "WTCR 22" to "WTCR 2022" or "DTM92" to "DTM 1992"
 func matchYearBasedClass(className string, classes []CarClassConfig) string {
-	// Pattern: name + 2-digit year
+	// Pattern: name + optional space + 2-digit year
 	re := regexp.MustCompile(`^(.+?)\s*(\d{2})$`)
 	if matches := re.FindStringSubmatch(className); len(matches) == 3 {
 		baseName := strings.TrimSpace(matches[1])
 		shortYear := matches[2]
 
-		// Convert 2-digit year to 4-digit (assume 20xx)
-		fullYear := "20" + shortYear
+		shortYearNum, err := strconv.Atoi(shortYear)
+		if err != nil {
+			return ""
+		}
+		fullYear := strconv.Itoa(toFullYear(shortYearNum))
 
 		// Try to find a matching class
 		for _, class := range classes {
@@ -621,6 +783,15 @@ func normalizeForMatching(s string) string {
 	return s
 }
 
+// stripMetadata removes metadata in parentheses from a car class name
+// e.g., "gt3 (huracan)" → "gt3"
+func stripMetadata(s string) string {
+	if idx := strings.Index(s, "("); idx >= 0 {
+		return strings.TrimSpace(s[:idx])
+	}
+	return s
+}
+
 // CheckForNewDailySprintRaces checks Discord for new Daily Sprint Races messages
 // and returns the parsed result if found
 func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinMinutes int) (*DailySprintRacesResult, error) {
@@ -642,46 +813,54 @@ func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinM
 		return nil, fmt.Errorf("failed to parse Daily Sprint Races message")
 	}
 
-	log.Printf("✅ Parsed %d races from Discord message", len(result.Races))
+	log.Printf("✅ Parsed %d sprint races and %d feature races from Discord message", len(result.Races), len(result.FeatureRaces))
 
 	// Load full names for better logging
 	tracks := GetTracks()
 	carClasses := GetCarClasses()
 
-	for _, race := range result.Races {
-		status := "❌"
-		if race.MatchedOK {
-			status = "✅"
-		} else if race.ParsedOK {
-			status = "⚠️"
+	logRaces := func(label string, races []DailySprintRace) {
+		if len(races) == 0 {
+			return
 		}
+		log.Printf("📌 %s:", label)
+		for _, race := range races {
+			status := "❌"
+			if race.MatchedOK {
+				status = "✅"
+			} else if race.ParsedOK {
+				status = "⚠️"
+			}
 
-		// Get full names
-		fullClassName := race.CarClass
-		fullTrackName := race.Track
+			fullClassName := race.CarClass
+			fullTrackName := race.Track
 
-		if race.CarClassID != "" {
-			for _, class := range carClasses {
-				if class.ClassID == race.CarClassID {
-					fullClassName = class.Name
-					break
+			if race.CarClassID != "" {
+				for _, class := range carClasses {
+					if class.ClassID == race.CarClassID {
+						fullClassName = class.Name
+						break
+					}
 				}
 			}
-		}
 
-		if race.TrackID != "" {
-			for _, track := range tracks {
-				if track.TrackID == race.TrackID {
-					fullTrackName = track.Name
-					break
+			if race.TrackID != "" {
+				for _, track := range tracks {
+					if track.TrackID == race.TrackID {
+						fullTrackName = track.Name
+						break
+					}
 				}
 			}
-		}
 
-		log.Printf("  %s %s - %s", status, race.CarClass, race.Track)
-		log.Printf("      → %s (ID: %s) - %s (ID: %s)",
-			fullClassName, race.CarClassID, fullTrackName, race.TrackID)
+			log.Printf("  %s %s - %s", status, race.CarClass, race.Track)
+			log.Printf("      → %s (ID: %s) - %s (ID: %s)",
+				fullClassName, race.CarClassID, fullTrackName, race.TrackID)
+		}
 	}
+
+	logRaces("Daily Sprint Races", result.Races)
+	logRaces("Daily Feature Races", result.FeatureRaces)
 
 	return result, nil
 }

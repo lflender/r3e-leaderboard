@@ -32,6 +32,11 @@ retryLoop:
 		default:
 		}
 
+		if !WaitIfFetchPaused(ctx) {
+			log.Printf("🛑 Retry cancelled while paused at %d/%d", i+1, len(failedFetches))
+			break retryLoop
+		}
+
 		log.Printf("🔁 Retry %d/%d: %s + %s", i+1, len(failedFetches), failed.Track.Name, failed.Class.Name)
 
 		// Create a context with timeout for retry

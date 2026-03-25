@@ -55,7 +55,7 @@ func TestRetryFailedFetches_EmptyList(t *testing.T) {
 
 	result := retryFailedFetches(ctx, apiClient, tempCache, nil)
 
-	if result != nil && len(result) != 0 {
+	if len(result) != 0 {
 		t.Errorf("Expected nil or empty result for empty failed list, got %d", len(result))
 	}
 }

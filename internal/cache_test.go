@@ -560,13 +560,18 @@ func TestPromoteTempCache(t *testing.T) {
 	}
 
 	// Promote
-	promoted, err := mainCache.PromoteTempCache()
+	promotedIDs, err := mainCache.PromoteTempCache()
 	if err != nil {
 		t.Fatalf("PromoteTempCache failed: %v", err)
 	}
 
-	if promoted != 1 {
-		t.Errorf("Expected 1 file promoted, got %d", promoted)
+	if len(promotedIDs) != 1 {
+		t.Errorf("Expected 1 file promoted, got %d", len(promotedIDs))
+	}
+
+	// Verify the combo ID is correct
+	if len(promotedIDs) > 0 && promotedIDs[0] != "1234-5678" {
+		t.Errorf("Expected combo ID '1234-5678', got '%s'", promotedIDs[0])
 	}
 
 	// Verify file is now in main cache
@@ -592,13 +597,13 @@ func TestPromoteTempCache_NoTempDir(t *testing.T) {
 	}
 
 	// Promote when temp dir doesn't exist - should succeed with 0 files
-	promoted, err := cache.PromoteTempCache()
+	promotedIDs, err := cache.PromoteTempCache()
 	if err != nil {
 		t.Fatalf("PromoteTempCache with no temp dir should not error: %v", err)
 	}
 
-	if promoted != 0 {
-		t.Errorf("Expected 0 files promoted, got %d", promoted)
+	if len(promotedIDs) != 0 {
+		t.Errorf("Expected 0 files promoted, got %d", len(promotedIDs))
 	}
 }
 
@@ -617,13 +622,13 @@ func TestPromoteTempCache_EmptyTempDir(t *testing.T) {
 	}
 
 	// Promote when temp dir is empty - should succeed with 0 files
-	promoted, err := cache.PromoteTempCache()
+	promotedIDs, err := cache.PromoteTempCache()
 	if err != nil {
 		t.Fatalf("PromoteTempCache with empty temp dir should not error: %v", err)
 	}
 
-	if promoted != 0 {
-		t.Errorf("Expected 0 files promoted, got %d", promoted)
+	if len(promotedIDs) != 0 {
+		t.Errorf("Expected 0 files promoted, got %d", len(promotedIDs))
 	}
 }
 
@@ -839,4 +844,94 @@ func cacheContainsString(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// =============================================================================
+// EXTRACT COMBO ID TESTS
+// =============================================================================
+
+func TestExtractComboID(t *testing.T) {
+	tests := []struct {
+		name     string
+		relPath  string
+		expected string
+	}{
+		{"normal", "track_1234/class_5678.json.gz", "1234-5678"},
+		{"large IDs", "track_10463/class_4680.json.gz", "10463-4680"},
+		{"single digit", "track_1/class_2.json.gz", "1-2"},
+		{"missing track prefix", "other_1234/class_5678.json.gz", ""},
+		{"missing class prefix", "track_1234/other_5678.json.gz", ""},
+		{"wrong depth", "class_5678.json.gz", ""},
+		{"too deep", "a/track_1234/class_5678.json.gz", ""},
+		{"empty track ID", "track_/class_5678.json.gz", ""},
+		{"empty class ID", "track_1234/class_.json.gz", ""},
+		{"windows separators", "track_1234\\class_5678.json.gz", "1234-5678"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractComboID(tt.relPath)
+			if result != tt.expected {
+				t.Errorf("extractComboID(%q) = %q, want %q", tt.relPath, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPromoteTempCache_ReturnsComboIDs(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "promote_combo_ids_test")
+	defer cleanup()
+
+	cacheDir := filepath.Join(tempDir, "cache")
+	tempCacheDir := filepath.Join(tempDir, "cache_temp")
+
+	tempCache := &DataCache{
+		cacheDir:     cacheDir,
+		tempCacheDir: tempCacheDir,
+		maxAge:       24 * time.Hour,
+		useTemp:      true,
+	}
+
+	fixtures := GetTestFixtures()
+
+	// Save multiple tracks to temp cache
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1111", ClassID: "2222", Data: fixtures.SampleTrackData},
+		{Name: "Track B", TrackID: "3333", ClassID: "4444", Data: fixtures.SampleTrackData},
+	}
+
+	for _, track := range tracks {
+		if err := tempCache.SaveTrackData(track); err != nil {
+			t.Fatalf("SaveTrackData failed: %v", err)
+		}
+	}
+
+	mainCache := &DataCache{
+		cacheDir:     cacheDir,
+		tempCacheDir: tempCacheDir,
+		maxAge:       24 * time.Hour,
+		useTemp:      false,
+	}
+
+	promotedIDs, err := mainCache.PromoteTempCache()
+	if err != nil {
+		t.Fatalf("PromoteTempCache failed: %v", err)
+	}
+
+	if len(promotedIDs) != 2 {
+		t.Errorf("Expected 2 promoted IDs, got %d", len(promotedIDs))
+	}
+
+	// Check both combo IDs are present (order may vary)
+	found := make(map[string]bool)
+	for _, id := range promotedIDs {
+		found[id] = true
+	}
+
+	expected := []string{"1111-2222", "3333-4444"}
+	for _, exp := range expected {
+		if !found[exp] {
+			t.Errorf("Expected combo ID %q not found in promoted IDs: %v", exp, promotedIDs)
+		}
+	}
 }

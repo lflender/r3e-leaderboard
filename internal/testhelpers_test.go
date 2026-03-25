@@ -22,6 +22,9 @@ type TestFixtures struct {
 	SampleDiscordMessage12 string // Oct 27, 2025 - Audi TT Cup, Falkenberg, Group C
 	SampleDiscordMessage13 string // Oct 20, 2025 - Audi RS 5 DTM 2016, FRX 22, Watkins Glen
 	SampleDiscordMessage14 string // Feb 9, 2026 - WTCR 18-22 range, DTM 2016, Nürburgring typo
+	SampleDiscordMessage15 string // Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
+	SampleDiscordMessage16 string // Feb 23, 2026 - Truck, Assen GP, Sonoma Long, GT3, Super Touring, MX5, DTM 1995
+	SampleDiscordMessage17 string // Mar 2, 2026 - DTM92, PCCD+PCCNA, Watkins Glen GP w/ Loop, DTM 2013-16
 	SampleTrackData        []map[string]interface{}
 }
 
@@ -68,7 +71,7 @@ Every other hour (--:35) LB fixed setup
 :DTM:  DTM 1995 – Hockenheimring Classic
 Every half hour (--:15, --:45) LB fixed setup`,
 
-		// Message with TT Cup - should expand to TWO race entries (2015 and 2016)
+		// Message with TT Cup - should remain a single category entry
 		SampleDiscordMessage3: `📅 This Week in Ranked Multiplayer
  
 Daily Sprint Races (15 min)
@@ -363,6 +366,105 @@ Every other hour (--:35) LB fixed setup
 Every other hour (--:55) LB fixed setup
 :DTM:  DTM 2016 – Nürbrugring GP fast Chicane
 Every half hour (--:15, --:45) LB fixed setup`,
+
+		// Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
+		SampleDiscordMessage15: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+ 
+Daily Sprint Races (15 min)
+🆓 Audi TT Cup – Interlagos
+Every hour (--:20, --:50) LB fixed setup Weekly F2P
+
+🏁 F4 – Mid Ohio
+Every hour (--:25) LB fixed setup
+🏁 Super Touring – Norisring
+Every hour (--:10, --:40) LB fixed setup
+🏁 GT3 – Suzuka GP
+Every other hour (--:35) LB fixed setup
+🏁 MX5 – Daytona Road Course
+Every other hour (--:55) LB fixed setup
+:DTM:  DTM 2016 – Hockenheimring GP
+Every half hour (--:15, --:45) LB fixed setup
+
+ 
+ 
+Daily Feature Races (~30 min)
+🔥 DTM 1995 - Silverstone International
+30 min (17:30, 19:30, 21:30) LB open setup
+🔥 M235i – Nordschleife NLS
+3 laps (~20 min) (18:00, 20:00, 22:00) LB open setup
+
+ 
+ 
+Weekly Races (45–60 min)
+🏆 Friday: WTCR 18-22 - Road America 
+45 min (17:00, 19:00, 21:00) open setup
+🏆 Saturday: GT3 - Bathurst
+60 min (17:00, 19:00, 21:00) open setup
+🏆 Sunday: PCCD + PCCNA + GTR4 - Imola
+45 min (17:00, 19:00, 21:00) open setup`,
+
+		// Feb 23, 2026 - Truck, Assen GP, Sonoma Long, Red Bull Ring Südschleife
+		SampleDiscordMessage16: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+ 
+Daily Sprint Races (15 min)
+🆓 GTE – Shanghai Circuit GP
+Every hour (--:20, --:50) LB fixed setup Weekly F2P
+
+🏁 Truck - Red Bull Ring Südschleife
+Every hour (--:25) LB fixed setup
+🏁 Super Touring – Assen GP
+Every half hour (--:10, --:40) LB fixed setup
+🏁 GT3 – Bathurst
+Every half hour (--:30, --:00) LB fixed setup
+🏁 MX5 – Sonoma Long
+Every hour (--:55) LB fixed setup
+:DTM:  DTM 1995 – Estoril GP
+Every half hour (--:15, --:45) LB fixed setup
+
+Daily Feature Races (~30 min)
+🔥 DTM 2013-16 - Interlagos
+30 min (17:30, 19:30, 21:30) LB open setup
+🔥 GT2 – Nordschleife NLS
+3 laps (~20 min) (18:00, 20:00, 22:00) LB open setup`,
+
+		// Mar 2, 2026 - DTM92, PCCD+PCCNA, Watkins Glen GP w/ Loop, DTM 2013-16
+		SampleDiscordMessage17: `📅 **This Week in Ranked Multiplayer**
+(Updated every Monday, new combos weekly!)
+ 
+## **__Daily Sprint Races (15 min)__**
+ 
+🆓 **GT3 – Red Bull Ring**
+` + "`Every hour (--:10)` `LB` `fixed setup` `Weekly F2P`" + `
+
+🏁 **F4 – Silverstone International**
+` + "`Every hour (--:40)` `LB` `fixed setup`" + `
+🏁 **Super Touring – Twin Ring Motegi**
+` + "`Every half hour (--:00, --:30)` `LB` `fixed setup`" + `
+🏁 **WTCR 18-22 – Imola**
+` + "`Every hour (--:30)` `LB` `fixed setup`" + `
+🏁 **MX5 – Knutstorp Ring**
+` + "`Every half hour (--:50, --:20)` `LB` `fixed setup`" + `
+<:DTM:1400813181013590016>  **DTM 2013-16 – Watkins Glen GP w/ Loop**
+` + "`Every half hour (--:20, --:50)` `LB` `fixed setup`" + `
+
+ 
+## **__Daily Feature Races (~30 min)__**
+ 
+🔥 **PCCD + PCCNA - Norisring **
+` + "`30 min` `(17:30, 19:30, 21:30)` `LB` `open setup`" + `
+🔥 **DTM92 – Nordschleife NLS**
+` + "`3 laps (~20 min)` `(18:00, 20:00, 22:00)` `LB` `open setup`" + `
+
+## **__Weekly Races (45–60 min)__**
+ 
+🏆 **Friday: GTR1 + GTR2 - Indianapolis Road Course**
+` + "`45 min` `(17:00, 19:00, 21:00)` `open setup`" + `
+🏆 **Saturday: DPI + GTE - Monza GP**
+` + "`60 min` `(17:00, 19:00, 21:00)` `open setup`" + `
+🏆 **Sunday: Audi TT 16 - M235i - Oschersleben**
+` + "`45 min` `(17:00, 19:00, 21:00)` `open setup`" + ``,
 
 		// Sample leaderboard data matching real API structure
 		SampleTrackData: []map[string]interface{}{

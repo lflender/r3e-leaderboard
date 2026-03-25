@@ -180,9 +180,11 @@ func TestRefreshDailyRaceCombinations_NoCachedRaces(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	cfg := GetDefaultConfig()
+
 	// Note: This test assumes no daily_races.json exists in the cache directory
 	// In a fresh test environment, this should be the case
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	if err != nil {
 		t.Logf("Got error (expected if cache dir doesn't exist): %v", err)
@@ -196,8 +198,10 @@ func TestRefreshDailyRaceCombinations_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately
 
+	cfg := GetDefaultConfig()
+
 	// Should handle cancelled context gracefully
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	if err != nil {
 		t.Logf("Got error with cancelled context: %v", err)
@@ -273,8 +277,9 @@ func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
 	defer cancel()
 	cancel() // Cancel immediately to prevent actual API fetches
 
+	cfg := GetDefaultConfig()
 	// Call RefreshDailyRaceCombinations
-	trackIDs, err := RefreshDailyRaceCombinations(ctx)
+	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg)
 
 	// We expect it to identify all track-class combinations
 	// The error might be context cancelled, but we should still get the trackIDs
@@ -320,4 +325,165 @@ func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
 	}
 
 	t.Logf("✅ Successfully identified %d track-class combinations from category races", len(trackIDs))
+}
+
+// =============================================================================
+// MERGE UNIQUE STRINGS TESTS
+// =============================================================================
+
+func TestMergeUniqueStrings_BothEmpty(t *testing.T) {
+	result := mergeUniqueStrings(nil, nil)
+	if len(result) != 0 {
+		t.Errorf("Expected 0 items, got %d", len(result))
+	}
+}
+
+func TestMergeUniqueStrings_OneSlice(t *testing.T) {
+	result := mergeUniqueStrings([]string{"a", "b", "c"})
+	if len(result) != 3 {
+		t.Errorf("Expected 3 items, got %d", len(result))
+	}
+}
+
+func TestMergeUniqueStrings_Deduplication(t *testing.T) {
+	result := mergeUniqueStrings(
+		[]string{"1111-2222", "3333-4444"},
+		[]string{"3333-4444", "5555-6666"},
+	)
+	if len(result) != 3 {
+		t.Errorf("Expected 3 unique items, got %d: %v", len(result), result)
+	}
+
+	found := make(map[string]bool)
+	for _, v := range result {
+		found[v] = true
+	}
+	for _, expected := range []string{"1111-2222", "3333-4444", "5555-6666"} {
+		if !found[expected] {
+			t.Errorf("Expected '%s' in result", expected)
+		}
+	}
+}
+
+func TestMergeUniqueStrings_ThreeSlices(t *testing.T) {
+	result := mergeUniqueStrings(
+		[]string{"a"},
+		[]string{"b"},
+		[]string{"c", "a"}, // duplicate
+	)
+	if len(result) != 3 {
+		t.Errorf("Expected 3 unique items, got %d: %v", len(result), result)
+	}
+}
+
+func TestMergeUniqueStrings_NilAndNonEmpty(t *testing.T) {
+	// Simulates: no pre-promoted files, but some daily race IDs
+	result := mergeUniqueStrings(nil, []string{"9958-8600", "7112-1703"})
+	if len(result) != 2 {
+		t.Errorf("Expected 2 items, got %d: %v", len(result), result)
+	}
+}
+
+// =============================================================================
+// TEMP CACHE PROMOTION + INDEX BUG SCENARIO TESTS
+// =============================================================================
+
+func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
+	// This test validates the fix for the incremental indexing bug:
+	// When PromoteTempCache() is called, it should return ALL promoted combo IDs.
+	// Previously, the daily race refresh would call PromoteTempCache() inside
+	// fetchSpecificCombinations, promoting ALL cache_temp files (including the
+	// main loader's files), but discarding the returned IDs. Only daily race IDs
+	// were passed to IncrementalIndexUpdate, causing main loader entries to be
+	// missing from the search index.
+
+	// Setup: create temp cache with "loader" files and "daily race" files
+	tempDir := t.TempDir()
+	cacheDir := t.TempDir()
+
+	dc := &DataCache{
+		cacheDir:     cacheDir,
+		tempCacheDir: tempDir,
+		maxAge:       24 * time.Hour,
+		useTemp:      true,
+	}
+
+	// Simulate main loader writing Indianapolis data to cache_temp
+	loaderTrack := TrackInfo{
+		Name:    "Indianapolis Motor Speedway - Oval",
+		TrackID: "9958",
+		ClassID: "8600",
+		Data: []map[string]interface{}{
+			{"driver": map[string]interface{}{"name": "Ludo Flender"}, "index": float64(3)},
+		},
+	}
+	if err := dc.SaveTrackData(loaderTrack); err != nil {
+		t.Fatalf("Failed to save loader track: %v", err)
+	}
+
+	// Simulate daily race refresh writing to cache_temp
+	dailyRaceTrack := TrackInfo{
+		Name:    "Autodrom Most - Grand Prix",
+		TrackID: "7112",
+		ClassID: "1703",
+		Data: []map[string]interface{}{
+			{"driver": map[string]interface{}{"name": "Test Driver"}, "index": float64(0)},
+		},
+	}
+	if err := dc.SaveTrackData(dailyRaceTrack); err != nil {
+		t.Fatalf("Failed to save daily race track: %v", err)
+	}
+
+	// Now promote — this is what RefreshDailyRaceCombinations does
+	promoted, err := dc.PromoteTempCache()
+	if err != nil {
+		t.Fatalf("PromoteTempCache failed: %v", err)
+	}
+
+	// CRITICAL: promoted should contain BOTH combo IDs
+	if len(promoted) != 2 {
+		t.Errorf("Expected 2 promoted combos, got %d: %v", len(promoted), promoted)
+	}
+
+	foundLoader := false
+	foundDailyRace := false
+	for _, id := range promoted {
+		if id == "9958-8600" {
+			foundLoader = true
+		}
+		if id == "7112-1703" {
+			foundDailyRace = true
+		}
+	}
+
+	if !foundLoader {
+		t.Error("Promoted IDs should include loader combo '9958-8600' (Indianapolis)")
+	}
+	if !foundDailyRace {
+		t.Error("Promoted IDs should include daily race combo '7112-1703' (Most)")
+	}
+
+	// Verify files are now in main cache
+	mainDC := &DataCache{
+		cacheDir: cacheDir,
+		maxAge:   24 * time.Hour,
+		useTemp:  false,
+	}
+	if !mainDC.CacheExists("9958", "8600") {
+		t.Error("Indianapolis cache file should exist in main cache after promotion")
+	}
+	if !mainDC.CacheExists("7112", "1703") {
+		t.Error("Most cache file should exist in main cache after promotion")
+	}
+
+	// If we merge promoted IDs with daily race trackIDs (like the fix does),
+	// the result should include BOTH
+	dailyRaceIDs := []string{"7112-1703"}
+	allIDs := mergeUniqueStrings(promoted, dailyRaceIDs)
+
+	if len(allIDs) != 2 {
+		t.Errorf("Merged IDs should contain 2 combos, got %d: %v", len(allIDs), allIDs)
+	}
+
+	t.Logf("✅ PromoteTempCache correctly captured all %d combo IDs, merged to %d", len(promoted), len(allIDs))
 }

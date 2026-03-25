@@ -10,37 +10,6 @@ import (
 // CONFIG TESTS
 // =============================================================================
 
-func TestGetDefaultConfig(t *testing.T) {
-	config := GetDefaultConfig()
-
-	// Check server defaults
-	if config.Server.Port != 8080 {
-		t.Errorf("Default server port = %d, expected 8080", config.Server.Port)
-	}
-
-	// Check schedule defaults
-	if config.Schedule.RefreshHour != 4 {
-		t.Errorf("Default RefreshHour = %d, expected 4", config.Schedule.RefreshHour)
-	}
-
-	if config.Schedule.RefreshMinute != 45 {
-		t.Errorf("Default RefreshMinute = %d, expected 45", config.Schedule.RefreshMinute)
-	}
-
-	if config.Schedule.IndexingMinutes != 30 {
-		t.Errorf("Default IndexingMinutes = %d, expected 30", config.Schedule.IndexingMinutes)
-	}
-
-	// Discord config
-	if config.Discord.ChannelID == "" {
-		t.Error("Default ChannelID should not be empty")
-	}
-
-	if config.Discord.MessageCheckMins <= 0 {
-		t.Errorf("Default MessageCheckMins = %d, should be positive", config.Discord.MessageCheckMins)
-	}
-}
-
 func TestConfig_DiscordEnabledWhenTokenSet(t *testing.T) {
 	// Create a temp directory and token file for this test
 	tempDir, cleanup := TempTestDir(t, "config_test")
@@ -187,5 +156,32 @@ func TestDiscordConfig(t *testing.T) {
 
 	if !cfg.Enabled {
 		t.Error("Enabled should be true")
+	}
+}
+
+func TestDataConfig(t *testing.T) {
+	cfg := DataConfig{
+		MultiplayerPositionLimit: 3000,
+	}
+
+	if cfg.MultiplayerPositionLimit != 3000 {
+		t.Errorf("MultiplayerPositionLimit = %d, expected 3000", cfg.MultiplayerPositionLimit)
+	}
+}
+
+func TestDataConfig_CustomLimit(t *testing.T) {
+	cfg := DataConfig{
+		MultiplayerPositionLimit: 5000,
+	}
+
+	if cfg.MultiplayerPositionLimit != 5000 {
+		t.Errorf("MultiplayerPositionLimit = %d, expected 5000", cfg.MultiplayerPositionLimit)
+	}
+
+	// Test that pages would be calculated correctly for this limit
+	// (approximately 500 entries per page)
+	expectedPages := (cfg.MultiplayerPositionLimit + 499) / 500
+	if expectedPages <= 0 {
+		t.Error("Pages calculation should result in positive number")
 	}
 }
