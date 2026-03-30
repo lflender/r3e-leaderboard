@@ -13,8 +13,12 @@ import (
 
 // Orchestrator coordinates data loading, refreshing, and indexing
 type Orchestrator struct {
+	appContext           context.Context
+	appCancel            context.CancelFunc
 	fetchContext         context.Context
 	fetchCancel          context.CancelFunc
+	fullRefreshRunner    func(indexingIntervalMinutes int, origin string)
+	scheduledCancelDelay time.Duration
 	fetchInProgress      bool
 	lastScrapeStart      time.Time
 	lastScrapeEnd        time.Time
@@ -34,13 +38,30 @@ func NewOrchestrator(ctx context.Context, cancel context.CancelFunc, cfg interna
 	// Load last Daily Race refresh time from status file
 	existingStatus := internal.ReadStatusData()
 
-	return &Orchestrator{
+	o := &Orchestrator{
+		appContext:           ctx,
+		appCancel:            cancel,
 		fetchContext:         ctx,
-		fetchCancel:          cancel,
+		fetchCancel:          nil,
+		scheduledCancelDelay: 500 * time.Millisecond,
 		tracks:               make([]internal.TrackInfo, 0),
 		lastDailyRaceRefresh: existingStatus.LastDailyRaceRefresh,
 		config:               cfg,
 	}
+	o.fullRefreshRunner = o.performFullRefresh
+
+	return o
+}
+
+// startFetchOperation creates a fresh cancelable context for a single fetch/refresh operation.
+func (o *Orchestrator) startFetchOperation() context.Context {
+	if o.fetchCancel != nil {
+		o.fetchCancel()
+	}
+	ctx, cancel := context.WithCancel(o.appContext)
+	o.fetchContext = ctx
+	o.fetchCancel = cancel
+	return ctx
 }
 
 // GetFetchProgress returns current fetch progress for status endpoint
@@ -56,13 +77,15 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 // StartBackgroundDataLoading initiates the background data loading process
 func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	go func() {
+		opCtx := o.startFetchOperation()
+
 		// Do not mark scrape start yet; only do so if we actually fetch
 		o.fetchInProgress = false
 		o.exportStatus()
 
 		// First, refresh Daily Race combinations before initial index
 		// This ensures the index includes the latest Daily Race data
-		if _, err := internal.RefreshDailyRaceCombinations(o.fetchContext, o.config); err != nil {
+		if _, err := internal.RefreshDailyRaceCombinations(opCtx, o.config); err != nil {
 			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
 		} else {
 			o.lastDailyRaceRefresh = time.Now()
@@ -95,19 +118,32 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 			// Only start periodic indexing and mark scrape start if we will fetch
 			if willFetchFresh {
+				if opCtx.Err() != nil {
+					return
+				}
 				// Mark actual scrape start only when a network fetch will occur
 				o.lastScrapeStart = time.Now()
 				o.fetchInProgress = true
 				o.exportStatus()
 
 				log.Printf("⏱️ Starting periodic indexing every %d minutes during fetch...", indexingIntervalMinutes)
-				o.StartPeriodicIndexing(indexingIntervalMinutes)
+				o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
 			} else {
 				log.Println("✅ All data is cached - skipping periodic indexing")
 			}
 		}
 
-		tracks := internal.LoadAllTrackDataWithCallback(o.fetchContext, progressCallback, cacheCompleteCallback)
+		tracks := internal.LoadAllTrackDataWithCallback(opCtx, progressCallback, cacheCompleteCallback)
+
+		// If startup loading was canceled (e.g., interrupted by scheduled refresh),
+		// stop here and avoid writing "final startup" status/index that can overwrite
+		// the in-progress scheduled refresh state.
+		if opCtx.Err() != nil {
+			o.fetchInProgress = false
+			o.exportStatus()
+			log.Printf("⏹️ Startup load canceled; skipping startup finalization")
+			return
+		}
 
 		log.Println("🔄 Building final search index...")
 		if err := internal.BuildAndExportIndex(tracks); err != nil {
@@ -143,21 +179,31 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, indexingIntervalMinutes int) {
 	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute)
 	o.scheduler.Start(func() {
-		// If a fetch is already in progress, cancel it and start the daily refresh instead
-		if o.fetchInProgress {
-			log.Println("⏹️ Cancelling in-progress fetch to start scheduled daily refresh")
-			o.fetchCancel()
-			// Give the fetch a moment to stop
-			time.Sleep(500 * time.Millisecond)
-		}
-		o.performFullRefresh(indexingIntervalMinutes, "nightly")
+		o.runScheduledRefresh(indexingIntervalMinutes)
 	})
+}
+
+func (o *Orchestrator) runScheduledRefresh(indexingIntervalMinutes int) {
+	// If a fetch is already in progress, cancel it and start the daily refresh instead.
+	if o.fetchInProgress {
+		log.Println("⏹️ Cancelling in-progress fetch to start scheduled daily refresh")
+		if o.fetchCancel != nil {
+			o.fetchCancel()
+		}
+		if o.scheduledCancelDelay > 0 {
+			time.Sleep(o.scheduledCancelDelay)
+		}
+	}
+
+	o.fullRefreshRunner(indexingIntervalMinutes, "nightly")
 }
 
 // performFullRefresh executes the full-force refresh flow
 func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin string) {
 	o.rebuildMu.Lock()
 	defer o.rebuildMu.Unlock()
+
+	opCtx := o.startFetchOperation()
 
 	o.lastScrapeStart = time.Now()
 	o.fetchInProgress = true
@@ -169,7 +215,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 
 	// Start periodic indexing during refresh
 	log.Printf("⏱️ Starting periodic indexing every %d minutes...", indexingIntervalMinutes)
-	o.StartPeriodicIndexing(indexingIntervalMinutes)
+	o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
 
 	// Progress callback for status updates
 	progressCallback := func(merged []internal.TrackInfo) {
@@ -181,7 +227,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	}
 
 	// Perform the actual refresh (delegated to internal package)
-	finalTracks := internal.PerformFullRefresh(o.fetchContext, progressCallback, origin)
+	finalTracks := internal.PerformFullRefresh(opCtx, progressCallback, origin)
 
 	// Finalize scrape timestamps BEFORE building index
 	// This ensures UpdateStatusWithIndexMetrics preserves the correct end time
@@ -211,6 +257,8 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	o.rebuildMu.Lock()
 	defer o.rebuildMu.Unlock()
 
+	opCtx := o.startFetchOperation()
+
 	log.Printf("🎯 Starting targeted refresh for %d token(s)...", len(trackIDs))
 	// Don't update lastScrapeStart - that's only for full refreshes
 	o.fetchInProgress = true
@@ -222,7 +270,7 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 
 	// Start periodic indexing
 	log.Printf("⏱️ Starting periodic indexing every %d minutes during targeted refresh...", indexingIntervalMinutes)
-	o.StartPeriodicIndexing(indexingIntervalMinutes)
+	o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
 
 	// Progress callback for status updates
 	progressCallback := func(merged []internal.TrackInfo) {
@@ -234,7 +282,7 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	}
 
 	// Perform the targeted refresh (delegated to internal package)
-	finalTracks := internal.PerformTargetedRefresh(o.fetchContext, trackIDs, progressCallback, origin)
+	finalTracks := internal.PerformTargetedRefresh(opCtx, trackIDs, progressCallback, origin)
 
 	// Build final index
 	log.Println("🔄 Building final search index (targeted refresh)...")
@@ -262,7 +310,7 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkIntervalSeconds int, indexingIntervalMinutes int) {
 	// Create watcher with callbacks
 	watcher := internal.NewRefreshWatcher(
-		o.fetchContext,
+		o.appContext,
 		triggerPath,
 		checkIntervalSeconds,
 		func(trackIDs []string, origin string) {
@@ -283,9 +331,9 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 }
 
 // StartPeriodicIndexing starts periodic index updates during data loading
-func (o *Orchestrator) StartPeriodicIndexing(intervalMinutes int) {
+func (o *Orchestrator) StartPeriodicIndexing(ctx context.Context, intervalMinutes int) {
 	// Create indexer with callbacks to access orchestrator state
-	indexer := internal.NewPeriodicIndexer(o.fetchContext, intervalMinutes, internal.IndexerCallbacks{
+	indexer := internal.NewPeriodicIndexer(ctx, intervalMinutes, internal.IndexerCallbacks{
 		GetState: func() internal.IndexerState {
 			return internal.IndexerState{
 				Tracks:           o.tracks,
@@ -392,6 +440,10 @@ func (o *Orchestrator) Cleanup() {
 		o.fetchCancel()
 		o.fetchCancel = nil
 	}
+	if o.appCancel != nil {
+		o.appCancel()
+		o.appCancel = nil
+	}
 
 	// Clear large data structures to help GC
 	o.tracks = nil
@@ -494,7 +546,7 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 			}
 
 			log.Printf("🏁 Refreshing Daily Race combinations (%s)...", reason)
-			changedCombos, err := internal.RefreshDailyRaceCombinations(o.fetchContext, o.config)
+			changedCombos, err := internal.RefreshDailyRaceCombinations(o.appContext, o.config)
 			if err != nil {
 				log.Printf("⚠️ Daily Race refresh failed: %v", err)
 				return
@@ -527,7 +579,7 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 				log.Println("⏹️ Daily Race refresh loop stopped")
 				return
 
-			case <-o.fetchContext.Done():
+			case <-o.appContext.Done():
 				log.Println("⏹️ Daily Race refresh loop cancelled via context")
 				return
 			}

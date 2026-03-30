@@ -70,7 +70,7 @@ retryLoop:
 		}
 
 		// Rate limiting
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(apiThrottle)
 	}
 
 	log.Printf("✅ Retry phase complete: %d/%d succeeded", retriedCount, len(failedFetches))

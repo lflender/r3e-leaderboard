@@ -37,6 +37,7 @@ type DiscordConfig struct {
 // DataConfig holds data fetching configuration
 type DataConfig struct {
 	MultiplayerPositionLimit int `json:"multiplayer_position_limit"` // Maximum number of multiplayer positions to track
+	APIThrottleMs            int `json:"api_throttle_ms"`            // Delay between API calls in milliseconds (default 20)
 }
 
 // GetDefaultConfig returns default configuration
@@ -65,6 +66,7 @@ func GetDefaultConfig() Config {
 		},
 		Data: DataConfig{
 			MultiplayerPositionLimit: 5000, // Track top 5000 multiplayer positions
+			APIThrottleMs:            20,   // 20ms between API calls
 		},
 	}
 }

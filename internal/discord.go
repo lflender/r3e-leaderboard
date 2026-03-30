@@ -448,11 +448,12 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 			newRace := race
 			// For multi-class aliases, use the cleaned base name for CarClass
 			carClassName := normalizedClassNoMeta
-			if carClassName == "gt3" {
+			switch carClassName {
+			case "gt3":
 				carClassName = "GT3"
-			} else if carClassName == "tt cup" {
+			case "tt cup":
 				carClassName = "TT Cup"
-			} else if carClassName == "audi tt cup" {
+			case "audi tt cup":
 				carClassName = "Audi TT Cup"
 			}
 			newRace.CarClass = carClassName
@@ -594,7 +595,8 @@ func isWTCRCategoryRange(baseName string, startYearShort int, endYearShort int) 
 func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
 	category = normalizeForMatching(category)
 	var classNames []string
-	if category == "wtcr" {
+	switch category {
+	case "wtcr":
 		classNames = []string{
 			"WTCR 2018",
 			"WTCR 2019",
@@ -603,14 +605,14 @@ func getCategoryClassIDs(category string, classes []CarClassConfig) []string {
 			"WTCR 2022",
 			"Touring Cars Cup",
 		}
-	} else if category == "dtm 2013-16" {
+	case "dtm 2013-16":
 		classNames = []string{
 			"DTM 2013",
 			"DTM 2014",
 			"DTM 2015",
 			"DTM 2016",
 		}
-	} else {
+	default:
 		return nil
 	}
 
