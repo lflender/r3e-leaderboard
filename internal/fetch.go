@@ -8,6 +8,14 @@ import (
 	"time"
 )
 
+// apiThrottle is the delay between consecutive API calls, configurable via SetAPIThrottle.
+var apiThrottle = 20 * time.Millisecond
+
+// SetAPIThrottle sets the inter-request throttle delay from config.
+func SetAPIThrottle(d time.Duration) {
+	apiThrottle = d
+}
+
 // fetchCombinations is a shared helper that fetches data for a list of track configurations
 // It handles the fetch loop, error handling, logging, rate limiting, and cache promotion
 func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig, progressCallback func([]TrackInfo), logPrefix string) []TrackInfo {
@@ -82,15 +90,11 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 			}
 
 			// Rate limit API calls
-			sleepDuration := 20 * time.Millisecond
-			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
-				select {
-				case <-ctx.Done():
-					log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
-					return allTrackData
-				default:
-				}
-				time.Sleep(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				log.Printf("🛑 Fetch cancelled at %d/%d combinations", processed, totalCombinations)
+				return allTrackData
+			case <-time.After(apiThrottle):
 			}
 		}
 	}
@@ -264,14 +268,10 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 			}
 
 			// Rate limit API calls
-			sleepDuration := 20 * time.Millisecond
-			for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
-				select {
-				case <-ctx.Done():
-					return allTrackData
-				default:
-					time.Sleep(100 * time.Millisecond)
-				}
+			select {
+			case <-ctx.Done():
+				return allTrackData
+			case <-time.After(apiThrottle):
 			}
 		}
 	}

@@ -38,6 +38,7 @@ func main() {
 
 	// Load configuration
 	config := internal.GetDefaultConfig()
+	internal.SetAPIThrottle(time.Duration(config.Data.APIThrottleMs) * time.Millisecond)
 
 	// Initialize Discord client if enabled
 	var discordClient *internal.DiscordClient
@@ -64,11 +65,11 @@ func main() {
 		log.Println("ℹ️ Discord integration disabled (no bot token found)")
 	}
 
-	// Initialize cancelable context
-	fetchContext, fetchCancel := context.WithCancel(context.Background())
+	// Initialize application lifecycle context
+	appContext, appCancel := context.WithCancel(context.Background())
 
 	// Create orchestrator to coordinate all operations
-	orchestrator = NewOrchestrator(fetchContext, fetchCancel, config)
+	orchestrator = NewOrchestrator(appContext, appCancel, config)
 
 	// Promote any leftover temporary cache from previous runs before starting
 	tempCache := internal.NewTempDataCache()
@@ -96,11 +97,11 @@ func main() {
 	orchestrator.StartDailyRaceRefreshLoop(config.Schedule.DailyRaceRefreshIntervalMins)
 
 	// Start periodic memory monitoring and GC
-	go periodicMemoryMonitoring(fetchContext)
+	go periodicMemoryMonitoring(appContext)
 
 	// Start Discord message checking if enabled (every hour before Daily Race refresh)
 	if config.Discord.Enabled && discordClient != nil {
-		go periodicDiscordChecking(fetchContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
+		go periodicDiscordChecking(appContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
 	}
 
 	// Start HTTP server to serve static files

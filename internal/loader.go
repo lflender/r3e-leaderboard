@@ -224,20 +224,15 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 			// Rate limiting for API calls
 			if !fromCache {
-				sleepDuration := 20 * time.Millisecond
-				for i := 0; i < int(sleepDuration/time.Millisecond); i += 100 {
-					select {
-					case <-ctx.Done():
-						log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
-						// Rebuild final data from map
-						allTrackData = make([]TrackInfo, 0, len(existingData))
-						for _, v := range existingData {
-							allTrackData = append(allTrackData, v)
-						}
-						return allTrackData
-					default:
+				select {
+				case <-ctx.Done():
+					log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
+					allTrackData = make([]TrackInfo, 0, len(existingData))
+					for _, v := range existingData {
+						allTrackData = append(allTrackData, v)
 					}
-					time.Sleep(100 * time.Millisecond)
+					return allTrackData
+				case <-time.After(apiThrottle):
 				}
 			}
 		}
