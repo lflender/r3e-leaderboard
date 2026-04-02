@@ -352,11 +352,17 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	log.Printf("🔍 Index built: %.3f seconds (%d drivers, %d entries, %d tracks)",
 		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
 
-	// Export the driver index
+	// Export the driver index (monolithic, for backward compatibility)
 	if err := ExportDriverIndex(index, buildDuration); err != nil {
 		index = nil
 		runtime.GC()
 		return err
+	}
+
+	// Export sharded index (names file + per-letter shards)
+	if _, err := ExportShardedIndex(index); err != nil {
+		log.Printf("⚠️ Failed to export sharded index: %v", err)
+		// Non-fatal: monolithic index is still available
 	}
 
 	// Update status with index statistics
@@ -612,6 +618,12 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		index = nil
 		runtime.GC()
 		return err
+	}
+
+	// Export sharded index (names file + per-letter shards)
+	if _, err := ExportShardedIndex(index); err != nil {
+		log.Printf("⚠️ Failed to export sharded index (incremental): %v", err)
+		// Non-fatal: monolithic index is still available
 	}
 
 	// Free the large index map after export. Use GC only — skip

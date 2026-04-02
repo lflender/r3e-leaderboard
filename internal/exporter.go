@@ -16,6 +16,11 @@ const (
 	DriverIndexFile     = "cache/driver_index.json"
 	StatusFile          = "cache/status.json"
 	TopCombinationsFile = "cache/top_combinations.json"
+
+	// Sharded index paths
+	ShardedIndexDir  = "cache/index"
+	ShardedNamesFile = "cache/index/driver_index.json.gz"
+	ShardedShardsDir = "cache/index/shards"
 )
 
 // FailedFetch represents a failed fetch attempt
@@ -165,6 +170,265 @@ func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
 		gzFinal, time.Since(gzStart).Seconds(), gzSizeMB)
 
 	return nil
+}
+
+// ShardKeyForName returns the shard key for a lowercased driver name.
+// Returns "a"-"z" for names starting with a letter, "_" otherwise.
+func ShardKeyForName(lowerName string) string {
+	if len(lowerName) == 0 {
+		return "_"
+	}
+	first := lowerName[0]
+	if first >= 'a' && first <= 'z' {
+		return string(first)
+	}
+	return "_"
+}
+
+// DriverNamesIndex maps lowercase driver name → display name (original case).
+// Clients use this for autocomplete/search, then fetch the appropriate shard.
+type DriverNamesIndex map[string]string
+
+// ExportShardedIndex exports the driver index as a names file + per-letter shards.
+//   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→display name)
+//   - cache/index/shards/{a..z,_}.json.gz — DriverIndex partitions
+//
+// All writes are atomic (temp+rename). Returns total compressed bytes written.
+func ExportShardedIndex(index DriverIndex) (int64, error) {
+	shardStart := time.Now()
+
+	// Ensure directories exist
+	if err := os.MkdirAll(ShardedShardsDir, 0755); err != nil {
+		return 0, fmt.Errorf("failed to create shards directory: %w", err)
+	}
+
+	// 1. Build names index and partition into shards
+	names := make(DriverNamesIndex, len(index))
+	shards := make(map[string]DriverIndex, 28) // a-z + _
+
+	for lowerName, results := range index {
+		// Pick display name from first result (preserves original case)
+		displayName := lowerName
+		if len(results) > 0 {
+			displayName = results[0].Name
+		}
+		names[lowerName] = displayName
+
+		key := ShardKeyForName(lowerName)
+		if shards[key] == nil {
+			shards[key] = make(DriverIndex)
+		}
+		shards[key][lowerName] = results
+	}
+
+	var totalBytes int64
+	expectedShardFiles := make(map[string]struct{}, len(shards))
+
+	// 2. Export names index in gzip format.
+	n, err := writeGzipJSON(ShardedNamesFile, names)
+	if err != nil {
+		return 0, fmt.Errorf("failed to export names index: %w", err)
+	}
+	totalBytes += n
+	if err := os.Remove("cache/index/driver_index.json"); err != nil && !os.IsNotExist(err) {
+		return totalBytes, fmt.Errorf("failed to remove stale plain names index: %w", err)
+	}
+
+	// 3. Export each shard
+	shardCount := 0
+	for key, shard := range shards {
+		shardFile := filepath.Join(ShardedShardsDir, key+".json.gz")
+		expectedShardFiles[shardFile] = struct{}{}
+		n, err := writeGzipJSON(shardFile, shard)
+		if err != nil {
+			return totalBytes, fmt.Errorf("failed to export shard %s: %w", key, err)
+		}
+		totalBytes += n
+		shardCount++
+	}
+
+	// Remove shard files from previous exports that are no longer present.
+	existingShardFiles, err := filepath.Glob(filepath.Join(ShardedShardsDir, "*.json.gz"))
+	if err != nil {
+		return totalBytes, fmt.Errorf("failed to list existing shard files: %w", err)
+	}
+	for _, existingShardFile := range existingShardFiles {
+		if _, keep := expectedShardFiles[existingShardFile]; keep {
+			continue
+		}
+		if err := os.Remove(existingShardFile); err != nil && !os.IsNotExist(err) {
+			return totalBytes, fmt.Errorf("failed to remove stale shard %s: %w", existingShardFile, err)
+		}
+	}
+
+	log.Printf("💾 Sharded index exported: %d shards + names file (%.3f seconds, %.2f MB total compressed)",
+		shardCount, time.Since(shardStart).Seconds(), float64(totalBytes)/(1024*1024))
+
+	return totalBytes, nil
+}
+
+// LoadShardedNamesIndex loads the names-only index from disk.
+func LoadShardedNamesIndex() (DriverNamesIndex, error) {
+	return readGzipJSON[DriverNamesIndex](ShardedNamesFile)
+}
+
+// LoadShard loads a single shard from disk by its key (e.g. "a", "_").
+func LoadShard(key string) (DriverIndex, error) {
+	shardFile := filepath.Join(ShardedShardsDir, key+".json.gz")
+	return readGzipJSON[DriverIndex](shardFile)
+}
+
+// LoadAllShards loads all shard files from disk and merges them into a single DriverIndex.
+// Used by IncrementalIndexUpdate to reconstruct the full index from shards.
+func LoadAllShards() (DriverIndex, error) {
+	pattern := filepath.Join(ShardedShardsDir, "*.json.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to glob shard files: %w", err)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no shard files found in %s", ShardedShardsDir)
+	}
+
+	merged := make(DriverIndex)
+	for _, file := range files {
+		shard, err := readGzipJSON[DriverIndex](file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load shard %s: %w", file, err)
+		}
+		for k, v := range shard {
+			merged[k] = v
+		}
+	}
+	return merged, nil
+}
+
+// writeGzipJSON writes a value as gzip-compressed JSON to disk using atomic temp+rename.
+// Returns compressed size in bytes.
+func writeGzipJSON(finalPath string, v interface{}) (int64, error) {
+	dir := filepath.Dir(finalPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return 0, fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	tmpPath := finalPath + ".tmp"
+	file, err := os.Create(tmpPath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to create temp file %s: %w", tmpPath, err)
+	}
+
+	bufWriter := bufio.NewWriterSize(file, 64*1024)
+	gzWriter := gzip.NewWriter(bufWriter)
+
+	if err := json.NewEncoder(gzWriter).Encode(v); err != nil {
+		gzWriter.Close()
+		bufWriter.Flush()
+		file.Close()
+		os.Remove(tmpPath)
+		return 0, fmt.Errorf("failed to encode JSON: %w", err)
+	}
+
+	if err := gzWriter.Close(); err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return 0, fmt.Errorf("failed to finalize gzip: %w", err)
+	}
+	if err := bufWriter.Flush(); err != nil {
+		file.Close()
+		os.Remove(tmpPath)
+		return 0, fmt.Errorf("failed to flush buffer: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		os.Remove(tmpPath)
+		return 0, fmt.Errorf("failed to close file: %w", err)
+	}
+
+	fi, _ := os.Stat(tmpPath)
+	var size int64
+	if fi != nil {
+		size = fi.Size()
+	}
+
+	// Atomic rename (Windows fallback: remove destination first)
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		data, readErr := os.ReadFile(tmpPath)
+		if readErr != nil {
+			os.Remove(tmpPath)
+			return 0, fmt.Errorf("fallback read failed for %s: %w", tmpPath, readErr)
+		}
+		if writeErr := os.WriteFile(finalPath, data, 0644); writeErr != nil {
+			os.Remove(tmpPath)
+			return 0, fmt.Errorf("fallback write failed for %s: %w", finalPath, writeErr)
+		}
+		os.Remove(tmpPath)
+	}
+
+	return size, nil
+}
+
+// writeJSON writes a value as JSON to disk using atomic temp+rename.
+// Returns file size in bytes.
+func writeJSON(finalPath string, v interface{}) (int64, error) {
+	dir := filepath.Dir(finalPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return 0, fmt.Errorf("failed to create directory %s: %w", dir, err)
+	}
+
+	tmpPath := finalPath + ".tmp"
+	data, err := json.Marshal(v)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal JSON for %s: %w", finalPath, err)
+	}
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return 0, fmt.Errorf("failed to write temp file %s: %w", tmpPath, err)
+	}
+
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		if writeErr := os.WriteFile(finalPath, data, 0644); writeErr != nil {
+			os.Remove(tmpPath)
+			return 0, fmt.Errorf("fallback write failed for %s: %w", finalPath, writeErr)
+		}
+		os.Remove(tmpPath)
+	}
+
+	return int64(len(data)), nil
+}
+
+// readJSON reads a JSON file and decodes it into T.
+func readJSON[T any](path string) (T, error) {
+	var zero T
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return zero, fmt.Errorf("failed to read %s: %w", path, err)
+	}
+
+	var result T
+	if err := json.Unmarshal(data, &result); err != nil {
+		return zero, fmt.Errorf("failed to decode %s: %w", path, err)
+	}
+	return result, nil
+}
+
+// readGzipJSON reads a gzip-compressed JSON file and decodes it into T.
+func readGzipJSON[T any](path string) (T, error) {
+	var zero T
+	file, err := os.Open(path)
+	if err != nil {
+		return zero, fmt.Errorf("failed to open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return zero, fmt.Errorf("failed to create gzip reader for %s: %w", path, err)
+	}
+	defer gzReader.Close()
+
+	var result T
+	if err := json.NewDecoder(gzReader).Decode(&result); err != nil {
+		return zero, fmt.Errorf("failed to decode %s: %w", path, err)
+	}
+	return result, nil
 }
 
 // ExportStatusData exports the status information to a JSON file on disk
