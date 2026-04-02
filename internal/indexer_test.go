@@ -420,34 +420,30 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 		t.Fatalf("BuildAndExportIndex failed: %v", err)
 	}
 
-	monolith, err := LoadDriverIndexFromDisk()
+	merged, err := LoadAllShards()
 	if err != nil {
-		t.Fatalf("LoadDriverIndexFromDisk failed: %v", err)
+		t.Fatalf("LoadAllShards failed: %v", err)
 	}
-	if len(monolith) != 4 {
-		t.Fatalf("Driver count = %d, expected 4", len(monolith))
+	if len(merged) != 4 {
+		t.Fatalf("Driver count = %d, expected 4", len(merged))
 	}
-	if len(monolith["alice speed"]) != 2 {
-		t.Fatalf("Alice Speed results = %d, expected 2", len(monolith["alice speed"]))
+	if len(merged["alice speed"]) != 2 {
+		t.Fatalf("Alice Speed results = %d, expected 2", len(merged["alice speed"]))
 	}
 
 	names, err := LoadShardedNamesIndex()
 	if err != nil {
 		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
 	}
-	if len(names) != len(monolith) {
-		t.Fatalf("Names index size = %d, expected %d", len(names), len(monolith))
+	if len(names) != len(merged) {
+		t.Fatalf("Names index size = %d, expected %d", len(names), len(merged))
 	}
 	if names["charlie pace"] != "Charlie Pace" {
 		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"])
 	}
 
-	merged, err := LoadAllShards()
-	if err != nil {
-		t.Fatalf("LoadAllShards failed: %v", err)
-	}
-	if len(merged) != len(monolith) {
-		t.Fatalf("Merged shard count = %d, expected %d", len(merged), len(monolith))
+	if len(merged) != 4 {
+		t.Fatalf("Merged shard count = %d, expected 4", len(merged))
 	}
 	if merged["zoe zoom"][0].TrackID != "2222" {
 		t.Fatalf("Unexpected Zoe shard entry: %+v", merged["zoe zoom"][0])
@@ -457,8 +453,8 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if status.TrackCount != len(tracks) {
 		t.Fatalf("TrackCount = %d, expected %d", status.TrackCount, len(tracks))
 	}
-	if status.TotalDrivers != len(monolith) {
-		t.Fatalf("TotalDrivers = %d, expected %d", status.TotalDrivers, len(monolith))
+	if status.TotalDrivers != len(merged) {
+		t.Fatalf("TotalDrivers = %d, expected %d", status.TotalDrivers, len(merged))
 	}
 	if status.TotalEntries != 5 {
 		t.Fatalf("TotalEntries = %d, expected 5", status.TotalEntries)
@@ -479,7 +475,7 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	}
 }
 
-func TestIncrementalIndexUpdate_UpdatesMonolithAndShards(t *testing.T) {
+func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
@@ -505,20 +501,20 @@ func TestIncrementalIndexUpdate_UpdatesMonolithAndShards(t *testing.T) {
 		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
 	}
 
-	monolith, err := LoadDriverIndexFromDisk()
+	merged, err := LoadAllShards()
 	if err != nil {
-		t.Fatalf("LoadDriverIndexFromDisk failed: %v", err)
+		t.Fatalf("LoadAllShards failed: %v", err)
 	}
-	if len(monolith) != 2 {
-		t.Fatalf("Driver count after incremental update = %d, expected 2", len(monolith))
+	if len(merged) != 2 {
+		t.Fatalf("Driver count after incremental update = %d, expected 2", len(merged))
 	}
-	if _, exists := monolith["bob racer"]; exists {
-		t.Fatal("Bob Racer should have been removed from monolithic index")
+	if _, exists := merged["bob racer"]; exists {
+		t.Fatal("Bob Racer should have been removed from sharded index")
 	}
-	if len(monolith["alice speed"]) != 1 {
-		t.Fatalf("Alice Speed result count = %d, expected 1", len(monolith["alice speed"]))
+	if len(merged["alice speed"]) != 1 {
+		t.Fatalf("Alice Speed result count = %d, expected 1", len(merged["alice speed"]))
 	}
-	if _, exists := monolith["charlie pace"]; !exists {
+	if _, exists := merged["charlie pace"]; !exists {
 		t.Fatal("Charlie Pace should exist after incremental update")
 	}
 
@@ -540,12 +536,8 @@ func TestIncrementalIndexUpdate_UpdatesMonolithAndShards(t *testing.T) {
 		t.Fatalf("Expected c shard after update: %v", err)
 	}
 
-	merged, err := LoadAllShards()
-	if err != nil {
-		t.Fatalf("LoadAllShards failed: %v", err)
-	}
-	if len(merged) != len(monolith) {
-		t.Fatalf("Merged shard count = %d, expected %d", len(merged), len(monolith))
+	if len(merged) != 2 {
+		t.Fatalf("Merged shard count = %d, expected 2", len(merged))
 	}
 	if _, exists := merged["bob racer"]; exists {
 		t.Fatal("Bob Racer should not remain in merged shards")

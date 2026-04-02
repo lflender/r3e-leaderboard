@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	DriverIndexFile     = "cache/driver_index.json"
 	StatusFile          = "cache/status.json"
 	TopCombinationsFile = "cache/top_combinations.json"
 
@@ -88,90 +87,6 @@ func ReadStatusData() StatusData {
 	return status
 }
 
-// ExportDriverIndex exports the driver index to a gzip-compressed JSON file on disk.
-// Uses streaming JSON encoding → gzip → buffered file writer to avoid allocating
-// the entire JSON representation in memory (saves ~200-400 MB of peak RAM).
-// Atomic write (temp file + rename) with fallback to handle file locking.
-func ExportDriverIndex(index DriverIndex, buildDuration time.Duration) error {
-	// Ensure cache directory exists
-	cacheDir := filepath.Dir(DriverIndexFile)
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
-		return fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	gzTemp := DriverIndexFile + ".gz.tmp"
-	gzFinal := DriverIndexFile + ".gz"
-	gzStart := time.Now()
-
-	// Create temp file
-	file, err := os.Create(gzTemp)
-	if err != nil {
-		return fmt.Errorf("failed to create temp gz file: %w", err)
-	}
-
-	// Pipeline: json.Encoder → gzip.Writer → bufio.Writer (256 KB) → file
-	// This streams the JSON encoding directly to disk without ever holding
-	// the full serialized JSON in memory.
-	bufWriter := bufio.NewWriterSize(file, 256*1024)
-	gzWriter := gzip.NewWriter(bufWriter)
-	gzWriter.Name = filepath.Base(DriverIndexFile)
-
-	encoder := json.NewEncoder(gzWriter)
-	if err := encoder.Encode(index); err != nil {
-		gzWriter.Close()
-		bufWriter.Flush()
-		file.Close()
-		os.Remove(gzTemp)
-		return fmt.Errorf("failed to encode driver index: %w", err)
-	}
-
-	if err := gzWriter.Close(); err != nil {
-		file.Close()
-		os.Remove(gzTemp)
-		return fmt.Errorf("failed to finalize gzip: %w", err)
-	}
-
-	if err := bufWriter.Flush(); err != nil {
-		file.Close()
-		os.Remove(gzTemp)
-		return fmt.Errorf("failed to flush buffer: %w", err)
-	}
-
-	if err := file.Close(); err != nil {
-		os.Remove(gzTemp)
-		return fmt.Errorf("failed to close temp file: %w", err)
-	}
-
-	// Get compressed size for logging
-	fi, _ := os.Stat(gzTemp)
-	gzSizeMB := float64(0)
-	if fi != nil {
-		gzSizeMB = float64(fi.Size()) / (1024 * 1024)
-	}
-
-	// Atomic rename
-	if err := os.Rename(gzTemp, gzFinal); err != nil {
-		log.Printf("⚠️ WARNING: Atomic rename failed for gz: %v", err)
-		// Fallback: read temp and write directly
-		data, readErr := os.ReadFile(gzTemp)
-		if readErr != nil {
-			os.Remove(gzTemp)
-			return fmt.Errorf("fallback read failed: %w", readErr)
-		}
-		if directErr := os.WriteFile(gzFinal, data, 0644); directErr != nil {
-			os.Remove(gzTemp)
-			return fmt.Errorf("fallback write also failed: %w", directErr)
-		}
-		log.Printf("✅ Fallback write successful (gz)")
-		os.Remove(gzTemp)
-	}
-
-	log.Printf("💾 Driver index exported (gz) to %s (%.3f seconds, %.2f MB compressed)",
-		gzFinal, time.Since(gzStart).Seconds(), gzSizeMB)
-
-	return nil
-}
-
 // ShardKeyForName returns the shard key for a lowercased driver name.
 // Returns "a"-"z" for names starting with a letter, "_" otherwise.
 func ShardKeyForName(lowerName string) string {
@@ -189,6 +104,58 @@ func ShardKeyForName(lowerName string) string {
 // Clients use this for autocomplete/search, then fetch the appropriate shard.
 type DriverNamesIndex map[string]string
 
+// ExportedDriverResult is the compact on-disk representation used by
+// monolithic/sharded index files.
+type ExportedDriverResult struct {
+	Position     int     `json:"position"`
+	LapTime      string  `json:"laptime"`
+	TimeDiff     float64 `json:"time_diff"`
+	Country      string  `json:"country"`
+	Car          string  `json:"car"`
+	CarClass     string  `json:"car_class"`
+	Team         string  `json:"team"`
+	Rank         string  `json:"rank"`
+	Difficulty   string  `json:"difficulty"`
+	Track        string  `json:"track"`
+	TrackID      string  `json:"track_id"`
+	ClassID      string  `json:"class_id"`
+	DateTime     string  `json:"date_time"`
+	TotalEntries int     `json:"total_entries"`
+}
+
+type ExportedDriverIndex map[string][]ExportedDriverResult
+
+func compactDriverIndex(index DriverIndex) ExportedDriverIndex {
+	compact := make(ExportedDriverIndex, len(index))
+	for lowerName, results := range index {
+		compact[lowerName] = compactDriverResults(results)
+	}
+	return compact
+}
+
+func compactDriverResults(results []DriverResult) []ExportedDriverResult {
+	compact := make([]ExportedDriverResult, 0, len(results))
+	for _, r := range results {
+		compact = append(compact, ExportedDriverResult{
+			Position:     r.Position,
+			LapTime:      r.LapTime,
+			TimeDiff:     r.TimeDiff,
+			Country:      r.Country,
+			Car:          r.Car,
+			CarClass:     r.CarClass,
+			Team:         r.Team,
+			Rank:         r.Rank,
+			Difficulty:   r.Difficulty,
+			Track:        r.Track,
+			TrackID:      r.TrackID,
+			ClassID:      r.ClassID,
+			DateTime:     r.DateTime,
+			TotalEntries: r.TotalEntries,
+		})
+	}
+	return compact
+}
+
 // ExportShardedIndex exports the driver index as a names file + per-letter shards.
 //   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→display name)
 //   - cache/index/shards/{a..z,_}.json.gz — DriverIndex partitions
@@ -205,12 +172,15 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	// 1. Build names index and partition into shards
 	names := make(DriverNamesIndex, len(index))
 	shards := make(map[string]DriverIndex, 28) // a-z + _
+	previousNames, _ := LoadShardedNamesIndex()
 
 	for lowerName, results := range index {
 		// Pick display name from first result (preserves original case)
 		displayName := lowerName
-		if len(results) > 0 {
+		if len(results) > 0 && results[0].Name != "" {
 			displayName = results[0].Name
+		} else if previousName, ok := previousNames[lowerName]; ok && previousName != "" {
+			displayName = previousName
 		}
 		names[lowerName] = displayName
 
@@ -239,7 +209,7 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	for key, shard := range shards {
 		shardFile := filepath.Join(ShardedShardsDir, key+".json.gz")
 		expectedShardFiles[shardFile] = struct{}{}
-		n, err := writeGzipJSON(shardFile, shard)
+		n, err := writeGzipJSON(shardFile, compactDriverIndex(shard))
 		if err != nil {
 			return totalBytes, fmt.Errorf("failed to export shard %s: %w", key, err)
 		}

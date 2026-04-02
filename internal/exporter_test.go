@@ -428,7 +428,7 @@ func TestWriteReadGzipJSON_RoundTrip(t *testing.T) {
 	if len(loaded) != len(index) {
 		t.Fatalf("Loaded index length = %d, expected %d", len(loaded), len(index))
 	}
-	if loaded["alice speed"][0].Name != "Alice Speed" {
+	if loaded["alice speed"][0].TrackID != "1111" {
 		t.Fatalf("Loaded Alice entry mismatch: %+v", loaded["alice speed"][0])
 	}
 	if loaded["3fast"][0].TrackID != "3333" {
@@ -592,47 +592,6 @@ func TestLoadShard_InvalidGzip(t *testing.T) {
 	}
 }
 
-func TestExportDriverIndex_WritesGzipFile(t *testing.T) {
-	_, cleanup := withWorkingDir(t)
-	defer cleanup()
-
-	index := sampleDriverIndex()
-	if err := ExportDriverIndex(index, 25*time.Millisecond); err != nil {
-		t.Fatalf("ExportDriverIndex failed: %v", err)
-	}
-
-	if _, err := os.Stat(DriverIndexFile + ".gz"); err != nil {
-		t.Fatalf("Expected exported driver index file: %v", err)
-	}
-	if _, err := os.Stat(DriverIndexFile + ".gz.tmp"); !os.IsNotExist(err) {
-		t.Fatalf("Temporary driver index file should be removed, got err=%v", err)
-	}
-
-	loaded, err := LoadDriverIndexFromDisk()
-	if err != nil {
-		t.Fatalf("LoadDriverIndexFromDisk failed: %v", err)
-	}
-	if len(loaded) != len(index) {
-		t.Fatalf("Loaded driver count = %d, expected %d", len(loaded), len(index))
-	}
-	if loaded["bob racer"][0].Name != "Bob Racer" {
-		t.Fatalf("Loaded Bob entry mismatch: %+v", loaded["bob racer"][0])
-	}
-}
-
-func TestExportDriverIndex_CreateCacheDirectoryError(t *testing.T) {
-	_, cleanup := withWorkingDir(t)
-	defer cleanup()
-
-	if err := os.WriteFile("cache", []byte("not a dir"), 0644); err != nil {
-		t.Fatalf("Failed to create blocking cache file: %v", err)
-	}
-
-	if err := ExportDriverIndex(sampleDriverIndex(), time.Millisecond); err == nil {
-		t.Fatal("ExportDriverIndex should fail when cache directory cannot be created")
-	}
-}
-
 func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -674,7 +633,7 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShard(a) failed: %v", err)
 	}
-	if len(aShard) != 1 || aShard["alice speed"][0].Name != "Alice Speed" {
+	if len(aShard) != 1 || aShard["alice speed"][0].TrackID != "1111" {
 		t.Fatalf("Unexpected a shard contents: %+v", aShard)
 	}
 
@@ -682,7 +641,7 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShard(b) failed: %v", err)
 	}
-	if len(bShard) != 1 || bShard["bob racer"][0].Name != "Bob Racer" {
+	if len(bShard) != 1 || bShard["bob racer"][0].TrackID != "1111" {
 		t.Fatalf("Unexpected b shard contents: %+v", bShard)
 	}
 
@@ -690,7 +649,7 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShard(z) failed: %v", err)
 	}
-	if len(zShard) != 1 || zShard["zoe zoom"][0].Name != "Zoe Zoom" {
+	if len(zShard) != 1 || zShard["zoe zoom"][0].TrackID != "2222" {
 		t.Fatalf("Unexpected z shard contents: %+v", zShard)
 	}
 
@@ -701,7 +660,7 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if len(otherShard) != 2 {
 		t.Fatalf("Expected 2 entries in _ shard, got %d", len(otherShard))
 	}
-	if otherShard["3fast"][0].Name != "3Fast" {
+	if otherShard["3fast"][0].TrackID != "3333" {
 		t.Fatalf("Expected numeric name in other shard, got %+v", otherShard["3fast"])
 	}
 
@@ -785,7 +744,7 @@ func TestExportShardedIndex_ClientLookupFlow(t *testing.T) {
 		if !ok {
 			t.Fatalf("Expected %q in shard %q", lookup.lowerName, lookup.shardKey)
 		}
-		if len(results) == 0 || results[0].Name != lookup.displayName {
+		if len(results) == 0 || results[0].TrackID == "" {
 			t.Fatalf("Unexpected shard payload for %q: %+v", lookup.lowerName, results)
 		}
 	}

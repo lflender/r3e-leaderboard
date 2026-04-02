@@ -42,7 +42,7 @@ func main() {
 	var discordClient *internal.DiscordClient
 	if config.Discord.Enabled {
 		discordClient = internal.NewDiscordClient(config.Discord)
-		log.Println("🔄 Phase 0: Fetching Discord schedule and refreshing daily races")
+		log.Println("🔄 Phase 1: Fetch discord schedule")
 
 		// Check for initial Daily Sprint Races message at startup (synchronous)
 		// This ensures the cache is updated BEFORE the orchestrator starts
@@ -76,6 +76,7 @@ func main() {
 	}
 
 	// Always refresh multiplayer positions at startup
+	log.Println("🔄 Phase 2: Fetch multi-player positions")
 	mpCtx, mpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := internal.RefreshMultiplayerPositions(mpCtx, config.Data.MultiplayerPositionLimit); err != nil {
 		log.Printf("⚠️ Failed to refresh mp_pos.json at startup: %v", err)

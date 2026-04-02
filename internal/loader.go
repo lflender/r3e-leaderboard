@@ -62,8 +62,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 
-	// PHASE 1: Load ALL existing cache (even if expired)
-	log.Println("🔄 Phase 1: Loading all cached data...")
+	// PHASE 4: Load local cache
+	log.Println("🔄 Phase 4: Load local cache")
 	cacheLoadCount := 0
 	// Pre-allocate with estimated capacity to avoid repeated allocations
 	allTrackData = make([]TrackInfo, 0, totalCombinations/2)
@@ -90,7 +90,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
 
-	// PHASE 2: Check if we need to fetch
+	// PHASE 4: Determine if network fetch is needed
 	needsFetching := false
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
@@ -112,12 +112,14 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	}
 
 	if !needsFetching {
+		log.Println("🔄 Phase 5: Fetch data (nothing to do)")
+		log.Println("🔄 Phase 6: Retry failed fetches (0 pending)")
 		log.Println("✅ All cache is fresh - no fetching needed")
 		return allTrackData
 	}
 
-	// PHASE 3: Fetch missing and expired data
-	log.Println("🔄 Phase 3: Fetching missing and expired data...")
+	// PHASE 5: Fetch data
+	log.Println("🔄 Phase 5: Fetch data")
 
 	currentCombination := 0
 	fetchedCount := 0
@@ -183,7 +185,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			if err != nil {
 				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", track.Name, class.Name, err)
 				failedFetches = append(failedFetches, FailedFetchInfo{track, class, err})
-				continue // Skip on fetch error but log it - we'll retry in PHASE 4
+				continue // Skip on fetch error but log it - we'll retry in PHASE 6
 			}
 
 			trackInfo := TrackInfo{
@@ -250,7 +252,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	}
 	existingData = nil
 
-	// PHASE 4: Retry failed fetches
+	// PHASE 6: Retry failed fetches
+	log.Printf("🔄 Phase 6: Retry failed fetches (%d pending)", len(failedFetches))
 	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	allTrackData = append(allTrackData, retriedTracks...)
 

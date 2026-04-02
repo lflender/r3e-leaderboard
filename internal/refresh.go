@@ -9,7 +9,8 @@ import (
 // RefreshDailyRaceCombinations refreshes only the track/class combinations
 // from the cached Daily Races data. Returns the track IDs that were refreshed.
 // This is a lightweight refresh that only fetches a few combinations (typically 5-6).
-func RefreshDailyRaceCombinations(ctx context.Context, cfg Config) ([]string, error) {
+// When refreshMPPositions is true, multiplayer positions are refreshed at the end.
+func RefreshDailyRaceCombinations(ctx context.Context, cfg Config, refreshMPPositions bool) ([]string, error) {
 	ctx = WithFetchPauseBypass(ctx)
 	cache := NewDataCache()
 	dailyRaces, err := cache.LoadDiscordRaces()
@@ -90,12 +91,14 @@ func RefreshDailyRaceCombinations(ctx context.Context, cfg Config) ([]string, er
 	// Update status with last refresh time
 	UpdateDailyRaceRefreshTime()
 
-	// Refresh multiplayer positions at the end of Daily Race refresh
-	mpCtx, mpCancel := context.WithTimeout(ctx, 30*time.Second)
-	if err := RefreshMultiplayerPositions(mpCtx, cfg.Data.MultiplayerPositionLimit); err != nil {
-		log.Printf("⚠️ Failed to refresh multiplayer positions: %v", err)
+	if refreshMPPositions {
+		// Refresh multiplayer positions at the end of Daily Race refresh
+		mpCtx, mpCancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := RefreshMultiplayerPositions(mpCtx, cfg.Data.MultiplayerPositionLimit); err != nil {
+			log.Printf("⚠️ Failed to refresh multiplayer positions: %v", err)
+		}
+		mpCancel()
 	}
-	mpCancel()
 
 	if len(allIDs) != len(trackIDs) {
 		log.Printf("🔄 Returning %d combo IDs (%d daily race + %d from pending cache)",

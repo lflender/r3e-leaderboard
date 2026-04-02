@@ -85,11 +85,14 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		// First, refresh Daily Race combinations before initial index
 		// This ensures the index includes the latest Daily Race data
-		if _, err := internal.RefreshDailyRaceCombinations(opCtx, o.config); err != nil {
+		log.Println("🔄 Phase 3: Fetch daily races combos")
+		if _, err := internal.RefreshDailyRaceCombinations(opCtx, o.config, false); err != nil {
 			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
 		} else {
 			o.lastDailyRaceRefresh = time.Now()
 		}
+
+		willFetchFresh := false
 
 		// Create a callback to update status incrementally during loading
 		progressCallback := func(currentTracks []internal.TrackInfo) {
@@ -101,11 +104,12 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		}
 
 		// Callback when cache loading is complete - build index from cache if present
-		cacheCompleteCallback := func(cachedTracks []internal.TrackInfo, willFetchFresh bool) {
+		cacheCompleteCallback := func(cachedTracks []internal.TrackInfo, shouldFetchFresh bool) {
 			o.tracks = cachedTracks
+			willFetchFresh = shouldFetchFresh
 
 			if len(cachedTracks) > 0 {
-				log.Println("🔄 Building initial search index from cache...")
+				o.logIndexBuild("initial cache")
 				if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
 					log.Printf("⚠️ Failed to export index: %v", err)
 				} else {
@@ -117,7 +121,7 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 			}
 
 			// Only start periodic indexing and mark scrape start if we will fetch
-			if willFetchFresh {
+			if shouldFetchFresh {
 				if opCtx.Err() != nil {
 					return
 				}
@@ -145,11 +149,13 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 			return
 		}
 
-		log.Println("🔄 Building final search index...")
-		if err := internal.BuildAndExportIndex(tracks); err != nil {
-			log.Printf("⚠️ Failed to export index: %v", err)
+		if willFetchFresh {
+			o.logIndexBuild("startup final")
+			if err := internal.BuildAndExportIndex(tracks); err != nil {
+				log.Printf("⚠️ Failed to export index: %v", err)
+			}
+			log.Println("✅ Final index complete")
 		}
-		log.Println("✅ Final index complete")
 
 		// Don't keep tracks in memory after initial load — only needed during active refresh
 		o.lastIndexedCount = len(tracks)
@@ -237,7 +243,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	o.exportStatus()
 
 	// Build final index (will preserve the scrape timestamps we just wrote)
-	log.Println("🔄 Building final search index...")
+	o.logIndexBuild("full refresh final")
 	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
@@ -285,7 +291,7 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	finalTracks := internal.PerformTargetedRefresh(opCtx, trackIDs, progressCallback, origin)
 
 	// Build final index
-	log.Println("🔄 Building final search index (targeted refresh)...")
+	o.logIndexBuild("targeted refresh final")
 	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
@@ -463,6 +469,14 @@ func (o *Orchestrator) CompactTrackData() {
 	}
 }
 
+func (o *Orchestrator) logIndexBuild(stage string) {
+	if stage == "" {
+		log.Println("🔄 Building index")
+		return
+	}
+	log.Printf("🔄 Building index (%s)", stage)
+}
+
 // formatDuration formats a duration into a human-readable string
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
@@ -500,7 +514,7 @@ func (o *Orchestrator) buildBootstrapIndex() {
 
 	cachedTracks := internal.LoadAllCachedData(o.fetchContext)
 	if len(cachedTracks) > 0 {
-		log.Println("🔄 Building initial search index from existing cache...")
+		o.logIndexBuild("refresh bootstrap")
 		if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
 			log.Printf("⚠️ Failed to export initial index: %v", err)
 		} else {
@@ -546,7 +560,7 @@ func (o *Orchestrator) StartDailyRaceRefreshLoop(intervalMinutes int) {
 			}
 
 			log.Printf("🏁 Refreshing Daily Race combinations (%s)...", reason)
-			changedCombos, err := internal.RefreshDailyRaceCombinations(o.appContext, o.config)
+			changedCombos, err := internal.RefreshDailyRaceCombinations(o.appContext, o.config, true)
 			if err != nil {
 				log.Printf("⚠️ Daily Race refresh failed: %v", err)
 				return
