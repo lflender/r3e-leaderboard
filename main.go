@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"r3e-leaderboard/internal"
@@ -15,7 +14,6 @@ import (
 )
 
 var orchestrator *Orchestrator
-var httpServer *http.Server
 
 func main() {
 	// Remove timestamps from log output (systemd/journalctl already provides them)
@@ -104,9 +102,6 @@ func main() {
 		go periodicDiscordChecking(appContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
 	}
 
-	// Start HTTP server to serve static files
-	httpServer = internal.StartHTTPServer(config.Server.Port)
-
 	// Wait for shutdown signal
 	waitForShutdown()
 }
@@ -117,15 +112,6 @@ func waitForShutdown() {
 
 	sig := <-sigChan
 	log.Printf("🛑 Received %s signal, shutting down...", sig)
-
-	// Shutdown HTTP server gracefully
-	if httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Printf("⚠️ HTTP server shutdown error: %v", err)
-		}
-	}
 
 	if orchestrator != nil {
 		_, _, inProgress := orchestrator.GetScrapeTimestamps()

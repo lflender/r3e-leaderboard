@@ -58,7 +58,6 @@ The application will:
 - Export status data to `cache/status.json`
 - Fetch missing/updated data in background
 - Refresh JSON files periodically
-- Start HTTP server on port 8080 (configurable) to serve static files
 
 ## 📋 Generated JSON Files
 
@@ -457,34 +456,6 @@ The application checks for this file every 60 seconds. When detected:
 
 ### JSON Files Not Updating
 Check logs for errors during index building. The application will continue running even if JSON export fails.
-
-### PostHog Ingest Proxy (Ad-Blocker Resistant)
-
-The server includes a built-in reverse proxy for PostHog ingestion:
-
-- Incoming path: `/t/*`
-- Upstream default: `https://us.i.posthog.com`
-- Custom upstream: set `POSTHOG_PROXY_TARGET`
-
-Set one of these before starting the app:
-
-```bash
-# US project (default if not set)
-export POSTHOG_PROXY_TARGET="https://us.i.posthog.com"
-
-# EU project
-export POSTHOG_PROXY_TARGET="https://eu.i.posthog.com"
-```
-
-In your front-end PostHog init config, point `api_host` to `/t` so events go through your own domain:
-
-```javascript
-posthog.init("YOUR_POSTHOG_PROJECT_API_KEY", {
-  api_host: "/t"
-})
-```
-
-This ensures requests like `/t/e/`, `/t/decide/`, and `/t/batch/` are forwarded to PostHog.
 
 ## 📦 Project Structure
 
