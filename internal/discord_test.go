@@ -301,6 +301,8 @@ func TestFindCarClassID_AllAliases(t *testing.T) {
 		{"dtm 2023", "12196", "DTM 2023"},
 		{"dtm 2024", "12770", "DTM 2024"},
 		{"dtm 2025", "13136", "DTM 2025"},
+		{"dtm", "13136", "DTM 2025"},
+		{"audi tt 16", "5726", "Audi Sport TT Cup 2016"},
 		{"m235i", "6344", "BMW M235i Racing Cup"},
 		{"silhouette series", "1717", "Silhouette Series"},
 		{"group 5", "1708", "Group 5"},
@@ -308,8 +310,7 @@ func TestFindCarClassID_AllAliases(t *testing.T) {
 		{"wtcr 22", "11317", "WTCR 2022"},
 		{"wtcr 21", "10344", "WTCR 2021"},
 		{"wtcr 20", "9233", "WTCR 2020"},
-		// New aliases from user-provided messages
-		{"fr junior", "253", "FRJ Cup (FR Junior alias)"},
+		{"fr junior", "253", "FRJ Cup"},
 		{"porsche 964", "7287", "Porsche 964 Cup"},
 		{"992 cup", "12302", "Porsche 992 GT3 Cup"},
 		{"audi tt rs", "5234", "Audi TT RS cup"},
@@ -389,6 +390,7 @@ func TestFindTrackID_AllAliases(t *testing.T) {
 		{"zolder", "1684", "Circuit Zolder - Grand Prix"},
 		{"hungaroring", "1866", "Hungaroring - Grand Prix"},
 		{"zandvoort", "10782", "Circuit Zandvoort - Grand Prix"},
+		{"spa classic", "13368", "Circuit de Spa-Francorchamps - Classic"},
 		{"bathurst", "1846", "Mount Panorama Circuit - Bathurst"},
 		{"laguna seca", "1856", "WeatherTech Raceway Laguna Seca"},
 		{"daytona", "8367", "Daytona International Speedway"},
@@ -2002,6 +2004,93 @@ func TestParsePlusCombo(t *testing.T) {
 	}
 	if !race1.MatchedOK {
 		t.Errorf("Race 1: expected MatchedOK=true")
+	}
+}
+
+func TestParseDailySprintRaces_Mar30MessageAliases(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "mar30_test",
+		Content: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+
+Daily Sprint Races (15 min)
+🆓 A110 - Laguna Seca
+Every hour (--:20) LB fixed setup
+🏁 Super Touring - Spa Classic
+Every hour (--:10) LB fixed setup
+🏁 PCCD+PCCNA - Interlagos
+Every other hour (--:40) LB fixed setup
+🏁 WTCR 18-22 - Macau
+Every hour (--:50) LB fixed setup
+
+Daily Feature Races (~30 min)
+🔥 DTM - Zandvoort
+30 min (17:30, 19:30, 21:30) LB open setup
+🔥 Audi TT 16 – Nordschleife NLS
+3 laps (~20 min) (18:00, 20:00, 22:00) LB open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	if len(result.Races) != 4 {
+		t.Fatalf("Expected 4 sprint races, got %d", len(result.Races))
+	}
+	if len(result.FeatureRaces) != 2 {
+		t.Fatalf("Expected 2 feature races, got %d", len(result.FeatureRaces))
+	}
+
+	findRace := func(races []DailySprintRace, carClass string) *DailySprintRace {
+		for i := range races {
+			if races[i].CarClass == carClass {
+				return &races[i]
+			}
+		}
+		return nil
+	}
+
+	spa := findRace(result.Races, "Super Touring")
+	if spa == nil {
+		t.Fatal("Super Touring race not found")
+	}
+	if spa.TrackID != "13368" {
+		t.Errorf("Super Touring: expected Spa Classic trackID '13368', got '%s'", spa.TrackID)
+	}
+
+	dtm := findRace(result.FeatureRaces, "DTM")
+	if dtm == nil {
+		t.Fatal("DTM feature race not found")
+	}
+	if dtm.CarClassID != "13136" {
+		t.Errorf("DTM feature: expected classID '13136', got '%s'", dtm.CarClassID)
+	}
+	if dtm.TrackID != "10782" {
+		t.Errorf("DTM feature: expected Zandvoort trackID '10782', got '%s'", dtm.TrackID)
+	}
+
+	audiTT := findRace(result.FeatureRaces, "Audi TT 16")
+	if audiTT == nil {
+		t.Fatal("Audi TT 16 feature race not found")
+	}
+	if audiTT.CarClassID != "5726" {
+		t.Errorf("Audi TT 16 feature: expected classID '5726', got '%s'", audiTT.CarClassID)
+	}
+	if audiTT.TrackID != "4975" {
+		t.Errorf("Audi TT 16 feature: expected Nordschleife NLS trackID '4975', got '%s'", audiTT.TrackID)
+	}
+
+	combo := findRace(result.Races, "PCCD + PCCNA")
+	if combo == nil {
+		t.Fatal("PCCD+PCCNA combo race not found")
+	}
+	if combo.TrackID != "10463" {
+		t.Errorf("PCCD+PCCNA combo: expected Interlagos trackID '10463', got '%s'", combo.TrackID)
+	}
+	if len(combo.CategoryIDs) != 2 || combo.CategoryIDs[0] != "12015" || combo.CategoryIDs[1] != "12969" {
+		t.Errorf("PCCD+PCCNA combo: expected category IDs [12015 12969], got %v", combo.CategoryIDs)
 	}
 }
 
