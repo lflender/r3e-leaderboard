@@ -15,6 +15,7 @@ import (
 const (
 	StatusFile          = "cache/status.json"
 	TopCombinationsFile = "cache/top_combinations.json"
+	AllCombinationsFile = "cache/all_combinations.json.gz"
 
 	// Sharded index paths
 	ShardedIndexDir  = "cache/index"
@@ -520,6 +521,17 @@ func ExportTopCombinations(tracks []TrackInfo, trackEntryCounts map[string]int) 
 			}
 		}
 	}
+
+	// Export all combinations as gzip for front-end filtering
+	allData := TopCombinationsData{
+		Count:   len(combinations),
+		Results: combinations,
+	}
+	if _, err := writeGzipJSON(AllCombinationsFile, allData); err != nil {
+		log.Printf("❌ Failed to export all combinations: %v", err)
+		return err
+	}
+	log.Printf("💾 All combinations exported to %s (%d combinations)", AllCombinationsFile, len(combinations))
 
 	// Limit to top 1000
 	if len(combinations) > 1000 {
