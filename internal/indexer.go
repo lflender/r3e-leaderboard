@@ -1,12 +1,9 @@
 package internal
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -352,8 +349,8 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	log.Printf("🔍 Index built: %.3f seconds (%d drivers, %d entries, %d tracks)",
 		buildDuration.Seconds(), len(index), totalEntries, uniqueTrackCount)
 
-	// Export the driver index
-	if err := ExportDriverIndex(index, buildDuration); err != nil {
+	// Export sharded index (names file + per-letter shards)
+	if _, err := ExportShardedIndex(index); err != nil {
 		index = nil
 		runtime.GC()
 		return err
@@ -385,34 +382,15 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	return ExportTopCombinations(tracks, trackEntryCounts)
 }
 
-// LoadDriverIndexFromDisk loads the existing driver index from the gzip file on disk.
-// This is used for incremental index updates to avoid loading all raw cache files.
-func LoadDriverIndexFromDisk() (DriverIndex, error) {
-	gzFile := DriverIndexFile + ".gz"
-	file, err := os.Open(gzFile)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open driver index gz: %w", err)
-	}
-	defer file.Close()
-
-	gzReader, err := gzip.NewReader(file)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create gzip reader: %w", err)
-	}
-	defer gzReader.Close()
-
-	var index DriverIndex
-	if err := json.NewDecoder(gzReader).Decode(&index); err != nil {
-		return nil, fmt.Errorf("failed to decode driver index: %w", err)
-	}
-
-	return index, nil
+// LoadDriverIndexFromShards loads the existing driver index from sharded files.
+func LoadDriverIndexFromShards() (DriverIndex, error) {
+	return LoadAllShards()
 }
 
 // IncrementalIndexUpdate performs a lightweight index update for a small number
 // of changed track-class combinations. Instead of loading all ~10K cached files
 // and rebuilding from scratch (which peaks at ~4 GB), it:
-//  1. Loads the existing driver_index.json.gz (~17 MB gzip, ~200-300 MB parsed)
+//  1. Loads the existing index from shards
 //  2. Removes stale entries for the changed combos
 //  3. Loads only the changed cache files and adds new entries
 //  4. Re-exports the updated index
@@ -443,10 +421,10 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	// freeing meaningful memory. FreeOSMemory is even worse — it releases pages
 	// via madvise that must be immediately re-acquired for the index allocation.
 
-	// 1. Load existing index from disk
-	index, err := LoadDriverIndexFromDisk()
+	// 1. Load existing index from shards
+	index, err := LoadDriverIndexFromShards()
 	if err != nil {
-		return fmt.Errorf("incremental update failed — cannot load existing index: %w", err)
+		return fmt.Errorf("incremental update failed — cannot load sharded index: %w", err)
 	}
 
 	// 2. Parse changed combos into a lookup set
@@ -608,7 +586,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	// 5. Capture stats we need BEFORE export, then nil the index immediately after
 	driverCount := len(index)
 
-	if err := ExportDriverIndex(index, buildDuration); err != nil {
+	// Export sharded index (names file + per-letter shards)
+	if _, err := ExportShardedIndex(index); err != nil {
 		index = nil
 		runtime.GC()
 		return err

@@ -1,8 +1,11 @@
 package internal
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // =============================================================================
@@ -377,5 +380,183 @@ func TestBuildDriverIndex_EmptyDriverName(t *testing.T) {
 	// Should only have 1 driver (empty names are skipped)
 	if len(index) != 1 {
 		t.Errorf("Expected 1 driver (empty name skipped), got %d", len(index))
+	}
+}
+
+func testTrackInfo(name, trackID, classID string, drivers ...string) TrackInfo {
+	data := make([]map[string]interface{}, 0, len(drivers))
+	for i, driver := range drivers {
+		data = append(data, map[string]interface{}{
+			"driver":           map[string]interface{}{"name": driver},
+			"index":            float64(i),
+			"laptime":          "1:23.456",
+			"relative_laptime": "+0.100s",
+			"country":          map[string]interface{}{"name": "Germany"},
+			"car_class":        map[string]interface{}{"car": map[string]interface{}{"name": "Porsche 911 GT3 R", "class-name": "GTR 3"}},
+			"team":             "Test Team",
+			"rank":             "S",
+			"driving_model":    "GET REAL",
+			"date_time":        "2026-04-02T12:00:00Z",
+		})
+	}
+	return TrackInfo{
+		Name:    name,
+		TrackID: trackID,
+		ClassID: classID,
+		Data:    data,
+	}
+}
+
+func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	tracks := []TrackInfo{
+		testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer"),
+		testTrackInfo("Track B", "2222", "1757", "Alice Speed", "Zoe Zoom", "Charlie Pace"),
+	}
+
+	if err := BuildAndExportIndex(tracks); err != nil {
+		t.Fatalf("BuildAndExportIndex failed: %v", err)
+	}
+
+	merged, err := LoadAllShards()
+	if err != nil {
+		t.Fatalf("LoadAllShards failed: %v", err)
+	}
+	if len(merged) != 4 {
+		t.Fatalf("Driver count = %d, expected 4", len(merged))
+	}
+	if len(merged["alice speed"]) != 2 {
+		t.Fatalf("Alice Speed results = %d, expected 2", len(merged["alice speed"]))
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+	if len(names) != len(merged) {
+		t.Fatalf("Names index size = %d, expected %d", len(names), len(merged))
+	}
+	if names["charlie pace"].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	}
+	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
+	}
+
+	if len(merged) != 4 {
+		t.Fatalf("Merged shard count = %d, expected 4", len(merged))
+	}
+	if merged["zoe zoom"][0].TrackID != "2222" {
+		t.Fatalf("Unexpected Zoe shard entry: %+v", merged["zoe zoom"][0])
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	if status.TrackCount != len(tracks) {
+		t.Fatalf("TrackCount = %d, expected %d", status.TrackCount, len(tracks))
+	}
+	if status.TotalDrivers != len(merged) {
+		t.Fatalf("TotalDrivers = %d, expected %d", status.TotalDrivers, len(merged))
+	}
+	if status.TotalEntries != 5 {
+		t.Fatalf("TotalEntries = %d, expected 5", status.TotalEntries)
+	}
+	if status.TotalUniqueTracks != 2 {
+		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	}
+
+	top := readJSONFile[TopCombinationsData](t, TopCombinationsFile)
+	if top.Count != 2 {
+		t.Fatalf("Top combinations count = %d, expected 2", top.Count)
+	}
+	if top.Results[0].EntryCount != 3 {
+		t.Fatalf("Top entry count = %d, expected 3", top.Results[0].EntryCount)
+	}
+	if top.Results[0].Track != "Track B" {
+		t.Fatalf("Top track = %q, expected Track B", top.Results[0].Track)
+	}
+}
+
+func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+	initial := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer")
+	if err := cache.SaveTrackData(initial); err != nil {
+		t.Fatalf("SaveTrackData initial failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{initial}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); err != nil {
+		t.Fatalf("Expected initial b shard: %v", err)
+	}
+
+	updated := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Charlie Pace")
+	if err := cache.SaveTrackData(updated); err != nil {
+		t.Fatalf("SaveTrackData updated failed: %v", err)
+	}
+
+	refreshTS := time.Date(2026, time.April, 2, 18, 30, 0, 0, time.UTC)
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}, refreshTS); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	merged, err := LoadAllShards()
+	if err != nil {
+		t.Fatalf("LoadAllShards failed: %v", err)
+	}
+	if len(merged) != 2 {
+		t.Fatalf("Driver count after incremental update = %d, expected 2", len(merged))
+	}
+	if _, exists := merged["bob racer"]; exists {
+		t.Fatal("Bob Racer should have been removed from sharded index")
+	}
+	if len(merged["alice speed"]) != 1 {
+		t.Fatalf("Alice Speed result count = %d, expected 1", len(merged["alice speed"]))
+	}
+	if _, exists := merged["charlie pace"]; !exists {
+		t.Fatal("Charlie Pace should exist after incremental update")
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+	if _, exists := names["bob racer"]; exists {
+		t.Fatal("Bob Racer should have been removed from names index")
+	}
+	if names["charlie pace"].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	}
+	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
+	}
+
+	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); !os.IsNotExist(err) {
+		t.Fatalf("Stale b shard should be removed, got err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "c.json.gz")); err != nil {
+		t.Fatalf("Expected c shard after update: %v", err)
+	}
+
+	if len(merged) != 2 {
+		t.Fatalf("Merged shard count = %d, expected 2", len(merged))
+	}
+	if _, exists := merged["bob racer"]; exists {
+		t.Fatal("Bob Racer should not remain in merged shards")
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	if status.TotalDrivers != 2 {
+		t.Fatalf("TotalDrivers = %d, expected 2", status.TotalDrivers)
+	}
+	if status.TotalEntries != 2 {
+		t.Fatalf("TotalEntries = %d, expected 2", status.TotalEntries)
+	}
+	if !status.LastDailyRaceRefresh.Equal(refreshTS) {
+		t.Fatalf("LastDailyRaceRefresh = %v, expected %v", status.LastDailyRaceRefresh, refreshTS)
 	}
 }

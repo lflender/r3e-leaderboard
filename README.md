@@ -58,7 +58,6 @@ The application will:
 - Export status data to `cache/status.json`
 - Fetch missing/updated data in background
 - Refresh JSON files periodically
-- Start HTTP server on port 8080 (configurable) to serve static files
 
 ## 📋 Generated JSON Files
 
@@ -235,18 +234,21 @@ cache/
 ├── status.json               # Status and statistics
 ├── top_combinations.json     # Top 1000 track/class combos by entries
 ├── refresh_now               # Manual refresh trigger file (touch to trigger)
-├── track_9473/
-│   ├── class_1703.json.gz   # Brands Hatch + GT3
-│   ├── class_1704.json.gz   # Brands Hatch + GT2
-│   └── ...
-└── track_*/                  # All other tracks
+└── tracks/
+  ├── track_9473/
+  │   ├── class_1703.json.gz   # Brands Hatch + GT3
+  │   ├── class_1704.json.gz   # Brands Hatch + GT2
+  │   └── ...
+  └── track_*/                  # All other tracks
 ```
 
 ### Temporary Cache During Refresh
 ```
-cache_temp/
-└── track_*/                  # Temporary cache during refresh
-                              # Promoted atomically to cache/ when complete
+cache/
+└── tracks/
+  └── cache_temp/
+    └── track_*/          # Temporary cache during refresh
+                # Promoted atomically to cache/tracks/ when complete
 ```
 
 ### Cache Validity
@@ -458,34 +460,6 @@ The application checks for this file every 60 seconds. When detected:
 ### JSON Files Not Updating
 Check logs for errors during index building. The application will continue running even if JSON export fails.
 
-### PostHog Ingest Proxy (Ad-Blocker Resistant)
-
-The server includes a built-in reverse proxy for PostHog ingestion:
-
-- Incoming path: `/t/*`
-- Upstream default: `https://us.i.posthog.com`
-- Custom upstream: set `POSTHOG_PROXY_TARGET`
-
-Set one of these before starting the app:
-
-```bash
-# US project (default if not set)
-export POSTHOG_PROXY_TARGET="https://us.i.posthog.com"
-
-# EU project
-export POSTHOG_PROXY_TARGET="https://eu.i.posthog.com"
-```
-
-In your front-end PostHog init config, point `api_host` to `/t` so events go through your own domain:
-
-```javascript
-posthog.init("YOUR_POSTHOG_PROJECT_API_KEY", {
-  api_host: "/t"
-})
-```
-
-This ensures requests like `/t/e/`, `/t/decide/`, and `/t/batch/` are forwarded to PostHog.
-
 ## 📦 Project Structure
 
 ```
@@ -495,9 +469,10 @@ r3e-leaderboard/
 │   ├── status.json          # Status data
 │   ├── top_combinations.json# Top combinations
 │   ├── refresh_now          # Manual refresh trigger (created by user)
-│   └── track_*/             # Per-track cache
-├── cache_temp/              # Temporary cache during refresh
-│   └── track_*/             # Atomically promoted to cache/ when complete
+│   └── tracks/
+│       ├── track_*/         # Per-track cache
+│       └── cache_temp/
+│           └── track_*/     # Atomically promoted to cache/tracks/ when complete
 ├── main.go                  # Application entry point
 ├── orchestrator.go          # High-level coordination logic
 ├── internal/

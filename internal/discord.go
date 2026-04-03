@@ -820,6 +820,36 @@ func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinM
 	// Load full names for better logging
 	tracks := GetTracks()
 	carClasses := GetCarClasses()
+	classNameByID := make(map[string]string, len(carClasses))
+	for _, class := range carClasses {
+		classNameByID[class.ClassID] = class.Name
+	}
+
+	resolveClassDisplay := func(race DailySprintRace) (string, string) {
+		// For alias/category races, always show concrete class IDs in logs.
+		if len(race.CategoryIDs) > 0 {
+			resolvedNames := make([]string, 0, len(race.CategoryIDs))
+			for _, id := range race.CategoryIDs {
+				if name, ok := classNameByID[id]; ok {
+					resolvedNames = append(resolvedNames, name)
+				}
+			}
+
+			classNameDisplay := race.CarClass
+			if len(resolvedNames) > 0 {
+				classNameDisplay = strings.Join(resolvedNames, " + ")
+			}
+			return classNameDisplay, strings.Join(race.CategoryIDs, ",")
+		}
+
+		if race.CarClassID != "" {
+			if name, ok := classNameByID[race.CarClassID]; ok {
+				return name, race.CarClassID
+			}
+		}
+
+		return race.CarClass, race.CarClassID
+	}
 
 	logRaces := func(label string, races []DailySprintRace) {
 		if len(races) == 0 {
@@ -834,17 +864,8 @@ func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinM
 				status = "⚠️"
 			}
 
-			fullClassName := race.CarClass
+			fullClassName, classIDDisplay := resolveClassDisplay(race)
 			fullTrackName := race.Track
-
-			if race.CarClassID != "" {
-				for _, class := range carClasses {
-					if class.ClassID == race.CarClassID {
-						fullClassName = class.Name
-						break
-					}
-				}
-			}
 
 			if race.TrackID != "" {
 				for _, track := range tracks {
@@ -857,7 +878,7 @@ func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinM
 
 			log.Printf("  %s %s - %s", status, race.CarClass, race.Track)
 			log.Printf("      → %s (ID: %s) - %s (ID: %s)",
-				fullClassName, race.CarClassID, fullTrackName, race.TrackID)
+				fullClassName, classIDDisplay, fullTrackName, race.TrackID)
 		}
 	}
 

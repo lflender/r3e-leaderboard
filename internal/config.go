@@ -7,15 +7,9 @@ import (
 
 // Config holds application configuration
 type Config struct {
-	Server   ServerConfig   `json:"server"`
 	Schedule ScheduleConfig `json:"schedule"`
 	Discord  DiscordConfig  `json:"discord"`
 	Data     DataConfig     `json:"data"`
-}
-
-// ServerConfig holds server-specific configuration
-type ServerConfig struct {
-	Port int `json:"port"`
 }
 
 // ScheduleConfig holds scheduling configuration
@@ -49,9 +43,6 @@ func GetDefaultConfig() Config {
 	}
 
 	return Config{
-		Server: ServerConfig{
-			Port: 8080,
-		},
 		Schedule: ScheduleConfig{
 			RefreshHour:                  3,  // 3 AM
 			RefreshMinute:                30, // At the half hour

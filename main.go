@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"r3e-leaderboard/internal"
@@ -15,7 +14,6 @@ import (
 )
 
 var orchestrator *Orchestrator
-var httpServer *http.Server
 
 func main() {
 	// Remove timestamps from log output (systemd/journalctl already provides them)
@@ -44,7 +42,7 @@ func main() {
 	var discordClient *internal.DiscordClient
 	if config.Discord.Enabled {
 		discordClient = internal.NewDiscordClient(config.Discord)
-		log.Println("🔄 Phase 0: Fetching Discord schedule and refreshing daily races")
+		log.Println("🔄 Phase 1: Fetch discord schedule")
 
 		// Check for initial Daily Sprint Races message at startup (synchronous)
 		// This ensures the cache is updated BEFORE the orchestrator starts
@@ -78,6 +76,7 @@ func main() {
 	}
 
 	// Always refresh multiplayer positions at startup
+	log.Println("🔄 Phase 2: Fetch multi-player positions")
 	mpCtx, mpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := internal.RefreshMultiplayerPositions(mpCtx, config.Data.MultiplayerPositionLimit); err != nil {
 		log.Printf("⚠️ Failed to refresh mp_pos.json at startup: %v", err)
@@ -104,9 +103,6 @@ func main() {
 		go periodicDiscordChecking(appContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
 	}
 
-	// Start HTTP server to serve static files
-	httpServer = internal.StartHTTPServer(config.Server.Port)
-
 	// Wait for shutdown signal
 	waitForShutdown()
 }
@@ -117,15 +113,6 @@ func waitForShutdown() {
 
 	sig := <-sigChan
 	log.Printf("🛑 Received %s signal, shutting down...", sig)
-
-	// Shutdown HTTP server gracefully
-	if httpServer != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := httpServer.Shutdown(ctx); err != nil {
-			log.Printf("⚠️ HTTP server shutdown error: %v", err)
-		}
-	}
 
 	if orchestrator != nil {
 		_, _, inProgress := orchestrator.GetScrapeTimestamps()

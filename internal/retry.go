@@ -19,7 +19,7 @@ func retryFailedFetches(ctx context.Context, apiClient *APIClient, tempCache *Da
 		return nil
 	}
 
-	log.Printf("🔄 Phase 4: Retrying %d failed fetches...", len(failedFetches))
+	log.Printf("🔁 Retrying %d failed fetches...", len(failedFetches))
 	retriedTracks := make([]TrackInfo, 0, len(failedFetches)/2)
 	retriedCount := 0
 
