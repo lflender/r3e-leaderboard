@@ -35,30 +35,40 @@ type CachedTrackData struct {
 
 // DataCache handles loading and saving track data to disk
 type DataCache struct {
-	cacheDir     string
-	tempCacheDir string
-	maxAge       time.Duration
-	useTemp      bool // Flag to use temp cache for writes
+	cacheDir      string
+	trackCacheDir string
+	tempCacheDir  string
+	maxAge        time.Duration
+	useTemp       bool // Flag to use temp cache for writes
 }
 
 // NewDataCache creates a new data cache manager
 func NewDataCache() *DataCache {
 	return &DataCache{
-		cacheDir:     "cache",
-		tempCacheDir: "cache_temp",
-		maxAge:       24 * time.Hour, // Cache expires after 24 hours
-		useTemp:      false,
+		cacheDir:      "cache",
+		trackCacheDir: filepath.Join("cache", "tracks"),
+		tempCacheDir:  filepath.Join("cache", "tracks", "cache_temp"),
+		maxAge:        24 * time.Hour, // Cache expires after 24 hours
+		useTemp:       false,
 	}
 }
 
 // NewTempDataCache creates a data cache manager that writes to temporary cache
 func NewTempDataCache() *DataCache {
 	return &DataCache{
-		cacheDir:     "cache",
-		tempCacheDir: "cache_temp",
-		maxAge:       24 * time.Hour,
-		useTemp:      true,
+		cacheDir:      "cache",
+		trackCacheDir: filepath.Join("cache", "tracks"),
+		tempCacheDir:  filepath.Join("cache", "tracks", "cache_temp"),
+		maxAge:        24 * time.Hour,
+		useTemp:       true,
 	}
+}
+
+func (dc *DataCache) getTrackCacheDir() string {
+	if dc.trackCacheDir != "" {
+		return dc.trackCacheDir
+	}
+	return dc.cacheDir
 }
 
 // EnsureCacheDir creates the cache directory if it doesn't exist
@@ -67,12 +77,15 @@ func (dc *DataCache) EnsureCacheDir() error {
 		// When using temp cache, ensure temp directory exists
 		return os.MkdirAll(dc.tempCacheDir, 0755)
 	}
-	return os.MkdirAll(dc.cacheDir, 0755)
+	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
+		return err
+	}
+	return os.MkdirAll(dc.getTrackCacheDir(), 0755)
 }
 
 // CountCachedCombinations returns the total number of cached combinations
 func (dc *DataCache) CountCachedCombinations() int {
-	pattern := filepath.Join(dc.cacheDir, "track_*", "class_*.json.gz")
+	pattern := filepath.Join(dc.getTrackCacheDir(), "track_*", "class_*.json.gz")
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return 0
@@ -82,7 +95,7 @@ func (dc *DataCache) CountCachedCombinations() int {
 
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
-	baseDir := dc.cacheDir
+	baseDir := dc.getTrackCacheDir()
 	if dc.useTemp {
 		baseDir = dc.tempCacheDir
 	}
@@ -141,7 +154,7 @@ func (dc *DataCache) SaveTrackData(trackInfo TrackInfo) error {
 	// This prevents repeatedly fetching combinations that have no leaderboard data
 
 	// Ensure track-specific directory exists (use correct base dir)
-	baseDir := dc.cacheDir
+	baseDir := dc.getTrackCacheDir()
 	if dc.useTemp {
 		baseDir = dc.tempCacheDir
 	}
@@ -286,7 +299,7 @@ func (dc *DataCache) LoadOrFetchTrackData(ctx context.Context, apiClient *APICli
 
 // ClearCache removes all cached files
 func (dc *DataCache) ClearCache() error {
-	return os.RemoveAll(dc.cacheDir)
+	return os.RemoveAll(dc.getTrackCacheDir())
 }
 
 // ClearTempCache removes all temporary cached files
@@ -327,7 +340,7 @@ func (dc *DataCache) PromoteTempCache() ([]string, error) {
 	}
 
 	// Ensure main cache directory exists
-	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
+	if err := os.MkdirAll(dc.getTrackCacheDir(), 0755); err != nil {
 		log.Printf("⚠️ Failed to create main cache directory: %v", err)
 		return nil, fmt.Errorf("failed to create cache dir: %w", err)
 	}
@@ -346,7 +359,7 @@ func (dc *DataCache) PromoteTempCache() ([]string, error) {
 		}
 
 		// Construct destination path
-		destFile := filepath.Join(dc.cacheDir, relPath)
+		destFile := filepath.Join(dc.getTrackCacheDir(), relPath)
 
 		// Ensure destination directory exists
 		if err := os.MkdirAll(filepath.Dir(destFile), 0755); err != nil {
@@ -437,7 +450,7 @@ func extractComboID(relPath string) string {
 func (dc *DataCache) GetCacheInfo() []string {
 	var info []string
 
-	files, err := filepath.Glob(filepath.Join(dc.cacheDir, "track_*", "class_*.json.gz"))
+	files, err := filepath.Glob(filepath.Join(dc.getTrackCacheDir(), "track_*", "class_*.json.gz"))
 	if err != nil {
 		return info
 	}

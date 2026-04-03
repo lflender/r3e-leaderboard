@@ -234,18 +234,21 @@ cache/
 ├── status.json               # Status and statistics
 ├── top_combinations.json     # Top 1000 track/class combos by entries
 ├── refresh_now               # Manual refresh trigger file (touch to trigger)
-├── track_9473/
-│   ├── class_1703.json.gz   # Brands Hatch + GT3
-│   ├── class_1704.json.gz   # Brands Hatch + GT2
-│   └── ...
-└── track_*/                  # All other tracks
+└── tracks/
+  ├── track_9473/
+  │   ├── class_1703.json.gz   # Brands Hatch + GT3
+  │   ├── class_1704.json.gz   # Brands Hatch + GT2
+  │   └── ...
+  └── track_*/                  # All other tracks
 ```
 
 ### Temporary Cache During Refresh
 ```
-cache_temp/
-└── track_*/                  # Temporary cache during refresh
-                              # Promoted atomically to cache/ when complete
+cache/
+└── tracks/
+  └── cache_temp/
+    └── track_*/          # Temporary cache during refresh
+                # Promoted atomically to cache/tracks/ when complete
 ```
 
 ### Cache Validity
@@ -466,9 +469,10 @@ r3e-leaderboard/
 │   ├── status.json          # Status data
 │   ├── top_combinations.json# Top combinations
 │   ├── refresh_now          # Manual refresh trigger (created by user)
-│   └── track_*/             # Per-track cache
-├── cache_temp/              # Temporary cache during refresh
-│   └── track_*/             # Atomically promoted to cache/ when complete
+│   └── tracks/
+│       ├── track_*/         # Per-track cache
+│       └── cache_temp/
+│           └── track_*/     # Atomically promoted to cache/tracks/ when complete
 ├── main.go                  # Application entry point
 ├── orchestrator.go          # High-level coordination logic
 ├── internal/

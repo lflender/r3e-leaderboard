@@ -22,6 +22,10 @@ func TestNewDataCache(t *testing.T) {
 		t.Errorf("Expected cacheDir 'cache', got '%s'", cache.cacheDir)
 	}
 
+	if cache.trackCacheDir != filepath.Join("cache", "tracks") {
+		t.Errorf("Expected trackCacheDir 'cache/tracks', got '%s'", cache.trackCacheDir)
+	}
+
 	if cache.useTemp {
 		t.Error("NewDataCache should not use temp by default")
 	}
@@ -38,8 +42,8 @@ func TestNewTempDataCache(t *testing.T) {
 		t.Error("NewTempDataCache should use temp")
 	}
 
-	if cache.tempCacheDir != "cache_temp" {
-		t.Errorf("Expected tempCacheDir 'cache_temp', got '%s'", cache.tempCacheDir)
+	if cache.tempCacheDir != filepath.Join("cache", "tracks", "cache_temp") {
+		t.Errorf("Expected tempCacheDir 'cache/tracks/cache_temp', got '%s'", cache.tempCacheDir)
 	}
 }
 
@@ -47,7 +51,7 @@ func TestGetCacheFileName(t *testing.T) {
 	cache := NewDataCache()
 
 	filename := cache.GetCacheFileName("1234", "5678")
-	expected := filepath.Join("cache", "track_1234", "class_5678.json.gz")
+	expected := filepath.Join("cache", "tracks", "track_1234", "class_5678.json.gz")
 
 	if filename != expected {
 		t.Errorf("GetCacheFileName() = %q, expected %q", filename, expected)
@@ -58,7 +62,7 @@ func TestGetCacheFileName_TempCache(t *testing.T) {
 	cache := NewTempDataCache()
 
 	filename := cache.GetCacheFileName("1234", "5678")
-	expected := filepath.Join("cache_temp", "track_1234", "class_5678.json.gz")
+	expected := filepath.Join("cache", "tracks", "cache_temp", "track_1234", "class_5678.json.gz")
 
 	if filename != expected {
 		t.Errorf("GetCacheFileName() for temp = %q, expected %q", filename, expected)
