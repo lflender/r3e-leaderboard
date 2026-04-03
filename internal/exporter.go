@@ -101,9 +101,17 @@ func ShardKeyForName(lowerName string) string {
 	return "_"
 }
 
-// DriverNamesIndex maps lowercase driver name → display name (original case).
-// Clients use this for autocomplete/search, then fetch the appropriate shard.
-type DriverNamesIndex map[string]string
+// DriverIdentity stores per-driver metadata in the names index.
+// Clients can load this once, then fetch per-letter shards for results.
+type DriverIdentity struct {
+	Name    string `json:"name"`
+	Country string `json:"country"`
+	Team    string `json:"team"`
+	Rank    string `json:"rank"`
+}
+
+// DriverNamesIndex maps lowercase driver name → driver metadata.
+type DriverNamesIndex map[string]DriverIdentity
 
 // ExportedDriverResult is the compact on-disk representation used by
 // monolithic/sharded index files.
@@ -111,11 +119,8 @@ type ExportedDriverResult struct {
 	Position     int     `json:"position"`
 	LapTime      string  `json:"laptime"`
 	TimeDiff     float64 `json:"time_diff"`
-	Country      string  `json:"country"`
 	Car          string  `json:"car"`
 	CarClass     string  `json:"car_class"`
-	Team         string  `json:"team"`
-	Rank         string  `json:"rank"`
 	Difficulty   string  `json:"difficulty"`
 	Track        string  `json:"track"`
 	TrackID      string  `json:"track_id"`
@@ -141,11 +146,8 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 			Position:     r.Position,
 			LapTime:      r.LapTime,
 			TimeDiff:     r.TimeDiff,
-			Country:      r.Country,
 			Car:          r.Car,
 			CarClass:     r.CarClass,
-			Team:         r.Team,
-			Rank:         r.Rank,
 			Difficulty:   r.Difficulty,
 			Track:        r.Track,
 			TrackID:      r.TrackID,
@@ -158,7 +160,7 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 }
 
 // ExportShardedIndex exports the driver index as a names file + per-letter shards.
-//   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→display name)
+//   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→metadata)
 //   - cache/index/shards/{a..z,_}.json.gz — DriverIndex partitions
 //
 // All writes are atomic (temp+rename). Returns total compressed bytes written.
@@ -176,14 +178,30 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	previousNames, _ := LoadShardedNamesIndex()
 
 	for lowerName, results := range index {
-		// Pick display name from first result (preserves original case)
-		displayName := lowerName
-		if len(results) > 0 && results[0].Name != "" {
-			displayName = results[0].Name
-		} else if previousName, ok := previousNames[lowerName]; ok && previousName != "" {
-			displayName = previousName
+		identity := DriverIdentity{Name: lowerName}
+		if previousIdentity, ok := previousNames[lowerName]; ok {
+			identity = previousIdentity
+			if identity.Name == "" {
+				identity.Name = lowerName
+			}
 		}
-		names[lowerName] = displayName
+
+		if len(results) > 0 {
+			if results[0].Name != "" {
+				identity.Name = results[0].Name
+			}
+			if results[0].Country != "" {
+				identity.Country = results[0].Country
+			}
+			if results[0].Team != "" {
+				identity.Team = results[0].Team
+			}
+			if results[0].Rank != "" {
+				identity.Rank = results[0].Rank
+			}
+		}
+
+		names[lowerName] = identity
 
 		key := ShardKeyForName(lowerName)
 		if shards[key] == nil {
@@ -238,9 +256,30 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	return totalBytes, nil
 }
 
-// LoadShardedNamesIndex loads the names-only index from disk.
+// LoadShardedNamesIndex loads per-driver metadata from the names index.
 func LoadShardedNamesIndex() (DriverNamesIndex, error) {
-	return readGzipJSON[DriverNamesIndex](ShardedNamesFile)
+	// Primary format: map[lowerName]DriverIdentity
+	names, err := readGzipJSON[DriverNamesIndex](ShardedNamesFile)
+	if err == nil {
+		return names, nil
+	}
+
+	// Backward-compatible fallback: map[lowerName]string
+	legacyNames, legacyErr := readGzipJSON[map[string]string](ShardedNamesFile)
+	if legacyErr != nil {
+		return nil, err
+	}
+
+	converted := make(DriverNamesIndex, len(legacyNames))
+	for lowerName, displayName := range legacyNames {
+		name := displayName
+		if name == "" {
+			name = lowerName
+		}
+		converted[lowerName] = DriverIdentity{Name: name}
+	}
+
+	return converted, nil
 }
 
 // LoadShard loads a single shard from disk by its key (e.g. "a", "_").

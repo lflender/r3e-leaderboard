@@ -438,8 +438,11 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if len(names) != len(merged) {
 		t.Fatalf("Names index size = %d, expected %d", len(names), len(merged))
 	}
-	if names["charlie pace"] != "Charlie Pace" {
-		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"])
+	if names["charlie pace"].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	}
+	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
 	}
 
 	if len(merged) != 4 {
@@ -525,8 +528,11 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	if _, exists := names["bob racer"]; exists {
 		t.Fatal("Bob Racer should have been removed from names index")
 	}
-	if names["charlie pace"] != "Charlie Pace" {
-		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"])
+	if names["charlie pace"].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	}
+	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
 	}
 
 	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); !os.IsNotExist(err) {

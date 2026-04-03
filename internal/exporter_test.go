@@ -349,19 +349,19 @@ func withWorkingDir(t *testing.T) (string, func()) {
 func sampleDriverIndex() DriverIndex {
 	return DriverIndex{
 		"alice speed": {
-			{Name: "Alice Speed", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+			{Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "S", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
 		"bob racer": {
-			{Name: "Bob Racer", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+			{Name: "Bob Racer", Country: "France", Team: "Team B", Rank: "A", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
 		"zoe zoom": {
-			{Name: "Zoe Zoom", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
+			{Name: "Zoe Zoom", Country: "Spain", Team: "Team Z", Rank: "B", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
 		},
 		"3fast": {
-			{Name: "3Fast", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
+			{Name: "3Fast", Country: "USA", Team: "Team 3", Rank: "", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
 		},
 		"": {
-			{Name: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
+			{Name: "", Country: "", Team: "", Rank: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
 		},
 	}
 }
@@ -442,8 +442,8 @@ func TestWriteReadJSON_RoundTrip(t *testing.T) {
 
 	path := filepath.Join("cache", "names.json")
 	names := DriverNamesIndex{
-		"alice speed": "Alice Speed",
-		"3fast":       "3Fast",
+		"alice speed": {Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "A"},
+		"3fast":       {Name: "3Fast", Country: "USA"},
 	}
 
 	size, err := writeJSON(path, names)
@@ -461,10 +461,13 @@ func TestWriteReadJSON_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readJSON failed: %v", err)
 	}
-	if loaded["alice speed"] != "Alice Speed" {
+	if loaded["alice speed"].Name != "Alice Speed" {
 		t.Fatalf("Unexpected plain JSON content: %+v", loaded)
 	}
-	if loaded["3fast"] != "3Fast" {
+	if loaded["alice speed"].Country != "Germany" || loaded["alice speed"].Team != "Team A" || loaded["alice speed"].Rank != "A" {
+		t.Fatalf("Unexpected metadata content: %+v", loaded["alice speed"])
+	}
+	if loaded["3fast"].Name != "3Fast" {
 		t.Fatalf("Unexpected plain JSON numeric key content: %+v", loaded)
 	}
 }
@@ -477,7 +480,7 @@ func TestWriteJSON_CreateDirectoryError(t *testing.T) {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 
-	if _, err := writeJSON(filepath.Join("cache", "names.json"), DriverNamesIndex{"alice": "Alice"}); err == nil {
+	if _, err := writeJSON(filepath.Join("cache", "names.json"), DriverNamesIndex{"alice": {Name: "Alice"}}); err == nil {
 		t.Fatal("writeJSON should fail when parent path cannot be created")
 	}
 }
@@ -490,7 +493,7 @@ func TestWriteGzipJSON_CreateDirectoryError(t *testing.T) {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 
-	if _, err := writeGzipJSON(filepath.Join("cache", "names.json.gz"), DriverNamesIndex{"alice": "Alice"}); err == nil {
+	if _, err := writeGzipJSON(filepath.Join("cache", "names.json.gz"), DriverNamesIndex{"alice": {Name: "Alice"}}); err == nil {
 		t.Fatal("writeGzipJSON should fail when parent path cannot be created")
 	}
 }
@@ -615,17 +618,20 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if _, err := os.Stat("cache/index/driver_index.json"); !os.IsNotExist(err) {
 		t.Fatalf("Stale plain names index should not remain, got err=%v", err)
 	}
-	if names["alice speed"] != "Alice Speed" {
-		t.Fatalf("Expected display name for alice speed, got %q", names["alice speed"])
+	if names["alice speed"].Name != "Alice Speed" {
+		t.Fatalf("Expected display name for alice speed, got %q", names["alice speed"].Name)
+	}
+	if names["alice speed"].Country != "Germany" || names["alice speed"].Team != "Team A" || names["alice speed"].Rank != "S" {
+		t.Fatalf("Expected full metadata for alice speed, got %+v", names["alice speed"])
 	}
 	gzNames, err := readGzipJSON[DriverNamesIndex](ShardedNamesFile)
 	if err != nil {
 		t.Fatalf("Failed to load gzip names index: %v", err)
 	}
-	if gzNames["alice speed"] != "Alice Speed" {
-		t.Fatalf("Expected gzip display name for alice speed, got %q", gzNames["alice speed"])
+	if gzNames["alice speed"].Name != "Alice Speed" {
+		t.Fatalf("Expected gzip display name for alice speed, got %q", gzNames["alice speed"].Name)
 	}
-	if names[""] != "" {
+	if names[""].Name != "" {
 		t.Fatalf("Expected empty-name entry to be preserved in names index")
 	}
 
@@ -635,6 +641,9 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	}
 	if len(aShard) != 1 || aShard["alice speed"][0].TrackID != "1111" {
 		t.Fatalf("Unexpected a shard contents: %+v", aShard)
+	}
+	if aShard["alice speed"][0].Country != "" || aShard["alice speed"][0].Team != "" || aShard["alice speed"][0].Rank != "" {
+		t.Fatalf("Shard entry should not contain person-bound metadata: %+v", aShard["alice speed"][0])
 	}
 
 	bShard, err := LoadShard("b")
@@ -733,8 +742,8 @@ func TestExportShardedIndex_ClientLookupFlow(t *testing.T) {
 	}
 
 	for _, lookup := range lookups {
-		if names[lookup.lowerName] != lookup.displayName {
-			t.Fatalf("Display name for %q = %q, expected %q", lookup.lowerName, names[lookup.lowerName], lookup.displayName)
+		if names[lookup.lowerName].Name != lookup.displayName {
+			t.Fatalf("Display name for %q = %q, expected %q", lookup.lowerName, names[lookup.lowerName].Name, lookup.displayName)
 		}
 		shard, err := LoadShard(lookup.shardKey)
 		if err != nil {
@@ -747,6 +756,30 @@ func TestExportShardedIndex_ClientLookupFlow(t *testing.T) {
 		if len(results) == 0 || results[0].TrackID == "" {
 			t.Fatalf("Unexpected shard payload for %q: %+v", lookup.lowerName, results)
 		}
+	}
+}
+
+func TestLoadShardedNamesIndex_LegacyFormatFallback(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	legacy := map[string]string{
+		"alice speed": "Alice Speed",
+		"3fast":       "3Fast",
+	}
+	if _, err := writeGzipJSON(ShardedNamesFile, legacy); err != nil {
+		t.Fatalf("Failed to write legacy names index: %v", err)
+	}
+
+	loaded, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed for legacy format: %v", err)
+	}
+	if loaded["alice speed"].Name != "Alice Speed" {
+		t.Fatalf("Converted legacy display name mismatch: %+v", loaded["alice speed"])
+	}
+	if loaded["alice speed"].Country != "" || loaded["alice speed"].Team != "" || loaded["alice speed"].Rank != "" {
+		t.Fatalf("Legacy fallback should not invent metadata: %+v", loaded["alice speed"])
 	}
 }
 
