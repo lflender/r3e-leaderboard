@@ -93,6 +93,26 @@ func (dc *DataCache) CountCachedCombinations() int {
 	return len(files)
 }
 
+// CountUniqueTracks returns the number of distinct track folders in cache.
+func (dc *DataCache) CountUniqueTracks() int {
+	entries, err := os.ReadDir(dc.getTrackCacheDir())
+	if err != nil {
+		return 0
+	}
+
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), "track_") {
+			count++
+		}
+	}
+
+	return count
+}
+
 // GetCacheFileName returns the cache filename for a track+class combination
 func (dc *DataCache) GetCacheFileName(trackID, classID string) string {
 	baseDir := dc.getTrackCacheDir()

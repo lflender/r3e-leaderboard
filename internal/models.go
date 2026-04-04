@@ -327,6 +327,82 @@ func GetCarClassName(classID string) string {
 	return "Unknown Class " + classID
 }
 
+// GetCarSuperclasses returns superclass -> class names mapping.
+func GetCarSuperclasses() map[string][]string {
+	return map[string][]string{
+		"GT3": {
+			"ADAC GT Masters 2013",
+			"ADAC GT Masters 2014",
+			"ADAC GT Masters 2015",
+			"ADAC GT Masters 2018",
+			"ADAC GT Masters 2020",
+			"ADAC GT Masters 2021",
+			"DTM 2021",
+			"DTM 2023",
+			"DTM 2024",
+			"DTM 2025",
+			"GTR 3",
+		},
+		"Classics": {
+			"Touring Classics",
+			"Porsche 964 Cup",
+		},
+		"Audi Cup": {
+			"Audi Sport TT Cup 2015",
+			"Audi Sport TT Cup 2016",
+		},
+		"e-Sedan": {
+			"CUPRA Leon e-Racer",
+			"Ford Mustang Mach E",
+		},
+		"DTM 2010s": {
+			"DTM 2013",
+			"DTM 2014",
+			"DTM 2015",
+			"DTM 2016",
+		},
+		"Porsche Cup": {
+			"Porsche Carrera Cup Deutschland 2019",
+			"Porsche Carrera Cup Deutschland 2023",
+			"Porsche Carrera Cup North America 2024",
+			"Porsche Carrera Cup Scandinavia",
+		},
+		"WTCR": {
+			"Touring Cars Cup",
+			"WTCR 2018",
+			"WTCR 2019",
+			"WTCR 2020",
+			"WTCR 2021",
+			"WTCR 2022",
+		},
+		"WTCC": {
+			"WTCC 2014",
+			"WTCC 2015",
+			"WTCC 2016",
+			"WTCC 2017",
+		},
+	}
+}
+
+// GetClassIDToSuperclassMap returns classID -> superclass mapping.
+func GetClassIDToSuperclassMap() map[string]string {
+	classNameToID := make(map[string]string)
+	for _, class := range GetCarClasses() {
+		classNameToID[class.Name] = class.ClassID
+	}
+
+	classIDToSuperclass := make(map[string]string)
+	for superclass, classNames := range GetCarSuperclasses() {
+		for _, className := range classNames {
+			if classID, ok := classNameToID[className]; ok {
+				classIDToSuperclass[classID] = superclass
+			}
+		}
+	}
+
+	return classIDToSuperclass
+}
+
 // GetDiscordCarClassAliases returns Discord-specific abbreviations and aliases for car classes
 // Maps common Discord abbreviations to their full class names from GetCarClasses()
 // NOTE: All values MUST exactly match class names in GetCarClasses()

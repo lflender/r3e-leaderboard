@@ -157,6 +157,15 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 			log.Println("✅ Final index complete")
 		}
 
+		if o.lastIndexedCount > 0 {
+			log.Println("📊 Phase 7: Export driver stats")
+			if err := internal.ExportStatsFromShards(); err != nil {
+				log.Printf("⚠️ Failed to export stats: %v", err)
+			} else {
+				log.Println("✅ Stats export complete")
+			}
+		}
+
 		// Don't keep tracks in memory after initial load — only needed during active refresh
 		o.lastIndexedCount = len(tracks)
 		tracks = nil
@@ -248,6 +257,13 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
 		o.lastIndexedCount = len(finalTracks)
+	}
+	if o.lastIndexedCount > 0 {
+		if err := internal.ExportStatsFromShards(); err != nil {
+			log.Printf("⚠️ Failed to export stats after full refresh: %v", err)
+		} else {
+			log.Println("✅ Stats export complete after full refresh")
+		}
 	}
 
 	// Free all track data after refresh completes
