@@ -297,6 +297,41 @@ func TestCountCachedCombinations(t *testing.T) {
 	}
 }
 
+func TestCountUniqueTracks(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "cache_unique_tracks_test")
+	defer cleanup()
+
+	cache := &DataCache{
+		cacheDir:      tempDir,
+		trackCacheDir: tempDir,
+		tempCacheDir:  tempDir,
+		maxAge:        24 * time.Hour,
+		useTemp:       false,
+	}
+
+	fixtures := GetTestFixtures()
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1001", ClassID: "1703", Data: fixtures.SampleTrackData},
+		{Name: "Track A", TrackID: "1001", ClassID: "5825", Data: fixtures.SampleTrackData},
+		{Name: "Track B", TrackID: "1002", ClassID: "1703", Data: fixtures.SampleTrackData},
+	}
+
+	for _, track := range tracks {
+		if err := cache.SaveTrackData(track); err != nil {
+			t.Fatalf("SaveTrackData failed: %v", err)
+		}
+	}
+
+	if err := os.MkdirAll(filepath.Join(tempDir, "noise_dir"), 0755); err != nil {
+		t.Fatalf("Failed to create noise dir: %v", err)
+	}
+
+	count := cache.CountUniqueTracks()
+	if count != 2 {
+		t.Errorf("CountUniqueTracks() = %d, expected 2", count)
+	}
+}
+
 func TestEnsureCacheDir(t *testing.T) {
 	tempDir, cleanup := TempTestDir(t, "cache_ensure_test")
 	defer cleanup()

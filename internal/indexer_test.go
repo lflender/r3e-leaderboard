@@ -476,6 +476,10 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if top.Results[0].Track != "Track B" {
 		t.Fatalf("Top track = %q, expected Track B", top.Results[0].Track)
 	}
+
+	if _, err := os.Stat(StatsOverallPoleFile); !os.IsNotExist(err) {
+		t.Fatalf("Stats should not be exported during BuildAndExportIndex, got err=%v", err)
+	}
 }
 
 func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
@@ -558,5 +562,9 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	}
 	if !status.LastDailyRaceRefresh.Equal(refreshTS) {
 		t.Fatalf("LastDailyRaceRefresh = %v, expected %v", status.LastDailyRaceRefresh, refreshTS)
+	}
+
+	if _, err := os.Stat(StatsOverallPoleFile); !os.IsNotExist(err) {
+		t.Fatalf("Stats should not be exported during IncrementalIndexUpdate, got err=%v", err)
 	}
 }

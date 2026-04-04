@@ -169,6 +169,50 @@ func TestGetCarClassName_Unknown(t *testing.T) {
 	}
 }
 
+func TestGetCarSuperclasses(t *testing.T) {
+	superclasses := GetCarSuperclasses()
+	if len(superclasses) == 0 {
+		t.Fatal("GetCarSuperclasses returned empty map")
+	}
+
+	if len(superclasses["Audi Cup"]) != 2 {
+		t.Fatalf("Audi Cup size = %d, expected 2", len(superclasses["Audi Cup"]))
+	}
+
+	classNameSet := make(map[string]bool)
+	for _, class := range GetCarClasses() {
+		classNameSet[class.Name] = true
+	}
+
+	for superclass, classNames := range superclasses {
+		for _, className := range classNames {
+			if !classNameSet[className] {
+				t.Fatalf("Superclass %q references unknown class %q", superclass, className)
+			}
+		}
+	}
+}
+
+func TestGetClassIDToSuperclassMap(t *testing.T) {
+	mapping := GetClassIDToSuperclassMap()
+	if len(mapping) == 0 {
+		t.Fatal("GetClassIDToSuperclassMap returned empty map")
+	}
+
+	if got := mapping["1703"]; got != "GT3" {
+		t.Fatalf("Superclass for 1703 = %q, expected GT3", got)
+	}
+	if got := mapping["5726"]; got != "Audi Cup" {
+		t.Fatalf("Superclass for 5726 = %q, expected Audi Cup", got)
+	}
+	if got := mapping["8660"]; got != "WTCR" {
+		t.Fatalf("Superclass for 8660 = %q, expected WTCR", got)
+	}
+	if got := mapping["3905"]; got != "WTCC" {
+		t.Fatalf("Superclass for 3905 = %q, expected WTCC", got)
+	}
+}
+
 // =============================================================================
 // DISCORD ALIAS TESTS
 // =============================================================================

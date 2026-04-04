@@ -499,6 +499,10 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 	// Count total cached combinations (including empty)
 	dataCache := NewDataCache()
 	totalCached := dataCache.CountCachedCombinations()
+	uniqueCachedTracks := dataCache.CountUniqueTracks()
+	if uniqueCachedTracks < uniqueTrackCount {
+		uniqueCachedTracks = uniqueTrackCount
+	}
 
 	status := StatusData{
 		// Preserve orchestrator-managed fields
@@ -508,7 +512,7 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		// Update index-related metrics
 		TrackCount:               len(tracks),
 		TotalFetchedCombinations: totalCached,
-		TotalUniqueTracks:        uniqueTrackCount,
+		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             len(index),
 		TotalEntries:             totalEntries,
 		LastIndexUpdate:          time.Now(),
