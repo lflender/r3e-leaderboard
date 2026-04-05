@@ -63,6 +63,7 @@ retryLoop:
 
 		if len(data) > 0 {
 			log.Printf("✅ Retry succeeded %s + %s: %.2fs → %d entries", failed.Track.Name, failed.Class.Name, duration.Seconds(), len(data))
+			trackInfo.Data = nil // Payload persisted in temp cache; keep metadata only
 			retriedTracks = append(retriedTracks, trackInfo)
 			retriedCount++
 		} else {

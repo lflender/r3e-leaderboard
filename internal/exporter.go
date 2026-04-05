@@ -14,7 +14,7 @@ import (
 
 const (
 	StatusFile          = "cache/status.json"
-	TopCombinationsFile = "cache/top_combinations.json"
+	TopCombinationsFile = "cache/top_combinations.json.gz"
 	AllCombinationsFile = "cache/all_combinations.json.gz"
 
 	// Sharded index paths
@@ -122,7 +122,6 @@ type ExportedDriverResult struct {
 	Car          string  `json:"car"`
 	CarClass     string  `json:"car_class"`
 	Difficulty   string  `json:"difficulty"`
-	Track        string  `json:"track"`
 	TrackID      string  `json:"track_id"`
 	ClassID      string  `json:"class_id"`
 	DateTime     string  `json:"date_time"`
@@ -149,7 +148,6 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 			Car:          r.Car,
 			CarClass:     r.CarClass,
 			Difficulty:   r.Difficulty,
-			Track:        r.Track,
 			TrackID:      r.TrackID,
 			ClassID:      r.ClassID,
 			DateTime:     r.DateTime,
@@ -209,6 +207,12 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 		}
 		shards[key][lowerName] = results
 	}
+
+	// Free previousNames immediately — no longer needed
+	previousNames = nil
+
+	// Free previousNames immediately — no longer needed
+	previousNames = nil
 
 	var totalBytes int64
 	expectedShardFiles := make(map[string]struct{}, len(shards))
@@ -586,13 +590,6 @@ func ExportTopCombinations(tracks []TrackInfo, trackEntryCounts map[string]int) 
 		Results: combinations,
 	}
 
-	// Convert to JSON
-	jsonData, err := json.MarshalIndent(topData, "", "  ")
-	if err != nil {
-		log.Printf("❌ Failed to marshal top combinations: %v", err)
-		return err
-	}
-
 	// Ensure cache directory exists
 	cacheDir := filepath.Dir(TopCombinationsFile)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
@@ -600,31 +597,14 @@ func ExportTopCombinations(tracks []TrackInfo, trackEntryCounts map[string]int) 
 		return err
 	}
 
-	// Write to temporary file first (atomic write pattern)
-	tempFile := TopCombinationsFile + ".tmp"
-	if err := os.WriteFile(tempFile, jsonData, 0644); err != nil {
-		log.Printf("❌ Failed to write temporary top combinations file: %v", err)
+	bytesWritten, err := writeGzipJSON(TopCombinationsFile, topData)
+	if err != nil {
+		log.Printf("❌ Failed to export top combinations: %v", err)
 		return err
 	}
 
-	// Rename temp file to final file (atomic operation)
-	if err := os.Rename(tempFile, TopCombinationsFile); err != nil {
-		log.Printf("⚠️ WARNING: Atomic rename failed: %v", err)
-		log.Printf("   Attempting direct write as fallback")
-
-		// Fallback: try direct write
-		if directErr := os.WriteFile(TopCombinationsFile, jsonData, 0644); directErr != nil {
-			log.Printf("❌ ERROR: Direct write also failed: %v", directErr)
-			os.Remove(tempFile)
-			return directErr
-		}
-
-		log.Printf("✅ Fallback write successful")
-		os.Remove(tempFile)
-	}
-
-	log.Printf("💾 Top combinations exported to %s (%d combinations, %.2f KB)",
-		TopCombinationsFile, len(combinations), float64(len(jsonData))/1024)
+	log.Printf("💾 Top combinations exported to %s (%d combinations, %.2f KB compressed)",
+		TopCombinationsFile, len(combinations), float64(bytesWritten)/1024)
 
 	return nil
 }

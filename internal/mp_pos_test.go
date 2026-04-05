@@ -206,7 +206,7 @@ func TestMultiplayerPositionsData_Fields(t *testing.T) {
 // =============================================================================
 
 func TestMultiplayerPositionsFile_Path(t *testing.T) {
-	expectedPath := "cache/mp_pos.json"
+	expectedPath := "cache/mp_pos.json.gz"
 
 	if MultiplayerPositionsFile != expectedPath {
 		t.Errorf("MultiplayerPositionsFile = %q, expected %q",

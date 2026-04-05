@@ -770,7 +770,7 @@ func TestSaveAndLoadDiscordRaces(t *testing.T) {
 	}
 
 	// Verify file exists
-	filename := filepath.Join(tempDir, "daily_races.json")
+	filename := filepath.Join(tempDir, "daily_races.json.gz")
 	if _, err := os.Stat(filename); os.IsNotExist(err) {
 		t.Fatal("Discord races file was not created")
 	}

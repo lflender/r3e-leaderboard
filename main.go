@@ -79,10 +79,10 @@ func main() {
 	log.Println("🔄 Phase 2: Fetch multi-player positions")
 	mpCtx, mpCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := internal.RefreshMultiplayerPositions(mpCtx, config.Data.MultiplayerPositionLimit); err != nil {
-		log.Printf("⚠️ Failed to refresh mp_pos.json at startup: %v", err)
+		log.Printf("⚠️ Failed to refresh mp_pos.json.gz at startup: %v", err)
 		// Fall back to ensuring the file at least exists
 		if ensureErr := internal.EnsureMultiplayerPositionsCache(mpCtx); ensureErr != nil {
-			log.Printf("⚠️ Failed to initialize mp_pos.json: %v", ensureErr)
+			log.Printf("⚠️ Failed to initialize mp_pos.json.gz: %v", ensureErr)
 		}
 	}
 	mpCancel()
