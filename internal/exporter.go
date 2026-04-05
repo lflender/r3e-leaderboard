@@ -122,7 +122,6 @@ type ExportedDriverResult struct {
 	Car          string  `json:"car"`
 	CarClass     string  `json:"car_class"`
 	Difficulty   string  `json:"difficulty"`
-	Track        string  `json:"track"`
 	TrackID      string  `json:"track_id"`
 	ClassID      string  `json:"class_id"`
 	DateTime     string  `json:"date_time"`
@@ -149,7 +148,6 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 			Car:          r.Car,
 			CarClass:     r.CarClass,
 			Difficulty:   r.Difficulty,
-			Track:        r.Track,
 			TrackID:      r.TrackID,
 			ClassID:      r.ClassID,
 			DateTime:     r.DateTime,
