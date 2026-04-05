@@ -368,6 +368,14 @@ func sampleDriverIndex() DriverIndex {
 
 func readJSONFile[T any](t *testing.T, path string) T {
 	t.Helper()
+	if strings.HasSuffix(path, ".gz") {
+		result, err := readGzipJSON[T](path)
+		if err != nil {
+			t.Fatalf("Failed to read gzip JSON %s: %v", path, err)
+		}
+		return result
+	}
+
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("Failed to read %s: %v", path, err)

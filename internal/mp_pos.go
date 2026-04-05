@@ -18,7 +18,8 @@ import (
 	"time"
 )
 
-const MultiplayerPositionsFile = "cache/mp_pos.json"
+const MultiplayerPositionsFile = "cache/mp_pos.json.gz"
+const multiplayerPositionsLegacyFile = "cache/mp_pos.json"
 
 var (
 	mpPosRowRe     = regexp.MustCompile(`(?is)<tr[^>]*>(.*?)</tr>`)
@@ -43,7 +44,7 @@ type MultiplayerPositionsData struct {
 	Results     []MultiplayerPosition `json:"results"`
 }
 
-// EnsureMultiplayerPositionsCache creates mp_pos.json if it does not exist.
+// EnsureMultiplayerPositionsCache creates mp_pos cache if it does not exist.
 func EnsureMultiplayerPositionsCache(ctx context.Context) error {
 	_, err := os.Stat(MultiplayerPositionsFile)
 	if err == nil {
@@ -52,10 +53,20 @@ func EnsureMultiplayerPositionsCache(ctx context.Context) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+
+	// Backward-compatible behavior: if legacy cache exists, avoid forcing a refresh.
+	_, legacyErr := os.Stat(multiplayerPositionsLegacyFile)
+	if legacyErr == nil {
+		return nil
+	}
+	if !errors.Is(legacyErr, os.ErrNotExist) {
+		return legacyErr
+	}
+
 	return RefreshMultiplayerPositions(ctx, 3000)
 }
 
-// RefreshMultiplayerPositions fetches the top `limit` multiplayer positions and writes mp_pos.json.
+// RefreshMultiplayerPositions fetches the top `limit` multiplayer positions and writes mp_pos cache.
 // It calculates the number of pages needed (~500 entries per page) and fetches accordingly.
 func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
 	if limit < 1 {
@@ -242,45 +253,33 @@ func sampleMPPosText(value string, limit int) string {
 }
 
 func exportMultiplayerPositions(data MultiplayerPositionsData) error {
-	jsonData, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return err
-	}
-
 	cacheDir := filepath.Dir(MultiplayerPositionsFile)
 	if err := os.MkdirAll(cacheDir, 0755); err != nil {
 		return err
 	}
 
-	tempFile := MultiplayerPositionsFile + ".tmp"
-	if err := os.WriteFile(tempFile, jsonData, 0644); err != nil {
-		return err
-	}
-
-	if err := os.Rename(tempFile, MultiplayerPositionsFile); err != nil {
-		log.Printf("⚠️ WARNING: Atomic rename failed for %s: %v", MultiplayerPositionsFile, err)
-		if directErr := os.WriteFile(MultiplayerPositionsFile, jsonData, 0644); directErr != nil {
-			os.Remove(tempFile)
-			return directErr
-		}
-		os.Remove(tempFile)
-	}
-
-	return nil
+	_, err := writeGzipJSON(MultiplayerPositionsFile, data)
+	return err
 }
 
-// LoadMultiplayerPositionsMap loads mp_pos.json into a map of lowercased driver name -> position.
+// LoadMultiplayerPositionsMap loads mp_pos cache into a map of lowercased driver name -> position.
 func LoadMultiplayerPositionsMap() (map[string]int, error) {
-	data, err := os.ReadFile(MultiplayerPositionsFile)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return map[string]int{}, nil
-		}
-		return nil, err
-	}
-
 	var parsed MultiplayerPositionsData
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	if loaded, err := readGzipJSON[MultiplayerPositionsData](MultiplayerPositionsFile); err == nil {
+		parsed = loaded
+	} else if os.IsNotExist(err) {
+		// Backward-compatible fallback: legacy uncompressed file.
+		data, legacyErr := os.ReadFile(multiplayerPositionsLegacyFile)
+		if legacyErr != nil {
+			if errors.Is(legacyErr, os.ErrNotExist) {
+				return map[string]int{}, nil
+			}
+			return nil, legacyErr
+		}
+		if unmarshalErr := json.Unmarshal(data, &parsed); unmarshalErr != nil {
+			return nil, unmarshalErr
+		}
+	} else {
 		return nil, err
 	}
 

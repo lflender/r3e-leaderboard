@@ -412,7 +412,36 @@ func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDail
 		return len(cachedTracks), nil
 	}
 
+	if err := refreshCombinationExportsFromCache(ctx, true); err != nil {
+		log.Printf("⚠️ Failed to refresh missing top/all combinations exports: %v", err)
+	}
+
 	return currentIndexedCount, nil
+}
+
+func refreshCombinationExportsFromCache(ctx context.Context, onlyIfMissing bool) error {
+	if onlyIfMissing {
+		if _, err := os.Stat(TopCombinationsFile); err == nil {
+			if _, allErr := os.Stat(AllCombinationsFile); allErr == nil {
+				return nil
+			}
+		}
+	}
+
+	log.Println("🔄 Refreshing top/all combinations exports from cache summaries...")
+
+	tracks, trackEntryCounts := loadCachedMetadataWithEntryCounts(ctx)
+	if len(tracks) == 0 {
+		log.Println("ℹ️ Skipping top/all combinations export refresh: no cached combinations found")
+		return nil
+	}
+
+	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
+		return err
+	}
+
+	log.Printf("✅ Top/all combinations exports refreshed from %d cached combinations", len(tracks))
+	return nil
 }
 
 // LoadDriverIndexFromShards loads the existing driver index from sharded files.
@@ -670,6 +699,10 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
 		float64(m.Alloc)/(1024*1024))
+
+	if err := refreshCombinationExportsFromCache(context.Background(), false); err != nil {
+		log.Printf("⚠️ Failed to refresh top/all combinations exports after incremental update: %v", err)
+	}
 
 	return nil
 }

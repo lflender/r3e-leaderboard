@@ -1,9 +1,12 @@
 package internal
 
 import (
+	"compress/gzip"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"time"
 )
@@ -73,6 +76,80 @@ func loadCachedMetadata(ctx context.Context) []TrackInfo {
 
 	log.Printf("🧠 Loaded %d cached combination metadata (lightweight)", len(meta))
 	return meta
+}
+
+type cachedEntrySummary struct {
+	TrackName  string `json:"track_name"`
+	EntryCount int    `json:"entry_count"`
+}
+
+func readCachedEntrySummary(path string) (cachedEntrySummary, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return cachedEntrySummary{}, err
+	}
+	defer file.Close()
+
+	gzReader, err := gzip.NewReader(file)
+	if err != nil {
+		return cachedEntrySummary{}, err
+	}
+	defer gzReader.Close()
+
+	var summary cachedEntrySummary
+	if err := json.NewDecoder(gzReader).Decode(&summary); err != nil {
+		return cachedEntrySummary{}, err
+	}
+
+	return summary, nil
+}
+
+// loadCachedMetadataWithEntryCounts loads metadata plus entry counts for each
+// cached combination while avoiding full in-memory retention of leaderboard
+// payloads. Used to regenerate top/all combination exports cheaply.
+func loadCachedMetadataWithEntryCounts(ctx context.Context) ([]TrackInfo, map[string]int) {
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	dataCache := NewDataCache()
+	totalEstimate := len(trackConfigs) * len(classConfigs) / 2
+	meta := make([]TrackInfo, 0, totalEstimate)
+	entryCounts := make(map[string]int, totalEstimate)
+
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			select {
+			case <-ctx.Done():
+				return meta, entryCounts
+			default:
+			}
+
+			if !dataCache.CacheExists(track.TrackID, class.ClassID) {
+				continue
+			}
+
+			name := track.Name
+			entryCount := 0
+
+			summary, err := readCachedEntrySummary(dataCache.GetCacheFileName(track.TrackID, class.ClassID))
+			if err == nil {
+				if summary.TrackName != "" {
+					name = summary.TrackName
+				}
+				entryCount = summary.EntryCount
+			}
+
+			meta = append(meta, TrackInfo{
+				Name:    name,
+				TrackID: track.TrackID,
+				ClassID: class.ClassID,
+			})
+			entryCounts[track.TrackID+"_"+class.ClassID] = entryCount
+		}
+	}
+
+	log.Printf("🧠 Loaded %d cached combinations with entry counts", len(meta))
+	return meta, entryCounts
 }
 
 // LoadAllTrackData loads leaderboard data for all track+class combinations

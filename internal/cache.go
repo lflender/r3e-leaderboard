@@ -498,88 +498,27 @@ func (dc *DataCache) SaveDiscordRaces(result *DailySprintRacesResult) error {
 		return err
 	}
 
-	filename := filepath.Join(dc.cacheDir, "daily_races.json")
-
-	// Write to temporary file first
-	tempFile := filename + ".tmp"
-	file, err := os.Create(tempFile)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	encoder := json.NewEncoder(file)
-	encoder.SetIndent("", "  ")
-
-	if err := encoder.Encode(result); err != nil {
-		os.Remove(tempFile)
-		return err
-	}
-
-	if err := file.Close(); err != nil {
-		os.Remove(tempFile)
-		return err
-	}
-
-	// Atomically rename (without removing original first - it's overwritten on success)
-	if err := os.Rename(tempFile, filename); err != nil {
-		log.Printf("⚠️ WARNING: Atomic rename failed for %s: %v", filename, err)
-
-		// Fallback: try direct write (file may be locked by editor/client)
-		file, reopenErr := os.Open(tempFile)
-		if reopenErr != nil {
-			log.Printf("❌ ERROR: Failed to reopen temp file: %v", reopenErr)
-			os.Remove(tempFile)
-			return reopenErr
-		}
-
-		var reencoded DailySprintRacesResult
-		decoder := json.NewDecoder(file)
-		if decodeErr := decoder.Decode(&reencoded); decodeErr != nil {
-			file.Close()
-			log.Printf("❌ ERROR: Failed to decode temp file: %v", decodeErr)
-			os.Remove(tempFile)
-			return decodeErr
-		}
-		file.Close()
-
-		// Re-encode and write directly
-		directFile, createErr := os.Create(filename)
-		if createErr != nil {
-			log.Printf("❌ ERROR: Direct write also failed: %v", createErr)
-			log.Printf("   Please close %s in your editor and try again", filename)
-			os.Remove(tempFile)
-			return createErr
-		}
-
-		directEncoder := json.NewEncoder(directFile)
-		directEncoder.SetIndent("", "  ")
-		if encodeErr := directEncoder.Encode(&reencoded); encodeErr != nil {
-			directFile.Close()
-			log.Printf("❌ ERROR: Failed to encode during direct write: %v", encodeErr)
-			os.Remove(tempFile)
-			return encodeErr
-		}
-
-		if closeErr := directFile.Close(); closeErr != nil {
-			log.Printf("⚠️ WARNING: Failed to close file after direct write: %v", closeErr)
-		}
-
-		log.Printf("✅ Fallback write successful")
-		os.Remove(tempFile) // Clean up temp file after successful fallback
-	} else {
-		// Rename succeeded, temp file is now the main file
-		// (temp file is automatically "removed" by the rename operation)
-	}
-
-	return nil
+	filename := filepath.Join(dc.cacheDir, "daily_races.json.gz")
+	_, err := writeGzipJSON(filename, result)
+	return err
 }
 
 // LoadDiscordRaces loads Daily Sprint Races data from cache
 func (dc *DataCache) LoadDiscordRaces() (*DailySprintRacesResult, error) {
-	filename := filepath.Join(dc.cacheDir, "daily_races.json")
+	gzipFilename := filepath.Join(dc.cacheDir, "daily_races.json.gz")
+	if _, statErr := os.Stat(gzipFilename); statErr == nil {
+		result, err := readGzipJSON[DailySprintRacesResult](gzipFilename)
+		if err != nil {
+			return nil, err
+		}
+		return &result, nil
+	} else if !os.IsNotExist(statErr) {
+		return nil, statErr
+	}
 
-	file, err := os.Open(filename)
+	// Backward-compatible fallback: legacy uncompressed file
+	legacyFilename := filepath.Join(dc.cacheDir, "daily_races.json")
+	file, err := os.Open(legacyFilename)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil // No cached data is not an error
@@ -588,19 +527,26 @@ func (dc *DataCache) LoadDiscordRaces() (*DailySprintRacesResult, error) {
 	}
 	defer file.Close()
 
-	var result DailySprintRacesResult
+	var legacy DailySprintRacesResult
 	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&result); err != nil {
+	if err := decoder.Decode(&legacy); err != nil {
 		return nil, err
 	}
 
-	return &result, nil
+	return &legacy, nil
 }
 
 // GetDiscordRacesAge returns the age of the cached Discord races data, or -1 if it doesn't exist
 func (dc *DataCache) GetDiscordRacesAge() time.Duration {
-	filename := filepath.Join(dc.cacheDir, "daily_races.json")
-	info, err := os.Stat(filename)
+	gzipFilename := filepath.Join(dc.cacheDir, "daily_races.json.gz")
+	info, err := os.Stat(gzipFilename)
+	if err == nil {
+		return time.Since(info.ModTime())
+	}
+
+	// Backward-compatible fallback: legacy uncompressed file
+	legacyFilename := filepath.Join(dc.cacheDir, "daily_races.json")
+	info, err = os.Stat(legacyFilename)
 	if err != nil {
 		return -1 // doesn't exist
 	}
