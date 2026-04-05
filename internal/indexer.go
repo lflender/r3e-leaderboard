@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -15,7 +17,7 @@ var indexUpdateMu sync.Mutex
 
 // IndexerState provides the current state needed for periodic indexing
 type IndexerState struct {
-	Tracks           []TrackInfo
+	TrackCount       int
 	FetchInProgress  bool
 	LastIndexedCount int
 }
@@ -58,16 +60,7 @@ func (pi *PeriodicIndexer) Start() {
 		// Get current state
 		state := pi.callbacks.GetState()
 
-		// Immediate indexing once if we have no previous index
-		if state.FetchInProgress && len(state.Tracks) > 0 && state.LastIndexedCount == 0 {
-			if err := BuildAndExportIndex(state.Tracks); err != nil {
-				log.Printf("⚠️ Failed to export index: %v", err)
-			} else {
-				log.Printf("🔍 Initial periodic index built: %d track/class combinations", len(state.Tracks))
-				pi.callbacks.UpdateIndexed(len(state.Tracks))
-			}
-			pi.callbacks.ExportStatus()
-		}
+		// Initial indexing is handled by orchestrator bootstrap/finalization.
 
 		ticker := time.NewTicker(pi.interval)
 		defer ticker.Stop()
@@ -86,7 +79,7 @@ func (pi *PeriodicIndexer) Start() {
 				state = pi.callbacks.GetState()
 
 				// Only index if we're still fetching and have some data
-				if state.FetchInProgress && len(state.Tracks) > 0 {
+				if state.FetchInProgress && state.TrackCount > 0 {
 					// Promote temp cache and get the list of changed combo IDs
 					tempCache := NewTempDataCache()
 					promotedCombos, err := tempCache.PromoteTempCache()
@@ -99,17 +92,10 @@ func (pi *PeriodicIndexer) Start() {
 					// Use incremental index update if we have promoted combos and an existing index
 					if len(promotedCombos) > 0 {
 						if err := IncrementalIndexUpdate(promotedCombos); err != nil {
-							log.Printf("⚠️ Incremental index update failed, falling back to full rebuild: %v", err)
-							// Fallback: full rebuild
-							if err := BuildAndExportIndex(state.Tracks); err != nil {
-								log.Printf("⚠️ Failed to export index: %v", err)
-							} else {
-								log.Printf("🔍 Index rebuilt (fallback): %d track/class combinations", len(state.Tracks))
-								pi.callbacks.UpdateIndexed(len(state.Tracks))
-							}
+							log.Printf("⚠️ Incremental index update failed (skipping full rebuild to avoid high memory): %v", err)
 						} else {
 							log.Printf("🔍 Index incrementally updated with %d changed combos", len(promotedCombos))
-							pi.callbacks.UpdateIndexed(len(state.Tracks))
+							pi.callbacks.UpdateIndexed(state.TrackCount)
 						}
 					} else {
 						log.Println("ℹ️ No new cache files to index — skipping")
@@ -380,6 +366,53 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 
 	// Export top combinations
 	return ExportTopCombinations(tracks, trackEntryCounts)
+}
+
+// HasShardedIndex returns true when both names and at least one shard file exist.
+func HasShardedIndex() bool {
+	if _, err := os.Stat(ShardedNamesFile); err != nil {
+		return false
+	}
+	files, err := filepath.Glob(filepath.Join(ShardedShardsDir, "*.json.gz"))
+	if err != nil {
+		return false
+	}
+	return len(files) > 0
+}
+
+// FinalizeStartupIndex promotes any pending temp-cache files and applies an
+// incremental update. If nothing changed and no index exists yet, it falls back
+// to building from the current main cache.
+//
+// Returns the updated indexed-count baseline for orchestrator status tracking.
+func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDailyRaceRefresh time.Time) (int, error) {
+	tempCache := NewTempDataCache()
+	promotedCombos, err := tempCache.PromoteTempCache()
+	if err != nil {
+		return currentIndexedCount, fmt.Errorf("failed to promote temp cache at startup finalization: %w", err)
+	}
+
+	if len(promotedCombos) > 0 {
+		if err := IncrementalIndexUpdate(promotedCombos, lastDailyRaceRefresh); err != nil {
+			return currentIndexedCount, fmt.Errorf("startup final incremental index update failed: %w", err)
+		}
+		log.Printf("✅ Final incremental index complete (%d changed combos)", len(promotedCombos))
+		return currentIndexedCount, nil
+	}
+
+	if currentIndexedCount == 0 {
+		cachedTracks := LoadAllCachedData(ctx)
+		if len(cachedTracks) == 0 {
+			return 0, nil
+		}
+		if err := BuildAndExportIndex(cachedTracks); err != nil {
+			return currentIndexedCount, fmt.Errorf("failed to export startup final cache index: %w", err)
+		}
+		log.Println("✅ Final cache index complete")
+		return len(cachedTracks), nil
+	}
+
+	return currentIndexedCount, nil
 }
 
 // LoadDriverIndexFromShards loads the existing driver index from sharded files.

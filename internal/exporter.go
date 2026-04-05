@@ -210,6 +210,12 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 		shards[key][lowerName] = results
 	}
 
+	// Free previousNames immediately — no longer needed
+	previousNames = nil
+
+	// Free previousNames immediately — no longer needed
+	previousNames = nil
+
 	var totalBytes int64
 	expectedShardFiles := make(map[string]struct{}, len(shards))
 

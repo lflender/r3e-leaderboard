@@ -71,8 +71,10 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", track.Name, class.Name, saveErr)
 			}
 
-			// Append only if we have entries; keep empty combos out to avoid bloating
+			// Append metadata-only — payload is persisted in temp cache on disk.
+			// Retaining full Data in-memory during a 10-hour fetch causes GB-level growth.
 			if len(ti.Data) > 0 {
+				ti.Data = nil
 				allTrackData = append(allTrackData, ti)
 			}
 
@@ -249,8 +251,9 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 				log.Printf("⚠️ Warning: Could not save to temp cache %s + %s: %v", trackConfig.Name, class.Name, saveErr)
 			}
 
-			// Append only if we have entries
+			// Append metadata-only — payload is persisted in temp cache on disk.
 			if len(ti.Data) > 0 {
+				ti.Data = nil
 				allTrackData = append(allTrackData, ti)
 			}
 

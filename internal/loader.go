@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+func metadataOnlyTrackInfo(track TrackInfo) TrackInfo {
+	track.Data = nil
+	return track
+}
+
 // LoadAllCachedData loads ALL existing cache combinations (regardless of age)
 // without performing any network fetches. Returns only combinations with data.
 func LoadAllCachedData(ctx context.Context) []TrackInfo {
@@ -39,6 +44,37 @@ func LoadAllCachedData(ctx context.Context) []TrackInfo {
 	return cached
 }
 
+// loadCachedMetadata loads metadata (Name, TrackID, ClassID) for all cached
+// combinations WITHOUT reading the full JSON payloads. This keeps memory at
+// ~50-100 MB instead of the ~2 GB needed for full payloads.
+func loadCachedMetadata(ctx context.Context) []TrackInfo {
+	trackConfigs := GetTracks()
+	classConfigs := GetCarClasses()
+
+	dataCache := NewDataCache()
+	meta := make([]TrackInfo, 0, len(trackConfigs)*len(classConfigs)/2)
+
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			select {
+			case <-ctx.Done():
+				return meta
+			default:
+			}
+			if dataCache.CacheExists(track.TrackID, class.ClassID) {
+				meta = append(meta, TrackInfo{
+					Name:    track.Name,
+					TrackID: track.TrackID,
+					ClassID: class.ClassID,
+				})
+			}
+		}
+	}
+
+	log.Printf("🧠 Loaded %d cached combination metadata (lightweight)", len(meta))
+	return meta
+}
+
 // LoadAllTrackData loads leaderboard data for all track+class combinations
 func LoadAllTrackData(ctx context.Context) []TrackInfo {
 	return LoadAllTrackDataWithCallback(ctx, nil, nil)
@@ -62,6 +98,24 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 
+	// Determine early whether we need a network fetch. This allows us to avoid
+	// retaining full cache payloads in memory when a long fetch will follow.
+	needsFetching := false
+	for _, track := range trackConfigs {
+		for _, class := range classConfigs {
+			if !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID) {
+				needsFetching = true
+				break
+			}
+		}
+		if needsFetching {
+			break
+		}
+	}
+
+	// Never load full JSON payloads when sharded index exists — reuse shards
+	// and save ~2 GB of RAM. Only load payloads for first-ever index build.
+	keepCachePayloadInMemory := !HasShardedIndex()
 	// PHASE 4: Load local cache
 	log.Println("🔄 Phase 4: Load local cache")
 	cacheLoadCount := 0
@@ -81,6 +135,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			if dataCache.CacheExists(track.TrackID, class.ClassID) {
 				trackInfo, err := dataCache.LoadTrackData(track.TrackID, class.ClassID)
 				if err == nil && len(trackInfo.Data) > 0 {
+					if !keepCachePayloadInMemory {
+						trackInfo.Data = nil
+					}
 					allTrackData = append(allTrackData, trackInfo)
 					cacheLoadCount++
 				}
@@ -90,25 +147,20 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
 
-	// PHASE 4: Determine if network fetch is needed
-	needsFetching := false
-	for _, track := range trackConfigs {
-		for _, class := range classConfigs {
-			if !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID) {
-				needsFetching = true
-				break
-			}
-		}
-		if needsFetching {
-			break
-		}
-	}
-
 	// Trigger cache complete callback with whether we'll fetch
 	// Always invoke so orchestrator can decide to start periodic indexing
 	if cacheCompleteCallback != nil {
 		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
 		cacheCompleteCallback(allTrackData, needsFetching)
+	}
+
+	// During long fetch runs we don't need to retain full payloads in-memory.
+	// Keep only metadata for progress/status tracking and rely on temp cache +
+	// incremental indexing for index updates.
+	if needsFetching {
+		for i := range allTrackData {
+			allTrackData[i].Data = nil
+		}
 	}
 
 	if !needsFetching {
@@ -129,7 +181,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	existingData := make(map[string]TrackInfo)
 	for _, track := range allTrackData {
 		key := track.TrackID + "_" + track.ClassID
-		existingData[key] = track
+		existingData[key] = metadataOnlyTrackInfo(track)
 	}
 
 	for _, track := range trackConfigs {
@@ -210,7 +262,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 
 			// Update or add the track data
 			if len(trackInfo.Data) > 0 {
-				existingData[key] = trackInfo
+				existingData[key] = metadataOnlyTrackInfo(trackInfo)
 				fetchedCount++
 
 				// Update progress callback periodically
@@ -255,6 +307,9 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	// PHASE 6: Retry failed fetches
 	log.Printf("🔄 Phase 6: Retry failed fetches (%d pending)", len(failedFetches))
 	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	for i := range retriedTracks {
+		retriedTracks[i].Data = nil
+	}
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically

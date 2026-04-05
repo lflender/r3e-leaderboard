@@ -86,10 +86,13 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		// First, refresh Daily Race combinations before initial index
 		// This ensures the index includes the latest Daily Race data
 		log.Println("🔄 Phase 3: Fetch daily races combos")
-		if _, err := internal.RefreshDailyRaceCombinations(opCtx, o.config, false); err != nil {
+		var startupDailyRaceChangedCombos []string
+		hasExistingShardedIndex := internal.HasShardedIndex()
+		if changedCombos, err := internal.RefreshDailyRaceCombinations(opCtx, o.config, false); err != nil {
 			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
 		} else {
 			o.lastDailyRaceRefresh = time.Now()
+			startupDailyRaceChangedCombos = changedCombos
 		}
 
 		willFetchFresh := false
@@ -109,11 +112,21 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 			willFetchFresh = shouldFetchFresh
 
 			if len(cachedTracks) > 0 {
-				o.logIndexBuild("initial cache")
-				if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
-					log.Printf("⚠️ Failed to export index: %v", err)
-				} else {
+				if hasExistingShardedIndex {
+					log.Println("ℹ️ Reusing existing sharded index at startup (skipping full cache rebuild)")
 					o.lastIndexedCount = len(cachedTracks)
+					if len(startupDailyRaceChangedCombos) > 0 {
+						if err := internal.IncrementalIndexUpdate(startupDailyRaceChangedCombos, o.lastDailyRaceRefresh); err != nil {
+							log.Printf("⚠️ Failed to apply startup Daily Race incremental update: %v", err)
+						}
+					}
+				} else {
+					o.logIndexBuild("initial cache")
+					if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+						log.Printf("⚠️ Failed to export index: %v", err)
+					} else {
+						o.lastIndexedCount = len(cachedTracks)
+					}
 				}
 				o.exportStatus()
 			} else {
@@ -151,10 +164,12 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		if willFetchFresh {
 			o.logIndexBuild("startup final")
-			if err := internal.BuildAndExportIndex(tracks); err != nil {
-				log.Printf("⚠️ Failed to export index: %v", err)
+			indexedCount, err := internal.FinalizeStartupIndex(opCtx, o.lastIndexedCount, o.lastDailyRaceRefresh)
+			if err != nil {
+				log.Printf("⚠️ Startup final index finalization failed: %v", err)
+			} else if indexedCount > 0 {
+				o.lastIndexedCount = indexedCount
 			}
-			log.Println("✅ Final index complete")
 		}
 
 		if o.lastIndexedCount > 0 {
@@ -242,22 +257,29 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	}
 
 	// Perform the actual refresh (delegated to internal package)
+	// finalTracks is metadata-only (Data=nil); full data lives in disk cache
 	finalTracks := internal.PerformFullRefresh(opCtx, progressCallback, origin)
 
 	// Finalize scrape timestamps BEFORE building index
-	// This ensures UpdateStatusWithIndexMetrics preserves the correct end time
 	o.tracks = finalTracks
 	o.lastScrapeEnd = time.Now()
 	o.fetchInProgress = false
 	o.exportStatus()
 
-	// Build final index (will preserve the scrape timestamps we just wrote)
+	// Free metadata-only tracks before loading full data for index build
+	finalTracks = nil
+	o.tracks = nil
+
+	// Build final index from disk cache (all temp cache files are promoted by now).
+	// We load from disk rather than keeping ~2 GB of payloads in memory for 10 hours.
 	o.logIndexBuild("full refresh final")
-	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
+	cachedTracks := internal.LoadAllCachedData(o.appContext)
+	if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
-		o.lastIndexedCount = len(finalTracks)
+		o.lastIndexedCount = len(cachedTracks)
 	}
+	cachedTracks = nil
 	if o.lastIndexedCount > 0 {
 		if err := internal.ExportStatsFromShards(); err != nil {
 			log.Printf("⚠️ Failed to export stats after full refresh: %v", err)
@@ -267,7 +289,6 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	}
 
 	// Free all track data after refresh completes
-	finalTracks = nil
 	o.tracks = nil
 	runtime.GC()
 	debug.FreeOSMemory()
@@ -304,19 +325,22 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	}
 
 	// Perform the targeted refresh (delegated to internal package)
+	// finalTracks is metadata-only (Data=nil)
 	finalTracks := internal.PerformTargetedRefresh(opCtx, trackIDs, progressCallback, origin)
+	_ = finalTracks // used only for progress tracking above
 
-	// Build final index
+	// Build final index from disk cache (all temp cache files are promoted by now).
 	o.logIndexBuild("targeted refresh final")
-	if err := internal.BuildAndExportIndex(finalTracks); err != nil {
+	cachedTracks := internal.LoadAllCachedData(o.appContext)
+	if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
-		o.lastIndexedCount = len(finalTracks)
+		o.lastIndexedCount = len(cachedTracks)
 	}
 	log.Println("✅ Final index complete (targeted refresh)")
+	cachedTracks = nil
 
 	// Finalize
-	finalTracks = nil
 	o.tracks = nil
 	o.fetchInProgress = false
 	o.exportStatus()
@@ -358,7 +382,7 @@ func (o *Orchestrator) StartPeriodicIndexing(ctx context.Context, intervalMinute
 	indexer := internal.NewPeriodicIndexer(ctx, intervalMinutes, internal.IndexerCallbacks{
 		GetState: func() internal.IndexerState {
 			return internal.IndexerState{
-				Tracks:           o.tracks,
+				TrackCount:       len(o.tracks),
 				FetchInProgress:  o.fetchInProgress,
 				LastIndexedCount: o.lastIndexedCount,
 			}
@@ -519,11 +543,19 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d days ago", days)
 }
 
-// buildBootstrapIndex loads cached data and builds an initial search index
-// This is used by refresh operations to provide immediate search results
+// buildBootstrapIndex ensures the search index is available for refresh operations.
+// When sharded index files already exist on disk, it reuses them (no memory spike).
+// Otherwise falls back to loading all cached data and building from scratch.
 // CALLER MUST hold o.rebuildMu.
 func (o *Orchestrator) buildBootstrapIndex() {
-	// Free memory before loading all cached data to reduce swap pressure
+	if internal.HasShardedIndex() {
+		log.Println("ℹ️ Reusing existing sharded index for bootstrap (skipping full rebuild)")
+		dataCache := internal.NewDataCache()
+		o.lastIndexedCount = dataCache.CountCachedCombinations()
+		return
+	}
+
+	// No shards on disk — must build from scratch
 	o.tracks = nil
 	runtime.GC()
 	debug.FreeOSMemory()
@@ -536,7 +568,6 @@ func (o *Orchestrator) buildBootstrapIndex() {
 		} else {
 			o.lastIndexedCount = len(cachedTracks)
 		}
-		// Free immediately after index is built
 		cachedTracks = nil
 		runtime.GC()
 		debug.FreeOSMemory()
