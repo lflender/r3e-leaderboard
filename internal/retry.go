@@ -16,6 +16,7 @@ type FailedFetchInfo struct {
 // retryFailedFetches attempts to retry all failed fetches and returns successfully fetched tracks
 func retryFailedFetches(ctx context.Context, apiClient *APIClient, tempCache *DataCache, failedFetches []FailedFetchInfo) []TrackInfo {
 	if len(failedFetches) == 0 {
+		log.Println("🔁 Retry phase triggered: no failed fetches to retry")
 		return nil
 	}
 

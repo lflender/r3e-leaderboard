@@ -45,7 +45,7 @@ func GetDefaultConfig() Config {
 	return Config{
 		Schedule: ScheduleConfig{
 			RefreshHour:                  3,  // 3 AM
-			RefreshMinute:                30, // At the half hour
+			RefreshMinute:                0,  // At the top of the hour
 			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
