@@ -74,17 +74,13 @@ Contains a searchable index mapping driver names (lowercase) to all their result
       "name": "Ludo Flender",
       "position": 8,
       "laptime": "1m 23.414s",
-      "time_diff": 1.887,
       "country": "Belgium",
       "car": "Porsche 911 RSR 2019",
-      "car_class": "GTE",
       "team": "Porsche Motorsport",
       "rank": "",
       "difficulty": "Get Real",
-      "track": "Brands Hatch Grand Prix - Grand Prix",
       "track_id": "9473",
       "class_id": "8600",
-      "found": true,
       "total_entries": 25
     }
   ]

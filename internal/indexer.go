@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -247,15 +246,6 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 			// Extract lap time
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
-			}
-
-			// Extract time difference
-			if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
-				timeStr := strings.TrimPrefix(relativeLaptime, "+")
-				timeStr = strings.TrimSuffix(timeStr, "s")
-				if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
-					result.TimeDiff = timeDiff
-				}
 			}
 
 			// Extract country
@@ -588,13 +578,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
-			}
-			if relativeLaptime, ok := entry["relative_laptime"].(string); ok && relativeLaptime != "" {
-				timeStr := strings.TrimPrefix(relativeLaptime, "+")
-				timeStr = strings.TrimSuffix(timeStr, "s")
-				if timeDiff, err := strconv.ParseFloat(timeStr, 64); err == nil {
-					result.TimeDiff = timeDiff
-				}
 			}
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {

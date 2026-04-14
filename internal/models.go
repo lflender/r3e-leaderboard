@@ -2,22 +2,21 @@ package internal
 
 // DriverResult represents a found driver with their details
 type DriverResult struct {
-	Name         string  `json:"name"`
-	Position     int     `json:"position"`
-	LapTime      string  `json:"laptime"`
-	TimeDiff     float64 `json:"time_diff"` // Time difference from leader in seconds
-	Country      string  `json:"country"`
-	Car          string  `json:"car"`
-	CarClass     string  `json:"car_class"`
-	Team         string  `json:"team"`
-	Rank         string  `json:"rank"`
-	Difficulty   string  `json:"difficulty"`
-	Track        string  `json:"track"`
-	TrackID      string  `json:"track_id"`
-	ClassID      string  `json:"class_id"`
-	DateTime     string  `json:"date_time"` // Date and time when the entry was performed
-	Found        bool    `json:"found"`
-	TotalEntries int     `json:"total_entries"`
+	Name         string `json:"name"`
+	Position     int    `json:"position"`
+	LapTime      string `json:"laptime"`
+	Country      string `json:"country"`
+	Car          string `json:"car"`
+	CarClass     string `json:"car_class"`
+	Team         string `json:"team"`
+	Rank         string `json:"rank"`
+	Difficulty   string `json:"difficulty"`
+	Track        string `json:"track"`
+	TrackID      string `json:"track_id"`
+	ClassID      string `json:"class_id"`
+	DateTime     string `json:"date_time"` // Date and time when the entry was performed
+	Found        bool   `json:"found"`
+	TotalEntries int    `json:"total_entries"`
 }
 
 // DriverIndex maps driver names to all their results across tracks/classes
