@@ -242,7 +242,6 @@ func TestDriverResult_Struct(t *testing.T) {
 		Name:         "John Doe",
 		Position:     1,
 		LapTime:      "1:23.456",
-		TimeDiff:     0.0,
 		Country:      "Germany",
 		Car:          "Porsche 911 GT3 R",
 		CarClass:     "GTR 3",
