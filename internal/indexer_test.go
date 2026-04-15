@@ -162,34 +162,6 @@ func TestBuildDriverIndex_DriverResultFields(t *testing.T) {
 	}
 }
 
-func TestBuildDriverIndex_TimeDiff(t *testing.T) {
-	fixtures := GetTestFixtures()
-
-	tracks := []TrackInfo{
-		{
-			Name:    "Test Track",
-			TrackID: "7112",
-			ClassID: "1703",
-			Data:    fixtures.SampleTrackData,
-		},
-	}
-
-	index, _, _, _ := buildDriverIndex(tracks)
-
-	// Test Driver 2 has relative_laptime: "+1.333s"
-	driver2 := strings.ToLower("Test Driver 2")
-	entries, ok := index[driver2]
-	if !ok || len(entries) == 0 {
-		t.Fatal("'Test Driver 2' not found in index")
-	}
-
-	entry := entries[0]
-	expected := 1.333
-	if entry.TimeDiff != expected {
-		t.Errorf("TimeDiff = %f, expected %f", entry.TimeDiff, expected)
-	}
-}
-
 func TestBuildDriverIndex_EmptyTracks(t *testing.T) {
 	index, trackEntryCounts, uniqueTrackCount, totalEntries := buildDriverIndex([]TrackInfo{})
 

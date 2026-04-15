@@ -116,16 +116,15 @@ type DriverNamesIndex map[string]DriverIdentity
 // ExportedDriverResult is the compact on-disk representation used by
 // monolithic/sharded index files.
 type ExportedDriverResult struct {
-	Position     int     `json:"position"`
-	LapTime      string  `json:"laptime"`
-	TimeDiff     float64 `json:"time_diff"`
-	Car          string  `json:"car"`
-	CarClass     string  `json:"car_class"`
-	Difficulty   string  `json:"difficulty"`
-	TrackID      string  `json:"track_id"`
-	ClassID      string  `json:"class_id"`
-	DateTime     string  `json:"date_time"`
-	TotalEntries int     `json:"total_entries"`
+	Position     int    `json:"position"`
+	LapTime      string `json:"laptime"`
+	Car          string `json:"car"`
+	CarClass     string `json:"car_class"`
+	Difficulty   string `json:"difficulty"`
+	TrackID      string `json:"track_id"`
+	ClassID      string `json:"class_id"`
+	DateTime     string `json:"date_time"`
+	TotalEntries int    `json:"total_entries"`
 }
 
 type ExportedDriverIndex map[string][]ExportedDriverResult
@@ -144,7 +143,6 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 		compact = append(compact, ExportedDriverResult{
 			Position:     r.Position,
 			LapTime:      r.LapTime,
-			TimeDiff:     r.TimeDiff,
 			Car:          r.Car,
 			CarClass:     r.CarClass,
 			Difficulty:   r.Difficulty,

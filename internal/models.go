@@ -2,22 +2,21 @@ package internal
 
 // DriverResult represents a found driver with their details
 type DriverResult struct {
-	Name         string  `json:"name"`
-	Position     int     `json:"position"`
-	LapTime      string  `json:"laptime"`
-	TimeDiff     float64 `json:"time_diff"` // Time difference from leader in seconds
-	Country      string  `json:"country"`
-	Car          string  `json:"car"`
-	CarClass     string  `json:"car_class"`
-	Team         string  `json:"team"`
-	Rank         string  `json:"rank"`
-	Difficulty   string  `json:"difficulty"`
-	Track        string  `json:"track"`
-	TrackID      string  `json:"track_id"`
-	ClassID      string  `json:"class_id"`
-	DateTime     string  `json:"date_time"` // Date and time when the entry was performed
-	Found        bool    `json:"found"`
-	TotalEntries int     `json:"total_entries"`
+	Name         string `json:"name"`
+	Position     int    `json:"position"`
+	LapTime      string `json:"laptime"`
+	Country      string `json:"country"`
+	Car          string `json:"car"`
+	CarClass     string `json:"car_class"`
+	Team         string `json:"team"`
+	Rank         string `json:"rank"`
+	Difficulty   string `json:"difficulty"`
+	Track        string `json:"track"`
+	TrackID      string `json:"track_id"`
+	ClassID      string `json:"class_id"`
+	DateTime     string `json:"date_time"` // Date and time when the entry was performed
+	Found        bool   `json:"found"`
+	TotalEntries int    `json:"total_entries"`
 }
 
 // DriverIndex maps driver names to all their results across tracks/classes
@@ -58,6 +57,9 @@ func GetTracks() []TrackConfig {
 		{"Brno - Grand Prix (Short Pit Entry)", "9796"},
 		{"Chang International Circuit - D Circuit", "4944"},
 		{"Chang International Circuit - Full Circuit", "4253"},
+		{"Circuit de Charade - Classic Racing School", "11908"},
+		{"Circuit de Charade - Grand Prix", "10904"},
+		{"Circuit de Pau-Ville - Grand Prix", "11905"},
 		{"Circuit de Spa-Francorchamps - Classic", "13368"},
 		{"Circuit de Spa-Francorchamps - Combined", "13369"},
 		{"Circuit de Spa-Francorchamps - Grand Prix", "13256"},
@@ -68,9 +70,6 @@ func GetTracks() []TrackConfig {
 		{"Circuit Zandvoort 2019 - Grand Prix", "1678"},
 		{"Circuit Zandvoort 2019 - National", "1680"},
 		{"Circuit Zolder - Grand Prix", "1684"},
-		{"Circuit de Charade - Classic Racing School", "11908"},
-		{"Circuit de Charade - Grand Prix", "10904"},
-		{"Circuit de Pau-Ville - Grand Prix", "11905"},
 		{"DEKRA Lausitzring - DTM Grand Prix Course", "9055"},
 		{"DEKRA Lausitzring - DTM Short Course", "2468"},
 		{"DEKRA Lausitzring - GP Course Oval T1", "10328"},
@@ -496,11 +495,13 @@ func GetDiscordTrackAliases() map[string]string {
 		"brands hatch":                      "Brands Hatch - Grand Prix",
 		"brands hatch gp":                   "Brands Hatch - Grand Prix",
 		"brands hatch indy":                 "Brands Hatch - Indy",
+		"circuit de charade":                "Circuit de Charade - Grand Prix",
 		"circuit de pau-ville":              "Circuit de Pau-Ville - Grand Prix",
 		"pau":                               "Circuit de Pau-Ville - Grand Prix",
 		"pau-ville":                         "Circuit de Pau-Ville - Grand Prix",
 		"spa":                               "Circuit de Spa-Francorchamps - Grand Prix",
 		"spa classic":                       "Circuit de Spa-Francorchamps - Classic",
+		"spa gp":                            "Circuit de Spa-Francorchamps - Grand Prix",
 		"zandvoort":                         "Circuit Zandvoort - Grand Prix",
 		"zandvoort gp":                      "Circuit Zandvoort - Grand Prix",
 		"circuit zandvoort 2019":            "Circuit Zandvoort 2019 - Grand Prix",
@@ -509,6 +510,7 @@ func GetDiscordTrackAliases() map[string]string {
 		"daytona":                           "Daytona International Speedway - Road Course",
 		"daytona road":                      "Daytona International Speedway - Road Course",
 		"daytona road course":               "Daytona International Speedway - Road Course",
+		"lausitzring dtm short":             "DEKRA Lausitzring - DTM Short Course",
 		"lausitzring":                       "DEKRA Lausitzring - Grand Prix Course",
 		"donington national":                "Donington Park - National",
 		"donington gp":                      "Donington Park - Grand Prix",

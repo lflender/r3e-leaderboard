@@ -1,8 +1,11 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"strings"
 	"testing"
 	"time"
 )
@@ -53,10 +56,19 @@ func TestRetryFailedFetches_EmptyList(t *testing.T) {
 		useTemp:      true,
 	}
 
+	var logBuf bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logBuf)
+	defer log.SetOutput(originalWriter)
+
 	result := retryFailedFetches(ctx, apiClient, tempCache, nil)
 
 	if len(result) != 0 {
 		t.Errorf("Expected nil or empty result for empty failed list, got %d", len(result))
+	}
+
+	if !strings.Contains(logBuf.String(), "Retry phase triggered: no failed fetches to retry") {
+		t.Errorf("Expected no-op retry log message, got logs: %s", logBuf.String())
 	}
 }
 
