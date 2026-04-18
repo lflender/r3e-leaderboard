@@ -24,6 +24,21 @@ func sampleStatsIndex() DriverIndex {
 	}
 }
 
+func seedLetterNames(t *testing.T, names DriverNamesIndex) {
+	t.Helper()
+
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
+	}
+
+	partitions := partitionNamesByLetter(names)
+	for key, partition := range partitions {
+		if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, key+".json.gz"), partition); err != nil {
+			t.Fatalf("Failed to seed letter names shard %s: %v", key, err)
+		}
+	}
+}
+
 func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -33,9 +48,7 @@ func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 		"bob":     {{Name: "Bob", Country: "Spain", Team: "B-Team", Rank: "A"}},
 		"charlie": {{Name: "Charlie", Country: "UK", Team: "C-Team", Rank: "B"}},
 	}
-	if _, err := writeGzipJSON(ShardedNamesFile, names); err != nil {
-		t.Fatalf("Failed to seed names index: %v", err)
-	}
+	seedLetterNames(t, names)
 
 	if err := os.MkdirAll(StatsClassesDir, 0755); err != nil {
 		t.Fatalf("Failed to create stats class dir: %v", err)
@@ -152,9 +165,7 @@ func TestExportStatsFromIndex_UsesNamesMetadataAndSortFiltering(t *testing.T) {
 		"ghost": {{Name: "Ghost Driver", Country: "Italy", Team: "Phantom", Rank: "C"}},
 		"shade": {{Name: "Shade Driver", Country: "USA", Team: "Shadow", Rank: "B"}},
 	}
-	if _, err := writeGzipJSON(ShardedNamesFile, names); err != nil {
-		t.Fatalf("Failed to seed names index: %v", err)
-	}
+	seedLetterNames(t, names)
 
 	index := DriverIndex{
 		"ghost": {

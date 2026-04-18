@@ -369,9 +369,11 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	return ExportTopCombinations(tracks, trackEntryCounts)
 }
 
-// HasShardedIndex returns true when both names and at least one shard file exist.
+// HasShardedIndex returns true when both letter-sharded metadata and at least
+// one result shard file exist.
 func HasShardedIndex() bool {
-	if _, err := os.Stat(ShardedNamesFile); err != nil {
+	letterFiles, err := filepath.Glob(filepath.Join(ShardedIndexDir, "[a-z_].json.gz"))
+	if err != nil || len(letterFiles) == 0 {
 		return false
 	}
 	files, err := filepath.Glob(filepath.Join(ShardedShardsDir, "*.json.gz"))
@@ -447,7 +449,66 @@ func refreshCombinationExportsFromCache(ctx context.Context, onlyIfMissing bool)
 
 // LoadDriverIndexFromShards loads the existing driver index from sharded files.
 func LoadDriverIndexFromShards() (DriverIndex, error) {
-	return LoadAllShards()
+	nameKeyed, err := LoadAllShards()
+	if err != nil {
+		return nil, err
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load sharded names metadata: %w", err)
+	}
+
+	// Convert exported lowerName-keyed shards back into the internal pathID-keyed
+	// index shape expected by incremental updates.
+	pathKeyed := make(DriverIndex, len(nameKeyed))
+	for lowerName, results := range nameKeyed {
+		identities := names[lowerName]
+		identityByPathID := make(map[string]DriverIdentity, len(identities))
+		for _, identity := range identities {
+			if identity.PathID != "" {
+				identityByPathID[identity.PathID] = identity
+			}
+		}
+
+		for _, r := range results {
+			pathID := r.PathID
+			if pathID == "" {
+				pathID = lowerName
+				r.PathID = pathID
+			}
+
+			if identity, ok := identityByPathID[pathID]; ok {
+				if r.Name == "" {
+					r.Name = identity.Name
+				}
+				if r.Avatar == "" {
+					r.Avatar = identity.Avatar
+				}
+				if r.Country == "" {
+					r.Country = identity.Country
+				}
+				if r.Team == "" {
+					r.Team = identity.Team
+				}
+				if r.Rank == "" {
+					r.Rank = identity.Rank
+				}
+			}
+
+			if r.Name == "" {
+				if len(identities) > 0 && identities[0].Name != "" {
+					r.Name = identities[0].Name
+				} else {
+					r.Name = lowerName
+				}
+			}
+
+			pathKeyed[pathID] = append(pathKeyed[pathID], r)
+		}
+	}
+
+	return pathKeyed, nil
 }
 
 // IncrementalIndexUpdate performs a lightweight index update for a small number

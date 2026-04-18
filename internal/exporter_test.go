@@ -602,10 +602,6 @@ func TestExportShardedIndex_PopulatesSearchNames(t *testing.T) {
 		if len(identities) != 1 {
 			t.Fatalf("Expected 1 identity for %q, got %d", lookup.searchName, len(identities))
 		}
-		if identities[0].SearchName != lookup.searchName {
-			t.Fatalf("SearchName for %q = %q, expected %q",
-				lookup.displayName, identities[0].SearchName, lookup.searchName)
-		}
 		if identities[0].Name != lookup.displayName {
 			t.Fatalf("Name for %q = %q, expected %q",
 				lookup.searchName, identities[0].Name, lookup.displayName)
@@ -617,6 +613,56 @@ func TestExportShardedIndex_PopulatesSearchNames(t *testing.T) {
 	for _, alias := range accentedAliases {
 		if !mirrorSet[alias] {
 			t.Fatalf("Mirror should contain accent-preserving alias %q, got: %v", alias, mirrors)
+		}
+	}
+}
+
+func TestExportShardedIndex_OmerAliasesAreSearchable(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := DriverIndex{
+		"9100001": {
+			{Name: "Ömer Binikli", PathID: "9100001", Avatar: "omer.png", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true},
+		},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+
+	mirrorSet := make(map[string]bool, len(mirrors))
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+
+	// Folded + accent-preserving aliases must both exist.
+	if !mirrorSet["omer binikli"] {
+		t.Fatalf("Mirror should contain folded alias %q, got: %v", "omer binikli", mirrors)
+	}
+	if !mirrorSet["ömer binikli"] {
+		t.Fatalf("Mirror should contain accent-preserving alias %q, got: %v", "ömer binikli", mirrors)
+	}
+
+	// Simulate user typing variants and ensure each can resolve to a mirror alias.
+	queries := []string{"ömer", "Ömer", "omer"}
+	for _, q := range queries {
+		lowerAccent := normalizeDisplayName(q)
+		lowerFolded := normalizeSearchName(q)
+		found := false
+		for alias := range mirrorSet {
+			if strings.HasPrefix(alias, lowerAccent) || strings.HasPrefix(alias, lowerFolded) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Query %q should match a mirror alias via prefix, aliases: %v", q, mirrors)
 		}
 	}
 }
@@ -782,15 +828,15 @@ func TestLoadShardedNamesIndex_InvalidGzip(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
-	if err := os.MkdirAll(filepath.Dir(ShardedNamesFile), 0755); err != nil {
-		t.Fatalf("Failed to create names directory: %v", err)
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
 	}
-	if err := os.WriteFile(ShardedNamesFile, []byte("not json"), 0644); err != nil {
-		t.Fatalf("Failed to write invalid names index: %v", err)
+	if err := os.WriteFile(filepath.Join(ShardedIndexDir, "a.json.gz"), []byte("not gzip"), 0644); err != nil {
+		t.Fatalf("Failed to write invalid letter names file: %v", err)
 	}
 
 	if _, err := LoadShardedNamesIndex(); err == nil {
-		t.Fatal("LoadShardedNamesIndex should fail for invalid gzip")
+		t.Fatal("LoadShardedNamesIndex should fail for invalid letter file gzip")
 	}
 }
 
@@ -828,8 +874,8 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
 	}
-	if _, err := os.Stat(ShardedNamesFile); err != nil {
-		t.Fatalf("Expected gzip names index file: %v", err)
+	if _, err := os.Stat("cache/index/driver_index.json.gz"); !os.IsNotExist(err) {
+		t.Fatalf("Monolithic names index should not exist, got err=%v", err)
 	}
 	if _, err := os.Stat(ShardedMirrorFile); err != nil {
 		t.Fatalf("Expected gzip mirror index file: %v", err)
@@ -843,15 +889,12 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if names["alice speed"][0].Country != "Germany" || names["alice speed"][0].Team != "Team A" || names["alice speed"][0].Rank != "S" {
 		t.Fatalf("Expected full metadata for Alice Speed, got %+v", names["alice speed"])
 	}
-	gzNames, err := readGzipJSON[DriverNamesIndex](ShardedNamesFile)
+	gzNames, err := LoadLetterNames("a")
 	if err != nil {
-		t.Fatalf("Failed to load gzip names index: %v", err)
+		t.Fatalf("Failed to load letter names index: %v", err)
 	}
 	if gzNames["alice speed"][0].Name != "Alice Speed" {
-		t.Fatalf("Expected gzip display name for Alice Speed, got %q", gzNames["alice speed"][0].Name)
-	}
-	if gzNames["alice speed"][0].SearchName != "alice speed" {
-		t.Fatalf("Expected gzip SearchName for Alice Speed, got %q", gzNames["alice speed"][0].SearchName)
+		t.Fatalf("Expected letter-shard display name for Alice Speed, got %q", gzNames["alice speed"][0].Name)
 	}
 	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
 	if err != nil {
@@ -1022,11 +1065,11 @@ func TestExportShardedIndex_MirrorContainsNormalizedNames(t *testing.T) {
 		t.Fatalf("Failed to load names index: %v", err)
 	}
 
-	if names["sven b."][0].SearchName != "sven b." {
-		t.Errorf("SearchName for 'sven b.' = %q, expected 'sven b.'", names["sven b."][0].SearchName)
+	if names["sven b."][0].Name != "Sven B." {
+		t.Errorf("Name for 'sven b.' = %q, expected 'Sven B.'", names["sven b."][0].Name)
 	}
-	if names["mahe birault"][0].SearchName != "mahe birault" {
-		t.Errorf("SearchName for 'mahe birault' = %q, expected 'mahe birault'", names["mahe birault"][0].SearchName)
+	if names["mahe birault"][0].Name != "Mahé Birault" {
+		t.Errorf("Name for 'mahe birault' = %q, expected 'Mahé Birault'", names["mahe birault"][0].Name)
 	}
 
 	// Front-end flow verification:
@@ -1215,27 +1258,71 @@ func TestExportShardedIndex_SameNameDifferentPathIDs(t *testing.T) {
 	}
 }
 
-func TestLoadShardedNamesIndex_LegacyFormatFallback(t *testing.T) {
+func TestLoadShardedNamesIndex_IgnoresStaleMonolithicFile(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
-	legacy := map[string]string{
-		"alice speed": "Alice Speed",
-		"3fast":       "3Fast",
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
 	}
-	if _, err := writeGzipJSON(ShardedNamesFile, legacy); err != nil {
-		t.Fatalf("Failed to write legacy names index: %v", err)
+	if err := os.WriteFile(filepath.Join(ShardedIndexDir, "driver_index.json.gz"), []byte("stale-monolithic-data"), 0644); err != nil {
+		t.Fatalf("Failed to write stale monolithic names file: %v", err)
+	}
+
+	letter := DriverNamesIndex{
+		"alice speed": {{Name: "Alice Speed", PathID: "1001"}},
+	}
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "a.json.gz"), letter); err != nil {
+		t.Fatalf("Failed to write letter names file: %v", err)
 	}
 
 	loaded, err := LoadShardedNamesIndex()
 	if err != nil {
-		t.Fatalf("LoadShardedNamesIndex failed for legacy format: %v", err)
+		t.Fatalf("LoadShardedNamesIndex failed for letter-sharded names: %v", err)
 	}
 	if len(loaded["alice speed"]) != 1 || loaded["alice speed"][0].Name != "Alice Speed" {
-		t.Fatalf("Converted legacy display name mismatch: %+v", loaded["alice speed"])
+		t.Fatalf("Letter-sharded display name mismatch: %+v", loaded["alice speed"])
 	}
-	if loaded["alice speed"][0].Country != "" || loaded["alice speed"][0].Team != "" || loaded["alice speed"][0].Rank != "" {
-		t.Fatalf("Legacy fallback should not invent metadata: %+v", loaded["alice speed"])
+	if loaded["alice speed"][0].PathID != "1001" {
+		t.Fatalf("Letter-sharded PathID mismatch: %+v", loaded["alice speed"])
+	}
+}
+
+func TestLoadShardedNamesIndex_FallbackToLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
+	}
+
+	aNames := DriverNamesIndex{
+		"alice speed": {{Name: "Alice Speed", PathID: "1001"}},
+	}
+	zNames := DriverNamesIndex{
+		"zoe zoom": {{Name: "Zoe Zoom", PathID: "1002"}},
+	}
+
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "a.json.gz"), aNames); err != nil {
+		t.Fatalf("Failed to write a letter file: %v", err)
+	}
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "z.json.gz"), zNames); err != nil {
+		t.Fatalf("Failed to write z letter file: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex fallback failed: %v", err)
+	}
+
+	if len(names) != 2 {
+		t.Fatalf("Loaded names count = %d, expected 2", len(names))
+	}
+	if names["alice speed"][0].Name != "Alice Speed" {
+		t.Fatalf("Unexpected Alice fallback name: %+v", names["alice speed"])
+	}
+	if names["zoe zoom"][0].Name != "Zoe Zoom" {
+		t.Fatalf("Unexpected Zoe fallback name: %+v", names["zoe zoom"])
 	}
 }
 
@@ -1400,7 +1487,7 @@ func TestExportShardedIndex_LetterFilesPreserveMetadata(t *testing.T) {
 	}
 }
 
-func TestExportShardedIndex_LetterFilesSumEqualsMonolithic(t *testing.T) {
+func TestExportShardedIndex_LetterFilesRoundTripMatchesMergedLoader(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
@@ -1409,8 +1496,8 @@ func TestExportShardedIndex_LetterFilesSumEqualsMonolithic(t *testing.T) {
 		t.Fatalf("ExportShardedIndex failed: %v", err)
 	}
 
-	// Load the monolithic driver_index.json.gz
-	monolithic, err := LoadShardedNamesIndex()
+	// Load via names loader (letter-sharded source of truth)
+	loadedNames, err := LoadShardedNamesIndex()
 	if err != nil {
 		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
 	}
@@ -1422,12 +1509,12 @@ func TestExportShardedIndex_LetterFilesSumEqualsMonolithic(t *testing.T) {
 	}
 
 	// Verify counts match
-	if len(merged) != len(monolithic) {
-		t.Fatalf("Letter files count = %d, monolithic count = %d", len(merged), len(monolithic))
+	if len(merged) != len(loadedNames) {
+		t.Fatalf("Merged letter names count = %d, loaded names count = %d", len(merged), len(loadedNames))
 	}
 
 	// Verify all entries match exactly
-	for lowerName, expectedIdentities := range monolithic {
+	for lowerName, expectedIdentities := range loadedNames {
 		actualIdentities, exists := merged[lowerName]
 		if !exists {
 			t.Fatalf("Driver %q missing from letter files", lowerName)
@@ -1439,8 +1526,8 @@ func TestExportShardedIndex_LetterFilesSumEqualsMonolithic(t *testing.T) {
 
 	// Verify no extra entries in merged
 	for lowerName := range merged {
-		if _, exists := monolithic[lowerName]; !exists {
-			t.Fatalf("Extra driver %q in letter files not in monolithic", lowerName)
+		if _, exists := loadedNames[lowerName]; !exists {
+			t.Fatalf("Extra driver %q in merged names not in loaded names", lowerName)
 		}
 	}
 }

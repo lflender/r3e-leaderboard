@@ -603,3 +603,125 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 		t.Fatalf("Stats should not be exported during IncrementalIndexUpdate, got err=%v", err)
 	}
 }
+
+func TestIncrementalIndexUpdate_PreservesUnchangedCombinations(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer")
+	comboB := testTrackInfo("Track B", "2222", "1757", "Ömer Binikli", "Zoe Zoom")
+
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := BuildAndExportIndex([]TrackInfo{comboA, comboB}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	beforeNames, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex before update failed: %v", err)
+	}
+	if len(beforeNames) != 4 {
+		t.Fatalf("Expected 4 drivers before update, got %d", len(beforeNames))
+	}
+
+	updatedComboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Charlie Pace")
+	if err := cache.SaveTrackData(updatedComboA); err != nil {
+		t.Fatalf("SaveTrackData updated comboA failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	afterNames, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex after update failed: %v", err)
+	}
+
+	// Expected set after update: Alice + Charlie + Ömer + Zoe.
+	if len(afterNames) != 4 {
+		t.Fatalf("Expected 4 drivers after update (unchanged combo preserved), got %d", len(afterNames))
+	}
+	if _, ok := afterNames["charlie pace"]; !ok {
+		t.Fatal("Expected Charlie Pace to be present after incremental update")
+	}
+	if _, ok := afterNames["bob racer"]; ok {
+		t.Fatal("Bob Racer should be removed after incremental update")
+	}
+	if _, ok := afterNames["zoe zoom"]; !ok {
+		t.Fatal("Zoe Zoom from unchanged combo should still be present after incremental update")
+	}
+	if _, ok := afterNames["omer binikli"]; !ok {
+		t.Fatal("Ömer Binikli from unchanged combo should still be present after incremental update")
+	}
+
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	mirrorSet := make(map[string]bool, len(mirrors))
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+	if !mirrorSet["ömer binikli"] {
+		t.Fatalf("Mirror should preserve accent alias for unchanged combo, got: %v", mirrors)
+	}
+	if !mirrorSet["omer binikli"] {
+		t.Fatalf("Mirror should preserve folded alias for unchanged combo, got: %v", mirrors)
+	}
+}
+
+func TestIncrementalIndexUpdate_WorksWithoutMonolithicNamesFile(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer")
+	comboB := testTrackInfo("Track B", "2222", "1757", "Ömer Binikli", "Zoe Zoom")
+
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := BuildAndExportIndex([]TrackInfo{comboA, comboB}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	// Simulate caches that retain only letter-sharded names files.
+	if err := os.Remove("cache/index/driver_index.json.gz"); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Failed to remove monolithic names file: %v", err)
+	}
+
+	updatedComboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Charlie Pace")
+	if err := cache.SaveTrackData(updatedComboA); err != nil {
+		t.Fatalf("SaveTrackData updated comboA failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate should work without monolithic names file: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed after incremental update: %v", err)
+	}
+
+	if len(names) != 4 {
+		t.Fatalf("Expected 4 drivers after incremental update, got %d", len(names))
+	}
+	if _, ok := names["charlie pace"]; !ok {
+		t.Fatal("Expected Charlie Pace after incremental update")
+	}
+	if _, ok := names["omer binikli"]; !ok {
+		t.Fatal("Expected Ömer Binikli from unchanged combo after incremental update")
+	}
+}
