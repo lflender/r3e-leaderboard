@@ -470,7 +470,9 @@ Daily Feature Races (~30 min)
 		SampleTrackData: []map[string]interface{}{
 			{
 				"driver": map[string]interface{}{
-					"name": "Test Driver 1",
+					"name":   "Test Driver 1",
+					"avatar": "https://game.raceroom.com/avatar/driver1.jpg",
+					"path":   "https://game.raceroom.com/users/info/1000001/",
 				},
 				"index":            float64(0),
 				"laptime":          "1:23.456",
@@ -491,7 +493,9 @@ Daily Feature Races (~30 min)
 			},
 			{
 				"driver": map[string]interface{}{
-					"name": "Test Driver 2",
+					"name":   "Test Driver 2",
+					"avatar": "https://game.raceroom.com/avatar/driver2.jpg",
+					"path":   "https://game.raceroom.com/users/info/1000002/",
 				},
 				"index":            float64(1),
 				"laptime":          "1:24.789",
@@ -512,7 +516,9 @@ Daily Feature Races (~30 min)
 			},
 			{
 				"driver": map[string]interface{}{
-					"name": "Test Driver 1", // Same driver, different entry
+					"name":   "Test Driver 1", // Same driver, different entry
+					"avatar": "https://game.raceroom.com/avatar/driver1.jpg",
+					"path":   "https://game.raceroom.com/users/info/1000001/", // Same pathID
 				},
 				"index":            float64(2),
 				"laptime":          "1:25.000",

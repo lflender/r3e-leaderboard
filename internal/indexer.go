@@ -161,7 +161,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 	// Track unique track IDs (not names, as multiple layouts can share the same track)
 	uniqueTracksMap := make(map[string]bool)
 
-	// First pass: count entries per driver to pre-allocate slices
+	// First pass: count entries per driver (by pathID) to pre-allocate slices
 	driverCounts := make(map[string]int, estimatedDrivers)
 	trackEntryCounts := make(map[string]int, len(tracks))
 
@@ -180,12 +180,16 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 		for _, entry := range track.Data {
 			if driverInterface, exists := entry["driver"]; exists {
 				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
-					if nameInterface, exists := driverMap["name"]; exists {
-						if name, ok := nameInterface.(string); ok && name != "" {
-							lowerName := strings.ToLower(name)
-							driverCounts[lowerName]++
-						}
+					name, _ := driverMap["name"].(string)
+					if name == "" {
+						continue
 					}
+					pathStr, _ := driverMap["path"].(string)
+					pathID := ExtractPathID(pathStr)
+					if pathID == "" {
+						pathID = strings.ToLower(name) // fallback for entries without path
+					}
+					driverCounts[pathID]++
 				}
 			}
 		}
@@ -201,10 +205,10 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 	}
 	driverCounts = nil
 
-	// Second pass: populate the index
+	// Second pass: populate the index (keyed by pathID)
 	for _, track := range tracks {
 		for _, entry := range track.Data {
-			// Extract driver name
+			// Extract driver info
 			driverInterface, driverExists := entry["driver"]
 			if !driverExists {
 				continue
@@ -215,14 +219,16 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				continue
 			}
 
-			nameInterface, nameExists := driverMap["name"]
-			if !nameExists {
+			name, _ := driverMap["name"].(string)
+			if name == "" {
 				continue
 			}
 
-			name, nameOk := nameInterface.(string)
-			if !nameOk || name == "" {
-				continue
+			// Extract pathID — the unique driver identifier
+			pathStr, _ := driverMap["path"].(string)
+			pathID := ExtractPathID(pathStr)
+			if pathID == "" {
+				pathID = strings.ToLower(name) // fallback for entries without path
 			}
 
 			// Get position
@@ -235,6 +241,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 
 			result := DriverResult{
 				Name:         name,
+				PathID:       pathID,
 				Position:     position,
 				TrackID:      track.TrackID,
 				ClassID:      track.ClassID,
@@ -246,6 +253,11 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 			// Extract lap time
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
+			}
+
+			// Extract avatar from driver map
+			if avatarStr, avatarOk := driverMap["avatar"].(string); avatarOk && avatarStr != "" {
+				result.Avatar = avatarStr
 			}
 
 			// Extract country
@@ -293,9 +305,8 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				result.DateTime = dateTime
 			}
 
-			// Add to index (case-insensitive)
-			lowerName := strings.ToLower(name)
-			index[lowerName] = append(index[lowerName], result)
+			// Add to index by pathID
+			index[pathID] = append(index[pathID], result)
 		}
 	}
 
@@ -358,9 +369,11 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	return ExportTopCombinations(tracks, trackEntryCounts)
 }
 
-// HasShardedIndex returns true when both names and at least one shard file exist.
+// HasShardedIndex returns true when both letter-sharded metadata and at least
+// one result shard file exist.
 func HasShardedIndex() bool {
-	if _, err := os.Stat(ShardedNamesFile); err != nil {
+	letterFiles, err := filepath.Glob(filepath.Join(ShardedIndexDir, "[a-z_].json.gz"))
+	if err != nil || len(letterFiles) == 0 {
 		return false
 	}
 	files, err := filepath.Glob(filepath.Join(ShardedShardsDir, "*.json.gz"))
@@ -436,7 +449,66 @@ func refreshCombinationExportsFromCache(ctx context.Context, onlyIfMissing bool)
 
 // LoadDriverIndexFromShards loads the existing driver index from sharded files.
 func LoadDriverIndexFromShards() (DriverIndex, error) {
-	return LoadAllShards()
+	nameKeyed, err := LoadAllShards()
+	if err != nil {
+		return nil, err
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load sharded names metadata: %w", err)
+	}
+
+	// Convert exported lowerName-keyed shards back into the internal pathID-keyed
+	// index shape expected by incremental updates.
+	pathKeyed := make(DriverIndex, len(nameKeyed))
+	for lowerName, results := range nameKeyed {
+		identities := names[lowerName]
+		identityByPathID := make(map[string]DriverIdentity, len(identities))
+		for _, identity := range identities {
+			if identity.PathID != "" {
+				identityByPathID[identity.PathID] = identity
+			}
+		}
+
+		for _, r := range results {
+			pathID := r.PathID
+			if pathID == "" {
+				pathID = lowerName
+				r.PathID = pathID
+			}
+
+			if identity, ok := identityByPathID[pathID]; ok {
+				if r.Name == "" {
+					r.Name = identity.Name
+				}
+				if r.Avatar == "" {
+					r.Avatar = identity.Avatar
+				}
+				if r.Country == "" {
+					r.Country = identity.Country
+				}
+				if r.Team == "" {
+					r.Team = identity.Team
+				}
+				if r.Rank == "" {
+					r.Rank = identity.Rank
+				}
+			}
+
+			if r.Name == "" {
+				if len(identities) > 0 && identities[0].Name != "" {
+					r.Name = identities[0].Name
+				} else {
+					r.Name = lowerName
+				}
+			}
+
+			pathKeyed[pathID] = append(pathKeyed[pathID], r)
+		}
+	}
+
+	return pathKeyed, nil
 }
 
 // IncrementalIndexUpdate performs a lightweight index update for a small number
@@ -549,13 +621,16 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 			if !driverOk {
 				continue
 			}
-			nameInterface, nameExists := driverMap["name"]
-			if !nameExists {
+			name, _ := driverMap["name"].(string)
+			if name == "" {
 				continue
 			}
-			name, nameOk := nameInterface.(string)
-			if !nameOk || name == "" {
-				continue
+
+			// Extract pathID — the unique driver identifier
+			pathStr, _ := driverMap["path"].(string)
+			pathID := ExtractPathID(pathStr)
+			if pathID == "" {
+				pathID = strings.ToLower(name) // fallback for entries without path
 			}
 
 			// Get position
@@ -568,6 +643,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 			result := DriverResult{
 				Name:         name,
+				PathID:       pathID,
 				Position:     position,
 				TrackID:      trackInfo.TrackID,
 				ClassID:      trackInfo.ClassID,
@@ -578,6 +654,9 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
+			}
+			if avatarStr, avatarOk := driverMap["avatar"].(string); avatarOk && avatarStr != "" {
+				result.Avatar = avatarStr
 			}
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
@@ -613,8 +692,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 				result.DateTime = dateTime
 			}
 
-			lowerName := strings.ToLower(name)
-			index[lowerName] = append(index[lowerName], result)
+			index[pathID] = append(index[pathID], result)
 			addedEntries++
 		}
 		// Free trackInfo.Data immediately

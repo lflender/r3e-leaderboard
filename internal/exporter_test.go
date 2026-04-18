@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -347,20 +348,20 @@ func withWorkingDir(t *testing.T) (string, func()) {
 
 func sampleDriverIndex() DriverIndex {
 	return DriverIndex{
-		"alice speed": {
-			{Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "S", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+		"2000001": {
+			{Name: "Alice Speed", PathID: "2000001", Avatar: "https://game.raceroom.com/avatar/alice.jpg", Country: "Germany", Team: "Team A", Rank: "S", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
-		"bob racer": {
-			{Name: "Bob Racer", Country: "France", Team: "Team B", Rank: "A", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+		"2000002": {
+			{Name: "Bob Racer", PathID: "2000002", Avatar: "https://game.raceroom.com/avatar/bob.jpg", Country: "France", Team: "Team B", Rank: "A", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
-		"zoe zoom": {
-			{Name: "Zoe Zoom", Country: "Spain", Team: "Team Z", Rank: "B", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
+		"2000003": {
+			{Name: "Zoe Zoom", PathID: "2000003", Avatar: "https://game.raceroom.com/avatar/zoe.jpg", Country: "Spain", Team: "Team Z", Rank: "B", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
 		},
-		"3fast": {
-			{Name: "3Fast", Country: "USA", Team: "Team 3", Rank: "", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
+		"2000004": {
+			{Name: "3Fast", PathID: "2000004", Avatar: "https://game.raceroom.com/avatar/3fast.jpg", Country: "USA", Team: "Team 3", Rank: "", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
 		},
-		"": {
-			{Name: "", Country: "", Team: "", Rank: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
+		"2000005": {
+			{Name: "", PathID: "2000005", Avatar: "", Country: "", Team: "", Rank: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
 		},
 	}
 }
@@ -412,6 +413,260 @@ func TestShardKeyForName(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// SEARCH NAME NORMALIZATION TESTS
+// =============================================================================
+
+func TestNormalizeSearchName_RemovesAccents(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Mahé Birault", "mahe birault"},
+		{"José García", "jose garcia"},
+		{"Müller", "muller"},
+		{"Zöe Café", "zoe cafe"},
+		{"Sven Böck", "sven bock"},
+		{"François Duval", "francois duval"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_PreservesPeriods(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Sven B.", "sven b."},
+		{"John D.", "john d."},
+		{"Alice.", "alice."},
+		{"Bob...", "bob..."},
+		{"No Period", "no period"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_NormalizesCase(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ALICE", "alice"},
+		{"Alice Speed", "alice speed"},
+		{"BoB RaGeR", "bob rager"},
+		{"zOe ZOOM", "zoe zoom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_NormalizesWhitespace(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Alice  Speed", "alice speed"},
+		{"  Bob  Racer  ", "bob racer"},
+		{"Zoe\t\tZoom", "zoe zoom"},
+		{"  John   Doe  ", "john doe"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_CombinedAccentsAndPunctuation(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Mahé B.", "mahe b."},
+		{"François Duval.", "francois duval."},
+		{"Sven Böck.", "sven bock."},
+		{"José D.  ", "jose d."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_EmptyInput(t *testing.T) {
+	result := normalizeSearchName("")
+	if result != "" {
+		t.Fatalf("normalizeSearchName(\"\") = %q, expected empty string", result)
+	}
+}
+
+func TestNormalizeSearchName_Searchability(t *testing.T) {
+	// Verify that different input representations normalize to the same search string
+	variations := []string{
+		"Mahé Birault",
+		"mahe birault",
+		"MAHE BIRAULT",
+		"Mahé  Birault",
+	}
+
+	normalized := normalizeSearchName(variations[0])
+	for _, variant := range variations[1:] {
+		if normalizeSearchName(variant) != normalized {
+			t.Fatalf("Search normalization failed: %q and %q should normalize to same value", variations[0], variant)
+		}
+	}
+}
+
+func TestExportShardedIndex_PopulatesSearchNames(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Create an index with drivers that have accents and punctuation
+	index := DriverIndex{
+		"3000001": {
+			{Name: "Mahé Birault", PathID: "3000001", Avatar: "avatar1", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true},
+		},
+		"3000002": {
+			{Name: "Sven B.", PathID: "3000002", Avatar: "avatar2", Position: 2, LapTime: "1:21", TrackID: "1", ClassID: "1703", Found: true},
+		},
+		"3000003": {
+			{Name: "José García", PathID: "3000003", Avatar: "avatar3", Position: 3, LapTime: "1:22", TrackID: "1", ClassID: "1703", Found: true},
+		},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+
+	// Load mirror and verify it contains normalized search names
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+	mirrorSet := make(map[string]bool)
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+
+	// Verify full flow: searchName in mirror → names index → SearchName + display Name
+	lookups := []struct {
+		searchName  string
+		displayName string
+	}{
+		{"mahe birault", "Mahé Birault"},
+		{"sven b.", "Sven B."},
+		{"jose garcia", "José García"},
+	}
+	for _, lookup := range lookups {
+		if !mirrorSet[lookup.searchName] {
+			t.Fatalf("Mirror should contain search name %q, got: %v", lookup.searchName, mirrors)
+		}
+		identities := names[lookup.searchName]
+		if len(identities) != 1 {
+			t.Fatalf("Expected 1 identity for %q, got %d", lookup.searchName, len(identities))
+		}
+		if identities[0].Name != lookup.displayName {
+			t.Fatalf("Name for %q = %q, expected %q",
+				lookup.searchName, identities[0].Name, lookup.displayName)
+		}
+	}
+
+	// Mirror includes both folded and accent-preserving aliases.
+	accentedAliases := []string{"mahé birault", "josé garcía"}
+	for _, alias := range accentedAliases {
+		if !mirrorSet[alias] {
+			t.Fatalf("Mirror should contain accent-preserving alias %q, got: %v", alias, mirrors)
+		}
+	}
+}
+
+func TestExportShardedIndex_OmerAliasesAreSearchable(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := DriverIndex{
+		"9100001": {
+			{Name: "Ömer Binikli", PathID: "9100001", Avatar: "omer.png", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true},
+		},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+
+	mirrorSet := make(map[string]bool, len(mirrors))
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+
+	// Folded + accent-preserving aliases must both exist.
+	if !mirrorSet["omer binikli"] {
+		t.Fatalf("Mirror should contain folded alias %q, got: %v", "omer binikli", mirrors)
+	}
+	if !mirrorSet["ömer binikli"] {
+		t.Fatalf("Mirror should contain accent-preserving alias %q, got: %v", "ömer binikli", mirrors)
+	}
+
+	// Simulate user typing variants and ensure each can resolve to a mirror alias.
+	queries := []string{"ömer", "Ömer", "omer"}
+	for _, q := range queries {
+		lowerAccent := normalizeDisplayName(q)
+		lowerFolded := normalizeSearchName(q)
+		found := false
+		for alias := range mirrorSet {
+			if strings.HasPrefix(alias, lowerAccent) || strings.HasPrefix(alias, lowerFolded) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("Query %q should match a mirror alias via prefix, aliases: %v", q, mirrors)
+		}
+	}
+}
+
 func TestWriteReadGzipJSON_RoundTrip(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -435,11 +690,11 @@ func TestWriteReadGzipJSON_RoundTrip(t *testing.T) {
 	if len(loaded) != len(index) {
 		t.Fatalf("Loaded index length = %d, expected %d", len(loaded), len(index))
 	}
-	if loaded["alice speed"][0].TrackID != "1111" {
-		t.Fatalf("Loaded Alice entry mismatch: %+v", loaded["alice speed"][0])
+	if loaded["2000001"][0].TrackID != "1111" {
+		t.Fatalf("Loaded Alice entry mismatch: %+v", loaded["2000001"][0])
 	}
-	if loaded["3fast"][0].TrackID != "3333" {
-		t.Fatalf("Loaded numeric shard entry mismatch: %+v", loaded["3fast"][0])
+	if loaded["2000004"][0].TrackID != "3333" {
+		t.Fatalf("Loaded numeric shard entry mismatch: %+v", loaded["2000004"][0])
 	}
 }
 
@@ -449,8 +704,8 @@ func TestWriteReadJSON_RoundTrip(t *testing.T) {
 
 	path := filepath.Join("cache", "names.json")
 	names := DriverNamesIndex{
-		"alice speed": {Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "A"},
-		"3fast":       {Name: "3Fast", Country: "USA"},
+		"alice speed": {{Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "A"}},
+		"3fast":       {{Name: "3Fast", Country: "USA"}},
 	}
 
 	size, err := writeJSON(path, names)
@@ -468,13 +723,13 @@ func TestWriteReadJSON_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readJSON failed: %v", err)
 	}
-	if loaded["alice speed"].Name != "Alice Speed" {
+	if len(loaded["alice speed"]) != 1 || loaded["alice speed"][0].Name != "Alice Speed" {
 		t.Fatalf("Unexpected plain JSON content: %+v", loaded)
 	}
-	if loaded["alice speed"].Country != "Germany" || loaded["alice speed"].Team != "Team A" || loaded["alice speed"].Rank != "A" {
+	if loaded["alice speed"][0].Country != "Germany" || loaded["alice speed"][0].Team != "Team A" || loaded["alice speed"][0].Rank != "A" {
 		t.Fatalf("Unexpected metadata content: %+v", loaded["alice speed"])
 	}
-	if loaded["3fast"].Name != "3Fast" {
+	if len(loaded["3fast"]) != 1 || loaded["3fast"][0].Name != "3Fast" {
 		t.Fatalf("Unexpected plain JSON numeric key content: %+v", loaded)
 	}
 }
@@ -487,7 +742,7 @@ func TestWriteJSON_CreateDirectoryError(t *testing.T) {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 
-	if _, err := writeJSON(filepath.Join("cache", "names.json"), DriverNamesIndex{"alice": {Name: "Alice"}}); err == nil {
+	if _, err := writeJSON(filepath.Join("cache", "names.json"), DriverNamesIndex{"alice": {{Name: "Alice"}}}); err == nil {
 		t.Fatal("writeJSON should fail when parent path cannot be created")
 	}
 }
@@ -500,7 +755,7 @@ func TestWriteGzipJSON_CreateDirectoryError(t *testing.T) {
 		t.Fatalf("Failed to create blocking file: %v", err)
 	}
 
-	if _, err := writeGzipJSON(filepath.Join("cache", "names.json.gz"), DriverNamesIndex{"alice": {Name: "Alice"}}); err == nil {
+	if _, err := writeGzipJSON(filepath.Join("cache", "names.json.gz"), DriverNamesIndex{"alice": {{Name: "Alice"}}}); err == nil {
 		t.Fatal("writeGzipJSON should fail when parent path cannot be created")
 	}
 }
@@ -557,7 +812,7 @@ func TestLoadAllShards_InvalidShardFile(t *testing.T) {
 	if err := os.MkdirAll(ShardedShardsDir, 0755); err != nil {
 		t.Fatalf("Failed to create shard directory: %v", err)
 	}
-	if _, err := writeGzipJSON(filepath.Join(ShardedShardsDir, "a.json.gz"), DriverIndex{"alice": {{Name: "Alice"}}}); err != nil {
+	if _, err := writeGzipJSON(filepath.Join(ShardedShardsDir, "a.json.gz"), DriverIndex{"alice": {{Name: "Alice", PathID: "8000001"}}}); err != nil {
 		t.Fatalf("Failed to write valid shard: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(ShardedShardsDir, "b.json.gz"), []byte("not gzip"), 0644); err != nil {
@@ -573,15 +828,15 @@ func TestLoadShardedNamesIndex_InvalidGzip(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
-	if err := os.MkdirAll(filepath.Dir(ShardedNamesFile), 0755); err != nil {
-		t.Fatalf("Failed to create names directory: %v", err)
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
 	}
-	if err := os.WriteFile(ShardedNamesFile, []byte("not json"), 0644); err != nil {
-		t.Fatalf("Failed to write invalid names index: %v", err)
+	if err := os.WriteFile(filepath.Join(ShardedIndexDir, "a.json.gz"), []byte("not gzip"), 0644); err != nil {
+		t.Fatalf("Failed to write invalid letter names file: %v", err)
 	}
 
 	if _, err := LoadShardedNamesIndex(); err == nil {
-		t.Fatal("LoadShardedNamesIndex should fail for invalid gzip")
+		t.Fatal("LoadShardedNamesIndex should fail for invalid letter file gzip")
 	}
 }
 
@@ -619,27 +874,58 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
 	}
-	if _, err := os.Stat(ShardedNamesFile); err != nil {
-		t.Fatalf("Expected gzip names index file: %v", err)
+	if _, err := os.Stat("cache/index/driver_index.json.gz"); !os.IsNotExist(err) {
+		t.Fatalf("Monolithic names index should not exist, got err=%v", err)
+	}
+	if _, err := os.Stat(ShardedMirrorFile); err != nil {
+		t.Fatalf("Expected gzip mirror index file: %v", err)
 	}
 	if _, err := os.Stat("cache/index/driver_index.json"); !os.IsNotExist(err) {
 		t.Fatalf("Stale plain names index should not remain, got err=%v", err)
 	}
-	if names["alice speed"].Name != "Alice Speed" {
-		t.Fatalf("Expected display name for alice speed, got %q", names["alice speed"].Name)
+	if len(names["alice speed"]) != 1 || names["alice speed"][0].Name != "Alice Speed" {
+		t.Fatalf("Expected display name for Alice Speed, got %+v", names["alice speed"])
 	}
-	if names["alice speed"].Country != "Germany" || names["alice speed"].Team != "Team A" || names["alice speed"].Rank != "S" {
-		t.Fatalf("Expected full metadata for alice speed, got %+v", names["alice speed"])
+	if names["alice speed"][0].Country != "Germany" || names["alice speed"][0].Team != "Team A" || names["alice speed"][0].Rank != "S" {
+		t.Fatalf("Expected full metadata for Alice Speed, got %+v", names["alice speed"])
 	}
-	gzNames, err := readGzipJSON[DriverNamesIndex](ShardedNamesFile)
+	gzNames, err := LoadLetterNames("a")
 	if err != nil {
-		t.Fatalf("Failed to load gzip names index: %v", err)
+		t.Fatalf("Failed to load letter names index: %v", err)
 	}
-	if gzNames["alice speed"].Name != "Alice Speed" {
-		t.Fatalf("Expected gzip display name for alice speed, got %q", gzNames["alice speed"].Name)
+	if gzNames["alice speed"][0].Name != "Alice Speed" {
+		t.Fatalf("Expected letter-shard display name for Alice Speed, got %q", gzNames["alice speed"][0].Name)
 	}
-	if names[""].Name != "" {
-		t.Fatalf("Expected empty-name entry to be preserved in names index")
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load gzip mirror index: %v", err)
+	}
+	// Mirror should not contain empty-name drivers
+	expectedMirrorLen := 0
+	for _, results := range index {
+		if len(results) > 0 && results[0].Name != "" {
+			expectedMirrorLen++
+		}
+	}
+	if len(mirrors) != expectedMirrorLen {
+		t.Fatalf("Mirror count = %d, expected %d", len(mirrors), expectedMirrorLen)
+	}
+	// Verify mirror entries are sorted
+	for i := 1; i < len(mirrors); i++ {
+		if mirrors[i] < mirrors[i-1] {
+			t.Fatalf("Mirror entries not sorted: %v", mirrors)
+		}
+	}
+	// Verify a known entry exists
+	foundAlice := false
+	for _, m := range mirrors {
+		if m == "alice speed" {
+			foundAlice = true
+			break
+		}
+	}
+	if !foundAlice {
+		t.Fatalf("Mirror should contain 'alice speed', got: %v", mirrors)
 	}
 
 	aShard, err := LoadShard("a")
@@ -673,19 +959,13 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShard(_) failed: %v", err)
 	}
-	if len(otherShard) != 2 {
-		t.Fatalf("Expected 2 entries in _ shard, got %d", len(otherShard))
-	}
 	if otherShard["3fast"][0].TrackID != "3333" {
-		t.Fatalf("Expected numeric name in other shard, got %+v", otherShard["3fast"])
+		t.Fatalf("Expected 3Fast in other shard, got %+v", otherShard["3fast"])
 	}
 
 	merged, err := LoadAllShards()
 	if err != nil {
 		t.Fatalf("LoadAllShards failed: %v", err)
-	}
-	if len(merged) != len(index) {
-		t.Fatalf("Merged index length = %d, expected %d", len(merged), len(index))
 	}
 	if merged["zoe zoom"][0].TrackID != "2222" {
 		t.Fatalf("Unexpected merged Zoe entry: %+v", merged["zoe zoom"][0])
@@ -707,6 +987,97 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if strings.Join(actual, ",") != strings.Join(expected, ",") {
 		t.Fatalf("Shard files = %v, expected %v", actual, expected)
 	}
+}
+
+// TestExportShardedIndex_MirrorContainsNormalizedNames verifies that mirror.json.gz
+// contains normalized search names for proper front-end lookup of drivers with punctuation and accents.
+// Real-world case: "Sven B." should normalize to "sven b." (dot preserved), "Mahé Birault" to "mahe birault".
+func TestExportShardedIndex_MirrorContainsNormalizedNames(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Build index with drivers that have punctuation and accents
+	index := DriverIndex{
+		"4000001": []DriverResult{
+			{
+				Name:       "Sven B.",
+				PathID:     "4000001",
+				Avatar:     "sven.png",
+				Country:    "Germany",
+				Team:       "Team X",
+				Rank:       "S",
+				Position:   1,
+				LapTime:    "1:23.456",
+				Car:        "Ferrari",
+				CarClass:   "GT3",
+				Difficulty: "Expert",
+				TrackID:    "1234",
+				DateTime:   "2026-04-18T10:00:00Z",
+			},
+		},
+		"4000002": []DriverResult{
+			{
+				Name:       "Mahé Birault",
+				PathID:     "4000002",
+				Avatar:     "mahe.png",
+				Country:    "France",
+				Team:       "Team Y",
+				Rank:       "A",
+				Position:   2,
+				LapTime:    "1:24.123",
+				Car:        "McLaren",
+				CarClass:   "GT3",
+				Difficulty: "Expert",
+				TrackID:    "1234",
+				DateTime:   "2026-04-18T10:00:00Z",
+			},
+		},
+	}
+
+	_, err := ExportShardedIndex(index)
+	if err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load and verify mirror file
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+
+	// Convert to set for easier lookup
+	mirrorSet := make(map[string]bool)
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+
+	// Verify normalized names are in mirror
+	if !mirrorSet["sven b."] {
+		t.Errorf("Mirror should contain 'sven b.', got: %v", mirrors)
+	}
+	if !mirrorSet["mahe birault"] {
+		t.Errorf("Mirror should contain 'mahe birault', got: %v", mirrors)
+	}
+
+	// Verify the SearchName field was populated correctly in names index
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("Failed to load names index: %v", err)
+	}
+
+	if names["sven b."][0].Name != "Sven B." {
+		t.Errorf("Name for 'sven b.' = %q, expected 'Sven B.'", names["sven b."][0].Name)
+	}
+	if names["mahe birault"][0].Name != "Mahé Birault" {
+		t.Errorf("Name for 'mahe birault' = %q, expected 'Mahé Birault'", names["mahe birault"][0].Name)
+	}
+
+	// Front-end flow verification:
+	// 1. User types "Sven B." (clicking on a result)
+	// 2. Front-end normalizes it: "Sven B." → "sven b." (dot preserved)
+	// 3. Front-end looks for "sven b." in mirror → FOUND ✓
+	// 4. Front-end loads b.json.gz for metadata, shards/b.json.gz for entries
+	// 5. Entries carry path_id so front-end can distinguish same-name drivers
 }
 
 func TestExportShardedIndex_CreateShardDirectoryError(t *testing.T) {
@@ -734,59 +1105,224 @@ func TestExportShardedIndex_ClientLookupFlow(t *testing.T) {
 		t.Fatalf("ExportShardedIndex failed: %v", err)
 	}
 
+	// Step 1: Load mirror (front-end gets this once at startup)
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror index: %v", err)
+	}
+	mirrorSet := make(map[string]bool)
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+
+	// Step 2: Simulate front-end search → mirror → letter shard → metadata + entries
+	lookups := []struct {
+		userSearch  string // what the user types or clicks
+		searchName  string // normalized search name
+		displayName string
+		shardKey    string
+	}{
+		{userSearch: "Alice Speed", searchName: "alice speed", displayName: "Alice Speed", shardKey: "a"},
+		{userSearch: "Zoe Zoom", searchName: "zoe zoom", displayName: "Zoe Zoom", shardKey: "z"},
+		{userSearch: "3Fast", searchName: "3fast", displayName: "3Fast", shardKey: "_"},
+	}
+
 	names, err := LoadShardedNamesIndex()
 	if err != nil {
 		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
 	}
-	lookups := []struct {
-		lowerName   string
-		displayName string
-		shardKey    string
-	}{
-		{lowerName: "alice speed", displayName: "Alice Speed", shardKey: "a"},
-		{lowerName: "zoe zoom", displayName: "Zoe Zoom", shardKey: "z"},
-		{lowerName: "3fast", displayName: "3Fast", shardKey: "_"},
-	}
 
 	for _, lookup := range lookups {
-		if names[lookup.lowerName].Name != lookup.displayName {
-			t.Fatalf("Display name for %q = %q, expected %q", lookup.lowerName, names[lookup.lowerName].Name, lookup.displayName)
+		// Front-end: check search name exists in mirror
+		if !mirrorSet[lookup.searchName] {
+			t.Fatalf("Mirror should contain %q (searched by %q)", lookup.searchName, lookup.userSearch)
 		}
+
+		// Front-end: use search name to get display identities from names index
+		identities := names[lookup.searchName]
+		if len(identities) == 0 || identities[0].Name != lookup.displayName {
+			t.Fatalf("Display name for %q = %+v, expected %q",
+				lookup.searchName, identities, lookup.displayName)
+		}
+
+		// Front-end: load results from shard by search name
 		shard, err := LoadShard(lookup.shardKey)
 		if err != nil {
 			t.Fatalf("LoadShard(%s) failed: %v", lookup.shardKey, err)
 		}
-		results, ok := shard[lookup.lowerName]
+		results, ok := shard[lookup.searchName]
 		if !ok {
-			t.Fatalf("Expected %q in shard %q", lookup.lowerName, lookup.shardKey)
+			t.Fatalf("Expected %q in shard %q", lookup.searchName, lookup.shardKey)
 		}
 		if len(results) == 0 || results[0].TrackID == "" {
-			t.Fatalf("Unexpected shard payload for %q: %+v", lookup.lowerName, results)
+			t.Fatalf("Unexpected shard payload for %q: %+v", lookup.searchName, results)
 		}
 	}
 }
 
-func TestLoadShardedNamesIndex_LegacyFormatFallback(t *testing.T) {
+// TestExportShardedIndex_SameNameDifferentPathIDs verifies that two drivers
+// with the same display name but different pathIDs are:
+// - listed once in the mirror (one search name)
+// - stored as two separate identities in the metadata shard
+// - stored with all results (carrying their respective path_id) in the result shard
+func TestExportShardedIndex_SameNameDifferentPathIDs(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
-	legacy := map[string]string{
-		"alice speed": "Alice Speed",
-		"3fast":       "3Fast",
+	// Two "Bob Dylan" drivers with different pathIDs, avatars, countries
+	index := DriverIndex{
+		"7000001": {
+			{Name: "Bob Dylan", PathID: "7000001", Avatar: "avatar_bob1.jpg", Country: "USA", Team: "Team A", Rank: "S",
+				Position: 1, LapTime: "1:20.000", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+			{Name: "Bob Dylan", PathID: "7000001", Avatar: "avatar_bob1.jpg", Country: "USA", Team: "Team A", Rank: "S",
+				Position: 3, LapTime: "1:22.000", TrackID: "2222", ClassID: "1703", TotalEntries: 1, Found: true},
+		},
+		"7000002": {
+			{Name: "Bob Dylan", PathID: "7000002", Avatar: "avatar_bob2.jpg", Country: "France", Team: "Team B", Rank: "A",
+				Position: 2, LapTime: "1:21.000", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+		},
 	}
-	if _, err := writeGzipJSON(ShardedNamesFile, legacy); err != nil {
-		t.Fatalf("Failed to write legacy names index: %v", err)
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// 1. Mirror should contain exactly one entry for "bob dylan"
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+	count := 0
+	for _, m := range mirrors {
+		if m == "bob dylan" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("Mirror should contain exactly 1 'bob dylan' entry, got %d; mirror: %v", count, mirrors)
+	}
+
+	// 2. Metadata shard should have TWO identities under "bob dylan"
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+	identities := names["bob dylan"]
+	if len(identities) != 2 {
+		t.Fatalf("Expected 2 identities for 'bob dylan', got %d: %+v", len(identities), identities)
+	}
+
+	// Verify both pathIDs are present with correct metadata
+	idMap := make(map[string]DriverIdentity)
+	for _, id := range identities {
+		idMap[id.PathID] = id
+	}
+	bob1 := idMap["7000001"]
+	if bob1.Name != "Bob Dylan" || bob1.Country != "USA" || bob1.Avatar != "avatar_bob1.jpg" {
+		t.Fatalf("Bob #1 metadata wrong: %+v", bob1)
+	}
+	bob2 := idMap["7000002"]
+	if bob2.Name != "Bob Dylan" || bob2.Country != "France" || bob2.Avatar != "avatar_bob2.jpg" {
+		t.Fatalf("Bob #2 metadata wrong: %+v", bob2)
+	}
+
+	// 3. Letter names shard should also have TWO identities
+	bLetterNames, err := LoadLetterNames("b")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(b) failed: %v", err)
+	}
+	if len(bLetterNames["bob dylan"]) != 2 {
+		t.Fatalf("Letter shard 'b' should have 2 identities for 'bob dylan', got %d", len(bLetterNames["bob dylan"]))
+	}
+
+	// 4. Result shard should contain ALL 3 results under "bob dylan"
+	bShard, err := LoadShard("b")
+	if err != nil {
+		t.Fatalf("LoadShard(b) failed: %v", err)
+	}
+	results := bShard["bob dylan"]
+	if len(results) != 3 {
+		t.Fatalf("Expected 3 results for 'bob dylan', got %d: %+v", len(results), results)
+	}
+
+	// Verify each result carries its own PathID so the front-end can group them
+	resultsByPathID := make(map[string]int)
+	for _, r := range results {
+		resultsByPathID[r.PathID]++
+	}
+	if resultsByPathID["7000001"] != 2 {
+		t.Fatalf("Expected 2 results for PathID 7000001, got %d", resultsByPathID["7000001"])
+	}
+	if resultsByPathID["7000002"] != 1 {
+		t.Fatalf("Expected 1 result for PathID 7000002, got %d", resultsByPathID["7000002"])
+	}
+}
+
+func TestLoadShardedNamesIndex_IgnoresStaleMonolithicFile(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(ShardedIndexDir, "driver_index.json.gz"), []byte("stale-monolithic-data"), 0644); err != nil {
+		t.Fatalf("Failed to write stale monolithic names file: %v", err)
+	}
+
+	letter := DriverNamesIndex{
+		"alice speed": {{Name: "Alice Speed", PathID: "1001"}},
+	}
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "a.json.gz"), letter); err != nil {
+		t.Fatalf("Failed to write letter names file: %v", err)
 	}
 
 	loaded, err := LoadShardedNamesIndex()
 	if err != nil {
-		t.Fatalf("LoadShardedNamesIndex failed for legacy format: %v", err)
+		t.Fatalf("LoadShardedNamesIndex failed for letter-sharded names: %v", err)
 	}
-	if loaded["alice speed"].Name != "Alice Speed" {
-		t.Fatalf("Converted legacy display name mismatch: %+v", loaded["alice speed"])
+	if len(loaded["alice speed"]) != 1 || loaded["alice speed"][0].Name != "Alice Speed" {
+		t.Fatalf("Letter-sharded display name mismatch: %+v", loaded["alice speed"])
 	}
-	if loaded["alice speed"].Country != "" || loaded["alice speed"].Team != "" || loaded["alice speed"].Rank != "" {
-		t.Fatalf("Legacy fallback should not invent metadata: %+v", loaded["alice speed"])
+	if loaded["alice speed"][0].PathID != "1001" {
+		t.Fatalf("Letter-sharded PathID mismatch: %+v", loaded["alice speed"])
+	}
+}
+
+func TestLoadShardedNamesIndex_FallbackToLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(ShardedIndexDir, 0755); err != nil {
+		t.Fatalf("Failed to create index directory: %v", err)
+	}
+
+	aNames := DriverNamesIndex{
+		"alice speed": {{Name: "Alice Speed", PathID: "1001"}},
+	}
+	zNames := DriverNamesIndex{
+		"zoe zoom": {{Name: "Zoe Zoom", PathID: "1002"}},
+	}
+
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "a.json.gz"), aNames); err != nil {
+		t.Fatalf("Failed to write a letter file: %v", err)
+	}
+	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "z.json.gz"), zNames); err != nil {
+		t.Fatalf("Failed to write z letter file: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex fallback failed: %v", err)
+	}
+
+	if len(names) != 2 {
+		t.Fatalf("Loaded names count = %d, expected 2", len(names))
+	}
+	if names["alice speed"][0].Name != "Alice Speed" {
+		t.Fatalf("Unexpected Alice fallback name: %+v", names["alice speed"])
+	}
+	if names["zoe zoom"][0].Name != "Zoe Zoom" {
+		t.Fatalf("Unexpected Zoe fallback name: %+v", names["zoe zoom"])
 	}
 }
 
@@ -795,8 +1331,8 @@ func TestExportShardedIndex_RemovesStaleShardFiles(t *testing.T) {
 	defer cleanup()
 
 	initial := DriverIndex{
-		"alice speed": {{Name: "Alice Speed", TrackID: "1111", ClassID: "1703", Found: true}},
-		"bob racer":   {{Name: "Bob Racer", TrackID: "1111", ClassID: "1703", Found: true}},
+		"5000001": {{Name: "Alice Speed", PathID: "5000001", TrackID: "1111", ClassID: "1703", Found: true}},
+		"5000002": {{Name: "Bob Racer", PathID: "5000002", TrackID: "1111", ClassID: "1703", Found: true}},
 	}
 	if _, err := ExportShardedIndex(initial); err != nil {
 		t.Fatalf("Initial ExportShardedIndex failed: %v", err)
@@ -806,7 +1342,7 @@ func TestExportShardedIndex_RemovesStaleShardFiles(t *testing.T) {
 	}
 
 	updated := DriverIndex{
-		"alice speed": {{Name: "Alice Speed", TrackID: "1111", ClassID: "1703", Found: true}},
+		"5000001": {{Name: "Alice Speed", PathID: "5000001", TrackID: "1111", ClassID: "1703", Found: true}},
 	}
 	if _, err := ExportShardedIndex(updated); err != nil {
 		t.Fatalf("Updated ExportShardedIndex failed: %v", err)
@@ -823,8 +1359,273 @@ func TestExportShardedIndex_RemovesStaleShardFiles(t *testing.T) {
 		t.Fatalf("Merged shard count = %d, expected 1", len(merged))
 	}
 	if _, exists := merged["bob racer"]; exists {
-		t.Fatal("Stale bob racer entry should not remain after shard cleanup")
+		t.Fatal("Stale Bob Racer entry should not remain after shard cleanup")
 	}
+}
+
+// =============================================================================
+// LETTER-SHARDED NAMES INDEX TESTS (DATA INTEGRITY CRITICAL)
+// =============================================================================
+
+func TestExportShardedIndex_CreatesLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify all required letter files exist
+	expectedLetters := []string{"a", "b", "z", "_"}
+	for _, letter := range expectedLetters {
+		letterFile := filepath.Join(ShardedIndexDir, letter+".json.gz")
+		if _, err := os.Stat(letterFile); err != nil {
+			t.Fatalf("Expected letter file %s not found: %v", letterFile, err)
+		}
+	}
+
+	// Verify files are valid gzip JSON
+	for _, letter := range expectedLetters {
+		if _, err := LoadLetterNames(letter); err != nil {
+			t.Fatalf("Failed to load letter file %s: %v", letter, err)
+		}
+	}
+}
+
+func TestExportShardedIndex_LetterFilesContainCorrectDrivers(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load individual letter files and verify correct drivers
+	aShard, err := LoadLetterNames("a")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(a) failed: %v", err)
+	}
+	if _, exists := aShard["alice speed"]; !exists {
+		t.Fatalf("Expected Alice Speed in shard a, got entries: %v", getKeys(aShard))
+	}
+	if _, exists := aShard["bob racer"]; exists {
+		t.Fatal("Bob Racer should not be in shard a")
+	}
+	if len(aShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard a, got %d", len(aShard))
+	}
+
+	bShard, err := LoadLetterNames("b")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(b) failed: %v", err)
+	}
+	if _, exists := bShard["bob racer"]; !exists {
+		t.Fatalf("Expected Bob Racer in shard b, got entries: %v", getKeys(bShard))
+	}
+	if len(bShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard b, got %d", len(bShard))
+	}
+
+	zShard, err := LoadLetterNames("z")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(z) failed: %v", err)
+	}
+	if _, exists := zShard["zoe zoom"]; !exists {
+		t.Fatalf("Expected Zoe Zoom in shard z, got entries: %v", getKeys(zShard))
+	}
+	if len(zShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard z, got %d", len(zShard))
+	}
+
+	underscoreShard, err := LoadLetterNames("_")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(_) failed: %v", err)
+	}
+	if _, exists := underscoreShard["3fast"]; !exists {
+		t.Fatal("Expected 3Fast in shard _")
+	}
+}
+
+func TestExportShardedIndex_LetterFilesPreserveMetadata(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	aShard, err := LoadLetterNames("a")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(a) failed: %v", err)
+	}
+
+	aliceIdentities := aShard["alice speed"]
+	if len(aliceIdentities) != 1 {
+		t.Fatalf("Expected 1 identity for alice speed, got %d", len(aliceIdentities))
+	}
+	aliceIdentity := aliceIdentities[0]
+	if aliceIdentity.Name != "Alice Speed" {
+		t.Fatalf("Expected Name='Alice Speed', got %q", aliceIdentity.Name)
+	}
+	if aliceIdentity.Avatar != "https://game.raceroom.com/avatar/alice.jpg" {
+		t.Fatalf("Expected avatar URL, got %q", aliceIdentity.Avatar)
+	}
+	if aliceIdentity.Country != "Germany" {
+		t.Fatalf("Expected Country='Germany', got %q", aliceIdentity.Country)
+	}
+	if aliceIdentity.Team != "Team A" {
+		t.Fatalf("Expected Team='Team A', got %q", aliceIdentity.Team)
+	}
+	if aliceIdentity.Rank != "S" {
+		t.Fatalf("Expected Rank='S', got %q", aliceIdentity.Rank)
+	}
+	if aliceIdentity.PathID != "2000001" {
+		t.Fatalf("Expected PathID='2000001', got %q", aliceIdentity.PathID)
+	}
+}
+
+func TestExportShardedIndex_LetterFilesRoundTripMatchesMergedLoader(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load via names loader (letter-sharded source of truth)
+	loadedNames, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+
+	// Load and merge all letter files
+	merged, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed: %v", err)
+	}
+
+	// Verify counts match
+	if len(merged) != len(loadedNames) {
+		t.Fatalf("Merged letter names count = %d, loaded names count = %d", len(merged), len(loadedNames))
+	}
+
+	// Verify all entries match exactly
+	for lowerName, expectedIdentities := range loadedNames {
+		actualIdentities, exists := merged[lowerName]
+		if !exists {
+			t.Fatalf("Driver %q missing from letter files", lowerName)
+		}
+		if !reflect.DeepEqual(actualIdentities, expectedIdentities) {
+			t.Fatalf("Identity mismatch for %q: got %+v, expected %+v", lowerName, actualIdentities, expectedIdentities)
+		}
+	}
+
+	// Verify no extra entries in merged
+	for lowerName := range merged {
+		if _, exists := loadedNames[lowerName]; !exists {
+			t.Fatalf("Extra driver %q in merged names not in loaded names", lowerName)
+		}
+	}
+}
+
+func TestExportShardedIndex_LetterFilesNoDataLoss(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Create index with drivers from all letter categories (keyed by pathID)
+	index := DriverIndex{
+		"6000001": {{Name: "Alice", PathID: "6000001", Avatar: "avatar1", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000002": {{Name: "Bob", PathID: "6000002", Avatar: "avatar2", Position: 2, LapTime: "1:21", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000003": {{Name: "Charlie", PathID: "6000003", Avatar: "avatar3", Position: 3, LapTime: "1:22", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000004": {{Name: "Zoe", PathID: "6000004", Avatar: "avatar4", Position: 4, LapTime: "1:23", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000005": {{Name: "3Fast", PathID: "6000005", Avatar: "avatar5", Position: 5, LapTime: "1:24", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000006": {{Name: "_Special", PathID: "6000006", Avatar: "avatar6", Position: 6, LapTime: "1:25", TrackID: "1", ClassID: "1703", Found: true}},
+		"6000007": {{Name: "XYZ", PathID: "6000007", Avatar: "avatar7", Position: 7, LapTime: "1:26", TrackID: "1", ClassID: "1703", Found: true}},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify all drivers can be loaded from letter files
+	driverMap := make(map[string]bool)
+	for _, letter := range []string{"a", "b", "c", "x", "z", "_"} {
+		letterNames, err := LoadLetterNames(letter)
+		if err != nil {
+			t.Logf("Letter %s: %v (may be empty)", letter, err)
+			continue
+		}
+		for nameKey := range letterNames {
+			driverMap[nameKey] = true
+		}
+	}
+
+	// Verify we have all drivers (keyed by lowercase name in exported files)
+	expectedDrivers := []string{"alice", "bob", "charlie", "zoe", "3fast", "_special", "xyz"}
+	for _, name := range expectedDrivers {
+		if !driverMap[name] {
+			t.Fatalf("Driver %q not found in any letter file", name)
+		}
+	}
+
+	if len(driverMap) != len(expectedDrivers) {
+		t.Fatalf("Expected %d drivers, found %d: %v", len(expectedDrivers), len(driverMap), driverMap)
+	}
+}
+
+func TestExportShardedIndex_RemovesStaleLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// First export with many drivers
+	initial := DriverIndex{
+		"7000001": {{Name: "Alice Speed", PathID: "7000001", TrackID: "1111", ClassID: "1703", Found: true}},
+		"7000002": {{Name: "Bob Racer", PathID: "7000002", TrackID: "1111", ClassID: "1703", Found: true}},
+		"7000003": {{Name: "Zoe Zoom", PathID: "7000003", TrackID: "1111", ClassID: "1703", Found: true}},
+	}
+	if _, err := ExportShardedIndex(initial); err != nil {
+		t.Fatalf("Initial ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify z.json.gz exists
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "z.json.gz")); err != nil {
+		t.Fatalf("Expected z.json.gz after initial export: %v", err)
+	}
+
+	// Second export without 'z' drivers
+	updated := DriverIndex{
+		"7000001": {{Name: "Alice Speed", PathID: "7000001", TrackID: "1111", ClassID: "1703", Found: true}},
+		"7000002": {{Name: "Bob Racer", PathID: "7000002", TrackID: "1111", ClassID: "1703", Found: true}},
+	}
+	if _, err := ExportShardedIndex(updated); err != nil {
+		t.Fatalf("Updated ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify z.json.gz is removed
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "z.json.gz")); !os.IsNotExist(err) {
+		t.Fatalf("Expected z.json.gz to be removed, got err=%v", err)
+	}
+
+	// Verify a.json.gz and b.json.gz still exist
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "a.json.gz")); err != nil {
+		t.Fatalf("Expected a.json.gz to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "b.json.gz")); err != nil {
+		t.Fatalf("Expected b.json.gz to exist: %v", err)
+	}
+}
+
+func getKeys(m DriverNamesIndex) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestExportStatusData_WritesJSONFile(t *testing.T) {

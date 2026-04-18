@@ -30,6 +30,7 @@ const (
 type DriverStatsEntry struct {
 	DriverKey     string `json:"driver_key"`
 	Name          string `json:"name"`
+	Avatar        string `json:"avatar"`
 	Country       string `json:"country"`
 	Team          string `json:"team"`
 	Rank          string `json:"rank"`
@@ -78,6 +79,7 @@ func newDriverStatsEntry(lowerName string, identity DriverIdentity) *DriverStats
 	return &DriverStatsEntry{
 		DriverKey: lowerName,
 		Name:      name,
+		Avatar:    identity.Avatar,
 		Country:   identity.Country,
 		Team:      identity.Team,
 		Rank:      identity.Rank,
@@ -202,10 +204,17 @@ func ExportStatsFromIndex(index DriverIndex) error {
 	overallStats := make(map[string]*DriverStatsEntry)
 
 	for lowerName, results := range index {
-		identity := identities[lowerName]
+		// Use first identity for metadata (stats aggregate across same-name drivers)
+		var identity DriverIdentity
+		if ids := identities[lowerName]; len(ids) > 0 {
+			identity = ids[0]
+		}
 		if len(results) > 0 {
 			if identity.Name == "" && results[0].Name != "" {
 				identity.Name = results[0].Name
+			}
+			if identity.Avatar == "" && results[0].Avatar != "" {
+				identity.Avatar = results[0].Avatar
 			}
 			if identity.Country == "" && results[0].Country != "" {
 				identity.Country = results[0].Country

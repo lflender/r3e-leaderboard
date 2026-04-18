@@ -1,9 +1,10 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -46,24 +47,24 @@ func TestBuildDriverIndex(t *testing.T) {
 		t.Fatal("Index should not be empty")
 	}
 
-	// "Test Driver 1" appears twice in sample data
-	driver1 := strings.ToLower("Test Driver 1")
-	if entries, ok := index[driver1]; ok {
+	// "Test Driver 1" appears twice in sample data (keyed by pathID)
+	driver1ID := "1000001"
+	if entries, ok := index[driver1ID]; ok {
 		if len(entries) != 2 {
-			t.Errorf("Expected 2 entries for 'Test Driver 1', got %d", len(entries))
+			t.Errorf("Expected 2 entries for 'Test Driver 1' (pathID %s), got %d", driver1ID, len(entries))
 		}
 	} else {
-		t.Error("'Test Driver 1' not found in index")
+		t.Errorf("'Test Driver 1' (pathID %s) not found in index", driver1ID)
 	}
 
 	// "Test Driver 2" appears once
-	driver2 := strings.ToLower("Test Driver 2")
-	if entries, ok := index[driver2]; ok {
+	driver2ID := "1000002"
+	if entries, ok := index[driver2ID]; ok {
 		if len(entries) != 1 {
-			t.Errorf("Expected 1 entry for 'Test Driver 2', got %d", len(entries))
+			t.Errorf("Expected 1 entry for 'Test Driver 2' (pathID %s), got %d", driver2ID, len(entries))
 		}
 	} else {
-		t.Error("'Test Driver 2' not found in index")
+		t.Errorf("'Test Driver 2' (pathID %s) not found in index", driver2ID)
 	}
 }
 
@@ -81,11 +82,11 @@ func TestBuildDriverIndex_DriverResultFields(t *testing.T) {
 
 	index, _, _, _ := buildDriverIndex(tracks)
 
-	// Get first driver's results
-	driver1 := strings.ToLower("Test Driver 1")
-	entries, ok := index[driver1]
+	// Get first driver's results (keyed by pathID)
+	driver1ID := "1000001"
+	entries, ok := index[driver1ID]
 	if !ok || len(entries) == 0 {
-		t.Fatal("'Test Driver 1' not found in index")
+		t.Fatalf("'Test Driver 1' (pathID %s) not found in index", driver1ID)
 	}
 
 	// Check first entry details
@@ -215,10 +216,10 @@ func TestBuildDriverIndex_EmptyData(t *testing.T) {
 }
 
 func TestBuildDriverIndex_MultipleTracksClasses(t *testing.T) {
-	// Create data for two different tracks
+	// Create data for two different tracks with driver paths
 	driverData := func(name string, pos int) map[string]interface{} {
 		return map[string]interface{}{
-			"driver": map[string]interface{}{"name": name},
+			"driver": map[string]interface{}{"name": name, "path": testDriverPath(name)},
 			"index":  float64(pos),
 		}
 	}
@@ -251,14 +252,14 @@ func TestBuildDriverIndex_MultipleTracksClasses(t *testing.T) {
 		t.Errorf("Expected 3 unique drivers, got %d", len(index))
 	}
 
-	// "Common Driver" should have 2 entries (one per track)
-	common := strings.ToLower("Common Driver")
-	if entries, ok := index[common]; ok {
+	// "Common Driver" should have 2 entries (one per track), keyed by pathID
+	commonID := testPathID("Common Driver")
+	if entries, ok := index[commonID]; ok {
 		if len(entries) != 2 {
 			t.Errorf("Expected 2 entries for 'Common Driver', got %d", len(entries))
 		}
 	} else {
-		t.Error("'Common Driver' not found in index")
+		t.Errorf("'Common Driver' (pathID %s) not found in index", commonID)
 	}
 
 	// Should have 2 unique tracks
@@ -272,35 +273,36 @@ func TestBuildDriverIndex_MultipleTracksClasses(t *testing.T) {
 	}
 }
 
-func TestBuildDriverIndex_CaseInsensitiveKeys(t *testing.T) {
-	// Same driver name with different case should be consolidated
+func TestBuildDriverIndex_SamePathIDMergesEntries(t *testing.T) {
+	// Same driver (same path) with different name cases should merge under one pathID
+	samePath := "https://game.raceroom.com/users/info/5555555/"
 	tracks := []TrackInfo{
 		{
 			Name:    "Track",
 			TrackID: "1111",
 			ClassID: "1703",
 			Data: []map[string]interface{}{
-				{"driver": map[string]interface{}{"name": "John Doe"}, "index": float64(0)},
-				{"driver": map[string]interface{}{"name": "JOHN DOE"}, "index": float64(1)},
-				{"driver": map[string]interface{}{"name": "john doe"}, "index": float64(2)},
+				{"driver": map[string]interface{}{"name": "John Doe", "path": samePath}, "index": float64(0)},
+				{"driver": map[string]interface{}{"name": "JOHN DOE", "path": samePath}, "index": float64(1)},
+				{"driver": map[string]interface{}{"name": "john doe", "path": samePath}, "index": float64(2)},
 			},
 		},
 	}
 
 	index, _, _, _ := buildDriverIndex(tracks)
 
-	// Should have only 1 driver (case-insensitive)
+	// Should have only 1 driver (same pathID)
 	if len(index) != 1 {
-		t.Errorf("Expected 1 driver (case-insensitive), got %d", len(index))
+		t.Errorf("Expected 1 driver (same pathID), got %d", len(index))
 	}
 
 	// Should have 3 entries for that driver
-	if entries, ok := index["john doe"]; ok {
+	if entries, ok := index["5555555"]; ok {
 		if len(entries) != 3 {
-			t.Errorf("Expected 3 entries for 'john doe', got %d", len(entries))
+			t.Errorf("Expected 3 entries for pathID 5555555, got %d", len(entries))
 		}
 	} else {
-		t.Error("'john doe' not found in index")
+		t.Error("pathID '5555555' not found in index")
 	}
 }
 
@@ -355,11 +357,25 @@ func TestBuildDriverIndex_EmptyDriverName(t *testing.T) {
 	}
 }
 
+// testPathID returns a deterministic numeric path ID for a driver name, used in tests.
+// This ensures the same driver name always maps to the same pathID across calls.
+func testPathID(name string) string {
+	h := uint32(0)
+	for _, c := range name {
+		h = h*31 + uint32(c)
+	}
+	return fmt.Sprintf("%d", 1000000+h%9000000)
+}
+
+func testDriverPath(name string) string {
+	return "https://game.raceroom.com/users/info/" + testPathID(name) + "/"
+}
+
 func testTrackInfo(name, trackID, classID string, drivers ...string) TrackInfo {
 	data := make([]map[string]interface{}, 0, len(drivers))
 	for i, driver := range drivers {
 		data = append(data, map[string]interface{}{
-			"driver":           map[string]interface{}{"name": driver},
+			"driver":           map[string]interface{}{"name": driver, "avatar": "https://game.raceroom.com/avatar/" + driver + ".jpg", "path": testDriverPath(driver)},
 			"index":            float64(i),
 			"laptime":          "1:23.456",
 			"relative_laptime": "+0.100s",
@@ -410,11 +426,39 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if len(names) != len(merged) {
 		t.Fatalf("Names index size = %d, expected %d", len(names), len(merged))
 	}
-	if names["charlie pace"].Name != "Charlie Pace" {
-		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	if names["charlie pace"][0].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"][0].Name)
 	}
-	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+	if names["charlie pace"][0].Country != "Germany" || names["charlie pace"][0].Team != "Test Team" || names["charlie pace"][0].Rank != "S" {
 		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
+	}
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	if len(mirrors) < len(merged) {
+		t.Fatalf("Mirror count = %d, expected at least %d", len(mirrors), len(merged))
+	}
+	// Verify mirror entries are sorted
+	for i := 1; i < len(mirrors); i++ {
+		if mirrors[i] < mirrors[i-1] {
+			t.Fatalf("Mirror entries not sorted: %v", mirrors)
+		}
+	}
+
+	// Verify letter-sharded names files exist and can be merged back to the monolithic
+	letterNames, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed: %v", err)
+	}
+	if len(letterNames) != len(names) {
+		t.Fatalf("Letter names count = %d, expected %d (monolithic count)", len(letterNames), len(names))
+	}
+	for nameKey, expectedIdentities := range names {
+		actualIdentities, exists := letterNames[nameKey]
+		if !exists {
+			t.Fatalf("Driver %q missing from letter files", nameKey)
+		}
+		if !reflect.DeepEqual(actualIdentities, expectedIdentities) {
+			t.Fatalf("Identity mismatch for %q: got %+v, expected %+v", nameKey, actualIdentities, expectedIdentities)
+		}
 	}
 
 	if len(merged) != 4 {
@@ -504,11 +548,30 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	if _, exists := names["bob racer"]; exists {
 		t.Fatal("Bob Racer should have been removed from names index")
 	}
-	if names["charlie pace"].Name != "Charlie Pace" {
-		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"].Name)
+	if names["charlie pace"][0].Name != "Charlie Pace" {
+		t.Fatalf("Unexpected Charlie display name: %q", names["charlie pace"][0].Name)
 	}
-	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
+	if names["charlie pace"][0].Country != "Germany" || names["charlie pace"][0].Team != "Test Team" || names["charlie pace"][0].Rank != "S" {
 		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
+	}
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	if len(mirrors) != 2 {
+		t.Fatalf("Expected 2 mirror entries after incremental update, got %d", len(mirrors))
+	}
+
+	// Verify letter-sharded names are updated correctly (Bob removed, Charlie added)
+	letterNames, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed after incremental update: %v", err)
+	}
+	if len(letterNames) != len(names) {
+		t.Fatalf("Letter names count = %d, expected %d after incremental update", len(letterNames), len(names))
+	}
+	if _, exists := letterNames["bob racer"]; exists {
+		t.Fatal("Bob Racer should be removed from letter files after incremental update")
+	}
+	if _, exists := letterNames["charlie pace"]; !exists {
+		t.Fatal("Charlie Pace should exist in letter files after incremental update")
 	}
 
 	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); !os.IsNotExist(err) {
@@ -538,5 +601,127 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 
 	if _, err := os.Stat(StatsOverallPoleFile); !os.IsNotExist(err) {
 		t.Fatalf("Stats should not be exported during IncrementalIndexUpdate, got err=%v", err)
+	}
+}
+
+func TestIncrementalIndexUpdate_PreservesUnchangedCombinations(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer")
+	comboB := testTrackInfo("Track B", "2222", "1757", "Ömer Binikli", "Zoe Zoom")
+
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := BuildAndExportIndex([]TrackInfo{comboA, comboB}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	beforeNames, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex before update failed: %v", err)
+	}
+	if len(beforeNames) != 4 {
+		t.Fatalf("Expected 4 drivers before update, got %d", len(beforeNames))
+	}
+
+	updatedComboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Charlie Pace")
+	if err := cache.SaveTrackData(updatedComboA); err != nil {
+		t.Fatalf("SaveTrackData updated comboA failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	afterNames, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex after update failed: %v", err)
+	}
+
+	// Expected set after update: Alice + Charlie + Ömer + Zoe.
+	if len(afterNames) != 4 {
+		t.Fatalf("Expected 4 drivers after update (unchanged combo preserved), got %d", len(afterNames))
+	}
+	if _, ok := afterNames["charlie pace"]; !ok {
+		t.Fatal("Expected Charlie Pace to be present after incremental update")
+	}
+	if _, ok := afterNames["bob racer"]; ok {
+		t.Fatal("Bob Racer should be removed after incremental update")
+	}
+	if _, ok := afterNames["zoe zoom"]; !ok {
+		t.Fatal("Zoe Zoom from unchanged combo should still be present after incremental update")
+	}
+	if _, ok := afterNames["omer binikli"]; !ok {
+		t.Fatal("Ömer Binikli from unchanged combo should still be present after incremental update")
+	}
+
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	mirrorSet := make(map[string]bool, len(mirrors))
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+	if !mirrorSet["ömer binikli"] {
+		t.Fatalf("Mirror should preserve accent alias for unchanged combo, got: %v", mirrors)
+	}
+	if !mirrorSet["omer binikli"] {
+		t.Fatalf("Mirror should preserve folded alias for unchanged combo, got: %v", mirrors)
+	}
+}
+
+func TestIncrementalIndexUpdate_WorksWithoutMonolithicNamesFile(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Bob Racer")
+	comboB := testTrackInfo("Track B", "2222", "1757", "Ömer Binikli", "Zoe Zoom")
+
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := BuildAndExportIndex([]TrackInfo{comboA, comboB}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	// Simulate caches that retain only letter-sharded names files.
+	if err := os.Remove("cache/index/driver_index.json.gz"); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("Failed to remove monolithic names file: %v", err)
+	}
+
+	updatedComboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed", "Charlie Pace")
+	if err := cache.SaveTrackData(updatedComboA); err != nil {
+		t.Fatalf("SaveTrackData updated comboA failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate should work without monolithic names file: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed after incremental update: %v", err)
+	}
+
+	if len(names) != 4 {
+		t.Fatalf("Expected 4 drivers after incremental update, got %d", len(names))
+	}
+	if _, ok := names["charlie pace"]; !ok {
+		t.Fatal("Expected Charlie Pace after incremental update")
+	}
+	if _, ok := names["omer binikli"]; !ok {
+		t.Fatal("Expected Ömer Binikli from unchanged combo after incremental update")
 	}
 }
