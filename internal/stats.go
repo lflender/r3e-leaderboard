@@ -204,7 +204,11 @@ func ExportStatsFromIndex(index DriverIndex) error {
 	overallStats := make(map[string]*DriverStatsEntry)
 
 	for lowerName, results := range index {
-		identity := identities[lowerName]
+		// Use first identity for metadata (stats aggregate across same-name drivers)
+		var identity DriverIdentity
+		if ids := identities[lowerName]; len(ids) > 0 {
+			identity = ids[0]
+		}
 		if len(results) > 0 {
 			if identity.Name == "" && results[0].Name != "" {
 				identity.Name = results[0].Name

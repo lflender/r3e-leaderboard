@@ -161,7 +161,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 	// Track unique track IDs (not names, as multiple layouts can share the same track)
 	uniqueTracksMap := make(map[string]bool)
 
-	// First pass: count entries per driver to pre-allocate slices
+	// First pass: count entries per driver (by pathID) to pre-allocate slices
 	driverCounts := make(map[string]int, estimatedDrivers)
 	trackEntryCounts := make(map[string]int, len(tracks))
 
@@ -180,12 +180,16 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 		for _, entry := range track.Data {
 			if driverInterface, exists := entry["driver"]; exists {
 				if driverMap, ok := driverInterface.(map[string]interface{}); ok {
-					if nameInterface, exists := driverMap["name"]; exists {
-						if name, ok := nameInterface.(string); ok && name != "" {
-							lowerName := strings.ToLower(name)
-							driverCounts[lowerName]++
-						}
+					name, _ := driverMap["name"].(string)
+					if name == "" {
+						continue
 					}
+					pathStr, _ := driverMap["path"].(string)
+					pathID := ExtractPathID(pathStr)
+					if pathID == "" {
+						pathID = strings.ToLower(name) // fallback for entries without path
+					}
+					driverCounts[pathID]++
 				}
 			}
 		}
@@ -201,10 +205,10 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 	}
 	driverCounts = nil
 
-	// Second pass: populate the index
+	// Second pass: populate the index (keyed by pathID)
 	for _, track := range tracks {
 		for _, entry := range track.Data {
-			// Extract driver name
+			// Extract driver info
 			driverInterface, driverExists := entry["driver"]
 			if !driverExists {
 				continue
@@ -215,14 +219,16 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				continue
 			}
 
-			nameInterface, nameExists := driverMap["name"]
-			if !nameExists {
+			name, _ := driverMap["name"].(string)
+			if name == "" {
 				continue
 			}
 
-			name, nameOk := nameInterface.(string)
-			if !nameOk || name == "" {
-				continue
+			// Extract pathID — the unique driver identifier
+			pathStr, _ := driverMap["path"].(string)
+			pathID := ExtractPathID(pathStr)
+			if pathID == "" {
+				pathID = strings.ToLower(name) // fallback for entries without path
 			}
 
 			// Get position
@@ -235,6 +241,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 
 			result := DriverResult{
 				Name:         name,
+				PathID:       pathID,
 				Position:     position,
 				TrackID:      track.TrackID,
 				ClassID:      track.ClassID,
@@ -298,9 +305,8 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				result.DateTime = dateTime
 			}
 
-			// Add to index (case-insensitive)
-			lowerName := strings.ToLower(name)
-			index[lowerName] = append(index[lowerName], result)
+			// Add to index by pathID
+			index[pathID] = append(index[pathID], result)
 		}
 	}
 
@@ -554,13 +560,16 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 			if !driverOk {
 				continue
 			}
-			nameInterface, nameExists := driverMap["name"]
-			if !nameExists {
+			name, _ := driverMap["name"].(string)
+			if name == "" {
 				continue
 			}
-			name, nameOk := nameInterface.(string)
-			if !nameOk || name == "" {
-				continue
+
+			// Extract pathID — the unique driver identifier
+			pathStr, _ := driverMap["path"].(string)
+			pathID := ExtractPathID(pathStr)
+			if pathID == "" {
+				pathID = strings.ToLower(name) // fallback for entries without path
 			}
 
 			// Get position
@@ -573,6 +582,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 			result := DriverResult{
 				Name:         name,
+				PathID:       pathID,
 				Position:     position,
 				TrackID:      trackInfo.TrackID,
 				ClassID:      trackInfo.ClassID,
@@ -621,8 +631,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 				result.DateTime = dateTime
 			}
 
-			lowerName := strings.ToLower(name)
-			index[lowerName] = append(index[lowerName], result)
+			index[pathID] = append(index[pathID], result)
 			addedEntries++
 		}
 		// Free trackInfo.Data immediately

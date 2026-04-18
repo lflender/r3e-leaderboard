@@ -59,7 +59,8 @@ func TestFetchCombinations_WithCancelledContext(t *testing.T) {
 func TestFetchCombinations_ProgressCallbackInvoked(t *testing.T) {
 	// This test verifies that progress callback is called
 	// Note: Requires mocking of fetchWithTimeout which isn't available without more structure
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	callCount := 0
 	progressCallback := func(data []TrackInfo) {
 		callCount++
@@ -83,7 +84,8 @@ func TestFetchCombinations_RateLimitingEnforced(t *testing.T) {
 
 	apiThrottle = 5 * time.Millisecond // Set short throttle for testing
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	trackConfigs := []TrackConfig{{Name: "Track 1", TrackID: "1671"}}
 	classConfigs := []CarClassConfig{
 		{Name: "Class 1", ClassID: "1703"},
@@ -104,7 +106,8 @@ func TestFetchCombinations_RateLimitingEnforced(t *testing.T) {
 // =============================================================================
 
 func TestFetchAllTrackDataWithCallback_ReturnsData(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	result := FetchAllTrackDataWithCallback(ctx, nil, "test-origin")
 
@@ -131,7 +134,8 @@ func TestFetchAllTrackDataWithCallback_WithCancelledContext(t *testing.T) {
 }
 
 func TestFetchAllTrackDataWithCallback_ProgressCallback(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	callCount := 0
 
 	progressCallback := func(data []TrackInfo) {
@@ -158,7 +162,8 @@ func TestFetchTargetedTrackDataWithCallback_EmptyTokens(t *testing.T) {
 }
 
 func TestFetchTargetedTrackDataWithCallback_InvalidTrackIDs(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	trackIDs := []string{"99999", "88888"} // Non-existent IDs
 
@@ -171,7 +176,8 @@ func TestFetchTargetedTrackDataWithCallback_InvalidTrackIDs(t *testing.T) {
 }
 
 func TestFetchTargetedTrackDataWithCallback_SingleTrackAllClasses(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Use a known track ID
 	trackIDs := []string{"1671"} // Monza
@@ -182,7 +188,8 @@ func TestFetchTargetedTrackDataWithCallback_SingleTrackAllClasses(t *testing.T) 
 }
 
 func TestFetchTargetedTrackDataWithCallback_TrackClassCouples(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Test track-class couple format "trackID-classID"
 	trackIDs := []string{"1671-1703"} // Monza + GTR 3
@@ -193,7 +200,8 @@ func TestFetchTargetedTrackDataWithCallback_TrackClassCouples(t *testing.T) {
 }
 
 func TestFetchTargetedTrackDataWithCallback_MixedTokens(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Mix of track-only and track-class tokens
 	trackIDs := []string{
@@ -238,7 +246,8 @@ func TestFetchTargetedTrackDataWithCallback_TokenSplitting(t *testing.T) {
 		{"5276-8600", "5276", "8600", "another couple"},
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
@@ -272,7 +281,8 @@ func TestFetchSpecificCombinations_EmptyList(t *testing.T) {
 }
 
 func TestFetchSpecificCombinations_InvalidTrack(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	allTracks := GetTracks()
 	allClasses := GetCarClasses()
 
@@ -309,7 +319,8 @@ func TestFetchSpecificCombinations_CancelledContext(t *testing.T) {
 func TestFetchSpecificCombinations_DoesNotPromoteCache(t *testing.T) {
 	// This test verifies that fetchSpecificCombinations does NOT promote temp cache
 	// (as documented in the function comment)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	allTracks := GetTracks()
 	allClasses := GetCarClasses()
 

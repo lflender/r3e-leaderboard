@@ -1,8 +1,25 @@
 package internal
 
+import "regexp"
+
+// pathIDRegex matches the trailing numeric segment of a RaceRoom user path URL.
+var pathIDRegex = regexp.MustCompile(`/(\d+)/?$`)
+
+// ExtractPathID extracts the numeric user ID from a RaceRoom driver path URL.
+// Example: "https://game.raceroom.com/users/info/8246810/" → "8246810"
+// Returns empty string if no numeric ID can be extracted.
+func ExtractPathID(path string) string {
+	m := pathIDRegex.FindStringSubmatch(path)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
 // DriverResult represents a found driver with their details
 type DriverResult struct {
 	Name         string `json:"name"`
+	PathID       string `json:"path_id"` // numeric user ID from driver.path URL
 	Avatar       string `json:"avatar"`
 	Position     int    `json:"position"`
 	LapTime      string `json:"laptime"`
@@ -20,7 +37,7 @@ type DriverResult struct {
 	TotalEntries int    `json:"total_entries"`
 }
 
-// DriverIndex maps driver names to all their results across tracks/classes
+// DriverIndex maps driver pathID (or fallback lowercase name) to all their results across tracks/classes.
 type DriverIndex map[string][]DriverResult
 
 // TrackConfig represents a track configuration

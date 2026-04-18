@@ -76,7 +76,8 @@ func TestLoadAllCachedData_HasRequiredFields(t *testing.T) {
 // =============================================================================
 
 func TestLoadAllTrackData_ReturnsData(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	result := LoadAllTrackData(ctx)
 
@@ -105,7 +106,8 @@ func TestLoadAllTrackData_WithCancelledContext(t *testing.T) {
 // =============================================================================
 
 func TestLoadAllTrackDataWithCallback_NilCallbacks(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Should not crash with nil callbacks
 	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
@@ -118,7 +120,8 @@ func TestLoadAllTrackDataWithCallback_NilCallbacks(t *testing.T) {
 }
 
 func TestLoadAllTrackDataWithCallback_ProgressCallbackInvoked(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	callCount := 0
 
 	progressCallback := func(data []TrackInfo) {
@@ -135,7 +138,8 @@ func TestLoadAllTrackDataWithCallback_ProgressCallbackInvoked(t *testing.T) {
 }
 
 func TestLoadAllTrackDataWithCallback_CacheCompleteCallbackInvoked(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	callCount := 0
 	var cachedData []TrackInfo
 	var needsFetching bool
@@ -160,7 +164,8 @@ func TestLoadAllTrackDataWithCallback_CacheCompleteCallbackInvoked(t *testing.T)
 }
 
 func TestLoadAllTrackDataWithCallback_BothCallbacks(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	progressCallCount := 0
 	cacheCompleteCallCount := 0
 
@@ -223,7 +228,8 @@ func TestLoadAllTrackDataWithCallback_CancelledDuringFetch(t *testing.T) {
 }
 
 func TestLoadAllTrackDataWithCallback_FourPhaseFlow(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	var phases []string
 
 	progressCallback := func(data []TrackInfo) {
@@ -257,7 +263,8 @@ func TestLoadAllTrackDataWithCallback_FourPhaseFlow(t *testing.T) {
 }
 
 func TestLoadAllTrackDataWithCallback_ReturnStructure(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
 
@@ -282,7 +289,8 @@ func TestLoadAllTrackDataWithCallback_ReturnStructure(t *testing.T) {
 }
 
 func TestLoadAllTrackDataWithCallback_CacheExpiriyCheck(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	var cacheStatus bool
 
 	cacheCompleteCallback := func(data []TrackInfo, needsFetch bool) {
@@ -306,7 +314,8 @@ func TestLoadAll_ClientClosed(t *testing.T) {
 	// Verify that LoadAllTrackDataWithCallback properly closes APIClient
 	// This is tested implicitly - if client isn't closed, resources leak
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
 
@@ -322,7 +331,8 @@ func TestLoadAll_ClientClosed(t *testing.T) {
 // =============================================================================
 
 func TestLoadAllTrackDataWithCallback_MemoryCleanup(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	// Load data - this should trigger cleanup
 	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
@@ -339,7 +349,8 @@ func TestLoadAllTrackDataWithCallback_MemoryCleanup(t *testing.T) {
 // =============================================================================
 
 func TestLoadAllTrackDataWithCallback_TempCachePromotion(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 
 	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
 
@@ -357,7 +368,8 @@ func TestLoadAllTrackDataWithCallback_TempCachePromotion(t *testing.T) {
 // =============================================================================
 
 func TestLoadAllTrackDataWithCallback_CacheCompleteBeforeProgress(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
 	order := []string{}
 
 	progressCallback := func(data []TrackInfo) {

@@ -29,9 +29,9 @@ func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 	defer cleanup()
 
 	names := DriverNamesIndex{
-		"alice":   {Name: "Alice", Country: "France", Team: "A-Team", Rank: "S"},
-		"bob":     {Name: "Bob", Country: "Spain", Team: "B-Team", Rank: "A"},
-		"charlie": {Name: "Charlie", Country: "UK", Team: "C-Team", Rank: "B"},
+		"alice":   {{Name: "Alice", Country: "France", Team: "A-Team", Rank: "S"}},
+		"bob":     {{Name: "Bob", Country: "Spain", Team: "B-Team", Rank: "A"}},
+		"charlie": {{Name: "Charlie", Country: "UK", Team: "C-Team", Rank: "B"}},
 	}
 	if _, err := writeGzipJSON(ShardedNamesFile, names); err != nil {
 		t.Fatalf("Failed to seed names index: %v", err)
@@ -149,8 +149,8 @@ func TestExportStatsFromIndex_UsesNamesMetadataAndSortFiltering(t *testing.T) {
 	defer cleanup()
 
 	names := DriverNamesIndex{
-		"ghost": {Name: "Ghost Driver", Country: "Italy", Team: "Phantom", Rank: "C"},
-		"shade": {Name: "Shade Driver", Country: "USA", Team: "Shadow", Rank: "B"},
+		"ghost": {{Name: "Ghost Driver", Country: "Italy", Team: "Phantom", Rank: "C"}},
+		"shade": {{Name: "Shade Driver", Country: "USA", Team: "Shadow", Rank: "B"}},
 	}
 	if _, err := writeGzipJSON(ShardedNamesFile, names); err != nil {
 		t.Fatalf("Failed to seed names index: %v", err)

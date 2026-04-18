@@ -109,6 +109,7 @@ func ShardKeyForName(lowerName string) string {
 // Clients can load this once, then fetch per-letter shards for results.
 type DriverIdentity struct {
 	Name       string `json:"name"`
+	PathID     string `json:"path_id"` // numeric user ID from driver.path URL
 	Avatar     string `json:"avatar"`
 	Country    string `json:"country"`
 	Team       string `json:"team"`
@@ -167,12 +168,27 @@ func normalizeSearchName(name string) string {
 	return strings.ToLower(normalized)
 }
 
-// DriverNamesIndex maps lowercase driver name → driver metadata.
-type DriverNamesIndex map[string]DriverIdentity
+// normalizeDisplayName lowercases and normalizes whitespace while preserving
+// accents and punctuation. This is used for mirror aliases so users can search
+// either folded names ("omer") or accentuated originals ("ömer").
+func normalizeDisplayName(name string) string {
+	if name == "" {
+		return ""
+	}
+
+	normalized := regexp.MustCompile(`\s+`).ReplaceAllString(name, " ")
+	normalized = strings.TrimSpace(normalized)
+	return strings.ToLower(normalized)
+}
+
+// DriverNamesIndex maps lowercase driver name → per-driver metadata.
+// Multiple identities per name support same-name drivers (distinguished by PathID).
+type DriverNamesIndex map[string][]DriverIdentity
 
 // ExportedDriverResult is the compact on-disk representation used by
 // monolithic/sharded index files.
 type ExportedDriverResult struct {
+	PathID       string `json:"path_id,omitempty"`
 	Position     int    `json:"position"`
 	LapTime      string `json:"laptime"`
 	Car          string `json:"car"`
@@ -198,6 +214,7 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 	compact := make([]ExportedDriverResult, 0, len(results))
 	for _, r := range results {
 		compact = append(compact, ExportedDriverResult{
+			PathID:       r.PathID,
 			Position:     r.Position,
 			LapTime:      r.LapTime,
 			Car:          r.Car,
@@ -212,29 +229,38 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 	return compact
 }
 
-// buildMirrors creates a sorted list of normalized search names for fast client-side lookup.
-// The front-end normalizes search terms and looks them up in this mirror file.
+// buildMirrors creates a sorted list of lookup aliases for client-side
+// autocomplete and lookup. It includes:
+//   - folded search names (accents removed), and
+//   - lowercased display-name aliases (accents preserved)
+//
+// This lets users find drivers whether they type "omer" or "ömer".
+// Each alias appears once regardless of how many same-name drivers exist.
 func buildMirrors(names DriverNamesIndex) []string {
-	mirrors := make([]string, 0, len(names))
-	for _, identity := range names {
-		// Use SearchName (normalized) for mirror, falls back to Name if not set
-		searchName := identity.SearchName
-		if searchName == "" {
-			searchName = normalizeSearchName(identity.Name)
+	unique := make(map[string]struct{}, len(names)*2)
+	for lowerName, identities := range names {
+		searchName := lowerName
+		if len(identities) > 0 && identities[0].SearchName != "" {
+			searchName = identities[0].SearchName
 		}
-		mirrors = append(mirrors, searchName)
-	}
-	// Remove duplicates (can happen if multiple drivers normalize to same name)
-	seen := make(map[string]struct{})
-	unique := make([]string, 0, len(mirrors))
-	for _, name := range mirrors {
-		if _, exists := seen[name]; !exists {
-			seen[name] = struct{}{}
-			unique = append(unique, name)
+		if searchName != "" {
+			unique[searchName] = struct{}{}
+		}
+
+		for _, identity := range identities {
+			displayAlias := normalizeDisplayName(identity.Name)
+			if displayAlias != "" {
+				unique[displayAlias] = struct{}{}
+			}
 		}
 	}
-	sort.Strings(unique)
-	return unique
+
+	mirrors := make([]string, 0, len(unique))
+	for alias := range unique {
+		mirrors = append(mirrors, alias)
+	}
+	sort.Strings(mirrors)
+	return mirrors
 }
 
 func partitionNamesByLetter(names DriverNamesIndex) map[string]DriverNamesIndex {
@@ -252,7 +278,7 @@ func partitionNamesByLetter(names DriverNamesIndex) map[string]DriverNamesIndex 
 // ExportShardedIndex exports the driver index as a names file + per-letter shards.
 //   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→metadata) [monolithic]
 //   - cache/index/{a..z,_}.json.gz — DriverNamesIndex partitions (letter-sharded names with metadata)
-//   - cache/index/mirror.json.gz — sorted lowercase driver names for client lookup
+//   - cache/index/mirror.json.gz — sorted lookup aliases (folded + accentuated names)
 //   - cache/index/shards/{a..z,_}.json.gz — ExportedDriverIndex partitions (compact results)
 //
 // All writes are atomic (temp+rename). Returns total compressed bytes written.
@@ -264,44 +290,82 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 		return 0, fmt.Errorf("failed to create shards directory: %w", err)
 	}
 
-	// 1. Build names index and partition into shards
-	names := make(DriverNamesIndex, len(index))
+	// 0. Convert pathID-keyed index to name-keyed for export.
+	// The internal DriverIndex uses pathID keys for deduplication during build,
+	// but exported files are keyed by lowercase search name so the front-end
+	// can look up drivers by name without knowing pathIDs.
+	// Same-name drivers with different pathIDs are kept as separate identities
+	// under the same search-name key.
+	nameKeyed := make(DriverIndex, len(index))
+	for _, results := range index {
+		if len(results) == 0 {
+			continue
+		}
+		lowerName := normalizeSearchName(results[0].Name)
+		if lowerName == "" {
+			continue
+		}
+		nameKeyed[lowerName] = append(nameKeyed[lowerName], results...)
+	}
+
+	// 1. Build names index and partition into shards (keyed by lowercase name)
+	names := make(DriverNamesIndex, len(nameKeyed))
 	shards := make(map[string]DriverIndex, 28) // a-z + _
 	previousNames, _ := LoadShardedNamesIndex()
 
-	for lowerName, results := range index {
-		identity := DriverIdentity{Name: lowerName}
-		if previousIdentity, ok := previousNames[lowerName]; ok {
-			identity = previousIdentity
-			if identity.Name == "" {
-				identity.Name = lowerName
+	for lowerName, results := range nameKeyed {
+		// Group results by pathID so each unique driver gets its own identity
+		byPathID := make(map[string][]DriverResult)
+		for i := range results {
+			pid := results[i].PathID
+			byPathID[pid] = append(byPathID[pid], results[i])
+		}
+
+		// Build one DriverIdentity per unique pathID
+		var identities []DriverIdentity
+
+		// Seed from previous export if available
+		if prev, ok := previousNames[lowerName]; ok {
+			identities = prev
+		}
+
+		for pid, pidResults := range byPathID {
+			// Find or create identity for this pathID
+			idx := -1
+			for i := range identities {
+				if identities[i].PathID == pid {
+					idx = i
+					break
+				}
+			}
+			if idx == -1 {
+				identities = append(identities, DriverIdentity{PathID: pid})
+				idx = len(identities) - 1
+			}
+
+			// Update identity from latest results
+			r := pidResults[0]
+			if r.Name != "" {
+				identities[idx].Name = r.Name
+			}
+			if r.Avatar != "" {
+				identities[idx].Avatar = r.Avatar
+			}
+			if r.Country != "" {
+				identities[idx].Country = r.Country
+			}
+			if r.Team != "" {
+				identities[idx].Team = r.Team
+			}
+			if r.Rank != "" {
+				identities[idx].Rank = r.Rank
+			}
+			if identities[idx].Name != "" {
+				identities[idx].SearchName = normalizeSearchName(identities[idx].Name)
 			}
 		}
 
-		if len(results) > 0 {
-			if results[0].Name != "" {
-				identity.Name = results[0].Name
-			}
-			if results[0].Avatar != "" {
-				identity.Avatar = results[0].Avatar
-			}
-			if results[0].Country != "" {
-				identity.Country = results[0].Country
-			}
-			if results[0].Team != "" {
-				identity.Team = results[0].Team
-			}
-			if results[0].Rank != "" {
-				identity.Rank = results[0].Rank
-			}
-		}
-
-		// Generate normalized search name from display name
-		if identity.Name != "" {
-			identity.SearchName = normalizeSearchName(identity.Name)
-		}
-
-		names[lowerName] = identity
+		names[lowerName] = identities
 
 		key := ShardKeyForName(lowerName)
 		if shards[key] == nil {
@@ -394,10 +458,20 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 
 // LoadShardedNamesIndex loads per-driver metadata from the names index.
 func LoadShardedNamesIndex() (DriverNamesIndex, error) {
-	// Primary format: map[lowerName]DriverIdentity
+	// Primary format: map[lowerName][]DriverIdentity
 	names, err := readGzipJSON[DriverNamesIndex](ShardedNamesFile)
 	if err == nil {
 		return names, nil
+	}
+
+	// Backward-compatible fallback: map[lowerName]DriverIdentity (single identity per name)
+	singleNames, singleErr := readGzipJSON[map[string]DriverIdentity](ShardedNamesFile)
+	if singleErr == nil {
+		converted := make(DriverNamesIndex, len(singleNames))
+		for lowerName, identity := range singleNames {
+			converted[lowerName] = []DriverIdentity{identity}
+		}
+		return converted, nil
 	}
 
 	// Backward-compatible fallback: map[lowerName]string
@@ -412,7 +486,7 @@ func LoadShardedNamesIndex() (DriverNamesIndex, error) {
 		if name == "" {
 			name = lowerName
 		}
-		converted[lowerName] = DriverIdentity{Name: name}
+		converted[lowerName] = []DriverIdentity{{Name: name}}
 	}
 
 	return converted, nil

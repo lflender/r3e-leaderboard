@@ -412,3 +412,30 @@ func findSubstring(s, sub string) bool {
 	}
 	return false
 }
+
+// =============================================================================
+// EXTRACT PATH ID TESTS
+// =============================================================================
+
+func TestExtractPathID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"https://game.raceroom.com/users/info/8246810/", "8246810"},
+		{"https://game.raceroom.com/users/info/8246810", "8246810"},
+		{"/users/info/12345/", "12345"},
+		{"/users/info/1/", "1"},
+		{"https://game.raceroom.com/users/info/", ""},
+		{"https://game.raceroom.com/users/info/abc/", ""},
+		{"", ""},
+		{"no-numbers-here", ""},
+	}
+
+	for _, tt := range tests {
+		got := ExtractPathID(tt.input)
+		if got != tt.expected {
+			t.Errorf("ExtractPathID(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
