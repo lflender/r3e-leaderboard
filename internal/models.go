@@ -3,6 +3,7 @@ package internal
 // DriverResult represents a found driver with their details
 type DriverResult struct {
 	Name         string `json:"name"`
+	Avatar       string `json:"avatar"`
 	Position     int    `json:"position"`
 	LapTime      string `json:"laptime"`
 	Country      string `json:"country"`

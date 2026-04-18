@@ -248,6 +248,11 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 				result.LapTime = lapTime
 			}
 
+			// Extract avatar from driver map
+			if avatarStr, avatarOk := driverMap["avatar"].(string); avatarOk && avatarStr != "" {
+				result.Avatar = avatarStr
+			}
+
 			// Extract country
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {
@@ -578,6 +583,9 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 			if lapTime, ok := entry["laptime"].(string); ok {
 				result.LapTime = lapTime
+			}
+			if avatarStr, avatarOk := driverMap["avatar"].(string); avatarOk && avatarStr != "" {
+				result.Avatar = avatarStr
 			}
 			if countryInterface, countryExists := entry["country"]; countryExists {
 				if countryMap, countryOk := countryInterface.(map[string]interface{}); countryOk {

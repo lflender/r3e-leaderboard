@@ -105,6 +105,7 @@ func ShardKeyForName(lowerName string) string {
 // Clients can load this once, then fetch per-letter shards for results.
 type DriverIdentity struct {
 	Name    string `json:"name"`
+	Avatar  string `json:"avatar"`
 	Country string `json:"country"`
 	Team    string `json:"team"`
 	Rank    string `json:"rank"`
@@ -185,6 +186,9 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 		if len(results) > 0 {
 			if results[0].Name != "" {
 				identity.Name = results[0].Name
+			}
+			if results[0].Avatar != "" {
+				identity.Avatar = results[0].Avatar
 			}
 			if results[0].Country != "" {
 				identity.Country = results[0].Country

@@ -348,19 +348,19 @@ func withWorkingDir(t *testing.T) (string, func()) {
 func sampleDriverIndex() DriverIndex {
 	return DriverIndex{
 		"alice speed": {
-			{Name: "Alice Speed", Country: "Germany", Team: "Team A", Rank: "S", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+			{Name: "Alice Speed", Avatar: "https://game.raceroom.com/avatar/alice.jpg", Country: "Germany", Team: "Team A", Rank: "S", Position: 1, LapTime: "1:23.456", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
 		"bob racer": {
-			{Name: "Bob Racer", Country: "France", Team: "Team B", Rank: "A", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
+			{Name: "Bob Racer", Avatar: "https://game.raceroom.com/avatar/bob.jpg", Country: "France", Team: "Team B", Rank: "A", Position: 2, LapTime: "1:24.000", Track: "Track A", TrackID: "1111", ClassID: "1703", TotalEntries: 2, Found: true},
 		},
 		"zoe zoom": {
-			{Name: "Zoe Zoom", Country: "Spain", Team: "Team Z", Rank: "B", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
+			{Name: "Zoe Zoom", Avatar: "https://game.raceroom.com/avatar/zoe.jpg", Country: "Spain", Team: "Team Z", Rank: "B", Position: 1, LapTime: "1:22.999", Track: "Track B", TrackID: "2222", ClassID: "1757", TotalEntries: 1, Found: true},
 		},
 		"3fast": {
-			{Name: "3Fast", Country: "USA", Team: "Team 3", Rank: "", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
+			{Name: "3Fast", Avatar: "https://game.raceroom.com/avatar/3fast.jpg", Country: "USA", Team: "Team 3", Rank: "", Position: 5, LapTime: "1:25.500", Track: "Track C", TrackID: "3333", ClassID: "9999", TotalEntries: 1, Found: true},
 		},
 		"": {
-			{Name: "", Country: "", Team: "", Rank: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
+			{Name: "", Avatar: "", Country: "", Team: "", Rank: "", Position: 7, LapTime: "1:30.000", Track: "Track D", TrackID: "4444", ClassID: "1703", TotalEntries: 1, Found: true},
 		},
 	}
 }

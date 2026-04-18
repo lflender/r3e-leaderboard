@@ -359,7 +359,7 @@ func testTrackInfo(name, trackID, classID string, drivers ...string) TrackInfo {
 	data := make([]map[string]interface{}, 0, len(drivers))
 	for i, driver := range drivers {
 		data = append(data, map[string]interface{}{
-			"driver":           map[string]interface{}{"name": driver},
+			"driver":           map[string]interface{}{"name": driver, "avatar": "https://game.raceroom.com/avatar/" + driver + ".jpg"},
 			"index":            float64(i),
 			"laptime":          "1:23.456",
 			"relative_laptime": "+0.100s",
