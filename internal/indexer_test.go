@@ -416,6 +416,13 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
 		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
 	}
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	if len(mirrors) != len(merged) {
+		t.Fatalf("Mirror count = %d, expected %d", len(mirrors), len(merged))
+	}
+	if strings.Join(mirrors, ",") != "alice speed,bob racer,charlie pace,zoe zoom" {
+		t.Fatalf("Unexpected mirrors: %v", mirrors)
+	}
 
 	if len(merged) != 4 {
 		t.Fatalf("Merged shard count = %d, expected 4", len(merged))
@@ -509,6 +516,10 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	}
 	if names["charlie pace"].Country != "Germany" || names["charlie pace"].Team != "Test Team" || names["charlie pace"].Rank != "S" {
 		t.Fatalf("Unexpected Charlie metadata: %+v", names["charlie pace"])
+	}
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	if strings.Join(mirrors, ",") != "alice speed,charlie pace" {
+		t.Fatalf("Unexpected mirrors after incremental update: %v", mirrors)
 	}
 
 	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); !os.IsNotExist(err) {

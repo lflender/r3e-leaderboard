@@ -622,6 +622,9 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if _, err := os.Stat(ShardedNamesFile); err != nil {
 		t.Fatalf("Expected gzip names index file: %v", err)
 	}
+	if _, err := os.Stat(ShardedMirrorFile); err != nil {
+		t.Fatalf("Expected gzip mirror index file: %v", err)
+	}
 	if _, err := os.Stat("cache/index/driver_index.json"); !os.IsNotExist(err) {
 		t.Fatalf("Stale plain names index should not remain, got err=%v", err)
 	}
@@ -640,6 +643,14 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	}
 	if names[""].Name != "" {
 		t.Fatalf("Expected empty-name entry to be preserved in names index")
+	}
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load gzip mirror index: %v", err)
+	}
+	expectedMirrors := []string{"", "3fast", "alice speed", "bob racer", "zoe zoom"}
+	if strings.Join(mirrors, ",") != strings.Join(expectedMirrors, ",") {
+		t.Fatalf("Mirror entries = %v, expected %v", mirrors, expectedMirrors)
 	}
 
 	aShard, err := LoadShard("a")
@@ -763,6 +774,14 @@ func TestExportShardedIndex_ClientLookupFlow(t *testing.T) {
 		if len(results) == 0 || results[0].TrackID == "" {
 			t.Fatalf("Unexpected shard payload for %q: %+v", lookup.lowerName, results)
 		}
+	}
+
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror index: %v", err)
+	}
+	if len(mirrors) != len(index) {
+		t.Fatalf("Mirror count = %d, expected %d", len(mirrors), len(index))
 	}
 }
 

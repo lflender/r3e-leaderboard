@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"time"
 )
 
@@ -18,9 +19,10 @@ const (
 	AllCombinationsFile = "cache/all_combinations.json.gz"
 
 	// Sharded index paths
-	ShardedIndexDir  = "cache/index"
-	ShardedNamesFile = "cache/index/driver_index.json.gz"
-	ShardedShardsDir = "cache/index/shards"
+	ShardedIndexDir   = "cache/index"
+	ShardedNamesFile  = "cache/index/driver_index.json.gz"
+	ShardedMirrorFile = "cache/index/mirror.json.gz"
+	ShardedShardsDir  = "cache/index/shards"
 )
 
 // FailedFetch represents a failed fetch attempt
@@ -156,8 +158,18 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 	return compact
 }
 
+func buildMirrors(index DriverIndex) []string {
+	mirrors := make([]string, 0, len(index))
+	for lowerName := range index {
+		mirrors = append(mirrors, lowerName)
+	}
+	sort.Strings(mirrors)
+	return mirrors
+}
+
 // ExportShardedIndex exports the driver index as a names file + per-letter shards.
 //   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→metadata)
+//   - cache/index/mirror.json.gz — sorted lowercase driver names for client lookup
 //   - cache/index/shards/{a..z,_}.json.gz — DriverIndex partitions
 //
 // All writes are atomic (temp+rename). Returns total compressed bytes written.
@@ -213,16 +225,19 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	// Free previousNames immediately — no longer needed
 	previousNames = nil
 
-	// Free previousNames immediately — no longer needed
-	previousNames = nil
-
 	var totalBytes int64
 	expectedShardFiles := make(map[string]struct{}, len(shards))
 
-	// 2. Export names index in gzip format.
+	// 2. Export names index and mirror list in gzip format.
 	n, err := writeGzipJSON(ShardedNamesFile, names)
 	if err != nil {
 		return 0, fmt.Errorf("failed to export names index: %w", err)
+	}
+	totalBytes += n
+
+	n, err = writeGzipJSON(ShardedMirrorFile, buildMirrors(index))
+	if err != nil {
+		return totalBytes, fmt.Errorf("failed to export mirror index: %w", err)
 	}
 	totalBytes += n
 	if err := os.Remove("cache/index/driver_index.json"); err != nil && !os.IsNotExist(err) {
