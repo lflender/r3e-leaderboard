@@ -424,6 +424,24 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 		t.Fatalf("Unexpected mirrors: %v", mirrors)
 	}
 
+	// Verify letter-sharded names files exist and can be merged back to the monolithic
+	letterNames, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed: %v", err)
+	}
+	if len(letterNames) != len(names) {
+		t.Fatalf("Letter names count = %d, expected %d (monolithic count)", len(letterNames), len(names))
+	}
+	for lowerName, expectedIdentity := range names {
+		actualIdentity, exists := letterNames[lowerName]
+		if !exists {
+			t.Fatalf("Driver %q missing from letter files", lowerName)
+		}
+		if actualIdentity != expectedIdentity {
+			t.Fatalf("Identity mismatch for %q: got %+v, expected %+v", lowerName, actualIdentity, expectedIdentity)
+		}
+	}
+
 	if len(merged) != 4 {
 		t.Fatalf("Merged shard count = %d, expected 4", len(merged))
 	}
@@ -520,6 +538,21 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
 	if strings.Join(mirrors, ",") != "alice speed,charlie pace" {
 		t.Fatalf("Unexpected mirrors after incremental update: %v", mirrors)
+	}
+
+	// Verify letter-sharded names are updated correctly (Bob removed, Charlie added)
+	letterNames, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed after incremental update: %v", err)
+	}
+	if len(letterNames) != len(names) {
+		t.Fatalf("Letter names count = %d, expected %d after incremental update", len(letterNames), len(names))
+	}
+	if _, exists := letterNames["bob racer"]; exists {
+		t.Fatal("Bob Racer should be removed from letter files after incremental update")
+	}
+	if _, exists := letterNames["charlie pace"]; !exists {
+		t.Fatal("Charlie Pace should exist in letter files after incremental update")
 	}
 
 	if _, err := os.Stat(filepath.Join(ShardedShardsDir, "b.json.gz")); !os.IsNotExist(err) {

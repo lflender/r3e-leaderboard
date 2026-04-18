@@ -8,8 +8,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -106,11 +108,63 @@ func ShardKeyForName(lowerName string) string {
 // DriverIdentity stores per-driver metadata in the names index.
 // Clients can load this once, then fetch per-letter shards for results.
 type DriverIdentity struct {
-	Name    string `json:"name"`
-	Avatar  string `json:"avatar"`
-	Country string `json:"country"`
-	Team    string `json:"team"`
-	Rank    string `json:"rank"`
+	Name       string `json:"name"`
+	Avatar     string `json:"avatar"`
+	Country    string `json:"country"`
+	Team       string `json:"team"`
+	Rank       string `json:"rank"`
+	SearchName string `json:"search_name"` // normalized: accents removed, punctuation normalized
+}
+
+// normalizeSearchName removes accents and lowercases for case-insensitive search.
+// Periods are preserved so initials like "Sven B." remain searchable as "sven b.".
+// Examples: "Mahé Birault" → "mahe birault", "Sven B." → "sven b."
+// Uses a mapping table for common accented characters (no external dependencies).
+func normalizeSearchName(name string) string {
+	if name == "" {
+		return ""
+	}
+
+	// Map of accented characters to their base equivalents
+	accentMap := map[rune]rune{
+		'À': 'A', 'Á': 'A', 'Â': 'A', 'Ã': 'A', 'Ä': 'A', 'Å': 'A',
+		'à': 'a', 'á': 'a', 'â': 'a', 'ã': 'a', 'ä': 'a', 'å': 'a',
+		'Ç': 'C', 'ç': 'c',
+		'Ð': 'D', 'ð': 'd', 'Ď': 'D', 'ď': 'd', 'Đ': 'D', 'đ': 'd',
+		'È': 'E', 'É': 'E', 'Ê': 'E', 'Ë': 'E',
+		'è': 'e', 'é': 'e', 'ê': 'e', 'ë': 'e',
+		'Ì': 'I', 'Í': 'I', 'Î': 'I', 'Ï': 'I',
+		'ì': 'i', 'í': 'i', 'î': 'i', 'ï': 'i',
+		'Ñ': 'N', 'ñ': 'n',
+		'Ò': 'O', 'Ó': 'O', 'Ô': 'O', 'Õ': 'O', 'Ö': 'O', 'Ø': 'O',
+		'ò': 'o', 'ó': 'o', 'ô': 'o', 'õ': 'o', 'ö': 'o', 'ø': 'o',
+		'Ù': 'U', 'Ú': 'U', 'Û': 'U', 'Ü': 'U',
+		'ù': 'u', 'ú': 'u', 'û': 'u', 'ü': 'u',
+		'Ý': 'Y', 'ý': 'y', 'ÿ': 'y',
+		'Š': 'S', 'š': 's',
+		'Ť': 'T', 'ť': 't', 'Þ': 'T', 'þ': 't',
+		'Ž': 'Z', 'ž': 'z',
+		'Æ': 'A', 'æ': 'a',
+		'Œ': 'O', 'œ': 'o',
+	}
+
+	// Replace accented characters with their base forms
+	var result strings.Builder
+	for _, r := range name {
+		if base, exists := accentMap[r]; exists {
+			result.WriteRune(base)
+		} else {
+			result.WriteRune(r)
+		}
+	}
+	normalized := result.String()
+
+	// Normalize spaces first (collapse whitespace, trim edges)
+	normalized = regexp.MustCompile(`\s+`).ReplaceAllString(normalized, " ")
+	normalized = strings.TrimSpace(normalized)
+
+	// Lowercase for case-insensitive search
+	return strings.ToLower(normalized)
 }
 
 // DriverNamesIndex maps lowercase driver name → driver metadata.
@@ -158,19 +212,48 @@ func compactDriverResults(results []DriverResult) []ExportedDriverResult {
 	return compact
 }
 
-func buildMirrors(index DriverIndex) []string {
-	mirrors := make([]string, 0, len(index))
-	for lowerName := range index {
-		mirrors = append(mirrors, lowerName)
+// buildMirrors creates a sorted list of normalized search names for fast client-side lookup.
+// The front-end normalizes search terms and looks them up in this mirror file.
+func buildMirrors(names DriverNamesIndex) []string {
+	mirrors := make([]string, 0, len(names))
+	for _, identity := range names {
+		// Use SearchName (normalized) for mirror, falls back to Name if not set
+		searchName := identity.SearchName
+		if searchName == "" {
+			searchName = normalizeSearchName(identity.Name)
+		}
+		mirrors = append(mirrors, searchName)
 	}
-	sort.Strings(mirrors)
-	return mirrors
+	// Remove duplicates (can happen if multiple drivers normalize to same name)
+	seen := make(map[string]struct{})
+	unique := make([]string, 0, len(mirrors))
+	for _, name := range mirrors {
+		if _, exists := seen[name]; !exists {
+			seen[name] = struct{}{}
+			unique = append(unique, name)
+		}
+	}
+	sort.Strings(unique)
+	return unique
+}
+
+func partitionNamesByLetter(names DriverNamesIndex) map[string]DriverNamesIndex {
+	partitions := make(map[string]DriverNamesIndex, 28) // a-z + _
+	for lowerName, identity := range names {
+		key := ShardKeyForName(lowerName)
+		if partitions[key] == nil {
+			partitions[key] = make(DriverNamesIndex)
+		}
+		partitions[key][lowerName] = identity
+	}
+	return partitions
 }
 
 // ExportShardedIndex exports the driver index as a names file + per-letter shards.
-//   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→metadata)
+//   - cache/index/driver_index.json.gz — DriverNamesIndex (lowercase→metadata) [monolithic]
+//   - cache/index/{a..z,_}.json.gz — DriverNamesIndex partitions (letter-sharded names with metadata)
 //   - cache/index/mirror.json.gz — sorted lowercase driver names for client lookup
-//   - cache/index/shards/{a..z,_}.json.gz — DriverIndex partitions
+//   - cache/index/shards/{a..z,_}.json.gz — ExportedDriverIndex partitions (compact results)
 //
 // All writes are atomic (temp+rename). Returns total compressed bytes written.
 func ExportShardedIndex(index DriverIndex) (int64, error) {
@@ -213,6 +296,11 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 			}
 		}
 
+		// Generate normalized search name from display name
+		if identity.Name != "" {
+			identity.SearchName = normalizeSearchName(identity.Name)
+		}
+
 		names[lowerName] = identity
 
 		key := ShardKeyForName(lowerName)
@@ -235,13 +323,40 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	}
 	totalBytes += n
 
-	n, err = writeGzipJSON(ShardedMirrorFile, buildMirrors(index))
+	n, err = writeGzipJSON(ShardedMirrorFile, buildMirrors(names))
 	if err != nil {
 		return totalBytes, fmt.Errorf("failed to export mirror index: %w", err)
 	}
 	totalBytes += n
 	if err := os.Remove("cache/index/driver_index.json"); err != nil && !os.IsNotExist(err) {
 		return totalBytes, fmt.Errorf("failed to remove stale plain names index: %w", err)
+	}
+
+	// 2b. Export per-letter sharded names (DriverNamesIndex partitioned by first letter)
+	letterPartitions := partitionNamesByLetter(names)
+	expectedLetterFiles := make(map[string]struct{}, len(letterPartitions))
+	for key, partition := range letterPartitions {
+		letterFile := filepath.Join(ShardedIndexDir, key+".json.gz")
+		expectedLetterFiles[letterFile] = struct{}{}
+		n, err := writeGzipJSON(letterFile, partition)
+		if err != nil {
+			return totalBytes, fmt.Errorf("failed to export letter-sharded names %s: %w", key, err)
+		}
+		totalBytes += n
+	}
+
+	// Remove stale letter files from previous exports
+	existingLetterFiles, err := filepath.Glob(filepath.Join(ShardedIndexDir, "[a-z_].json.gz"))
+	if err != nil {
+		return totalBytes, fmt.Errorf("failed to list existing letter files: %w", err)
+	}
+	for _, existingFile := range existingLetterFiles {
+		if _, keep := expectedLetterFiles[existingFile]; keep {
+			continue
+		}
+		if err := os.Remove(existingFile); err != nil && !os.IsNotExist(err) {
+			return totalBytes, fmt.Errorf("failed to remove stale letter file %s: %w", existingFile, err)
+		}
 	}
 
 	// 3. Export each shard
@@ -328,6 +443,39 @@ func LoadAllShards() (DriverIndex, error) {
 			return nil, fmt.Errorf("failed to load shard %s: %w", file, err)
 		}
 		for k, v := range shard {
+			merged[k] = v
+		}
+	}
+	return merged, nil
+}
+
+// LoadLetterNames loads per-driver metadata for a specific letter from the letter-sharded names.
+// Key should be "a"-"z" or "_".
+func LoadLetterNames(key string) (DriverNamesIndex, error) {
+	letterFile := filepath.Join(ShardedIndexDir, key+".json.gz")
+	return readGzipJSON[DriverNamesIndex](letterFile)
+}
+
+// LoadAllLetterNames loads all letter-sharded names files and merges them into a single DriverNamesIndex.
+// This reconstructs the full names index from the letter partitions.
+// Returns error if no letter files exist.
+func LoadAllLetterNames() (DriverNamesIndex, error) {
+	pattern := filepath.Join(ShardedIndexDir, "[a-z_].json.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to glob letter files: %w", err)
+	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no letter files found in %s", ShardedIndexDir)
+	}
+
+	merged := make(DriverNamesIndex)
+	for _, file := range files {
+		letterNames, err := readGzipJSON[DriverNamesIndex](file)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load letter file %s: %w", file, err)
+		}
+		for k, v := range letterNames {
 			merged[k] = v
 		}
 	}

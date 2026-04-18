@@ -412,6 +412,185 @@ func TestShardKeyForName(t *testing.T) {
 	}
 }
 
+// =============================================================================
+// SEARCH NAME NORMALIZATION TESTS
+// =============================================================================
+
+func TestNormalizeSearchName_RemovesAccents(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Mahé Birault", "mahe birault"},
+		{"José García", "jose garcia"},
+		{"Müller", "muller"},
+		{"Zöe Café", "zoe cafe"},
+		{"Sven Böck", "sven bock"},
+		{"François Duval", "francois duval"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_PreservesPeriods(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Sven B.", "sven b."},
+		{"John D.", "john d."},
+		{"Alice.", "alice."},
+		{"Bob...", "bob..."},
+		{"No Period", "no period"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_NormalizesCase(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"ALICE", "alice"},
+		{"Alice Speed", "alice speed"},
+		{"BoB RaGeR", "bob rager"},
+		{"zOe ZOOM", "zoe zoom"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_NormalizesWhitespace(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Alice  Speed", "alice speed"},
+		{"  Bob  Racer  ", "bob racer"},
+		{"Zoe\t\tZoom", "zoe zoom"},
+		{"  John   Doe  ", "john doe"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_CombinedAccentsAndPunctuation(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"Mahé B.", "mahe b."},
+		{"François Duval.", "francois duval."},
+		{"Sven Böck.", "sven bock."},
+		{"José D.  ", "jose d."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			actual := normalizeSearchName(tt.input)
+			if actual != tt.expected {
+				t.Fatalf("normalizeSearchName(%q) = %q, expected %q", tt.input, actual, tt.expected)
+			}
+		})
+	}
+}
+
+func TestNormalizeSearchName_EmptyInput(t *testing.T) {
+	result := normalizeSearchName("")
+	if result != "" {
+		t.Fatalf("normalizeSearchName(\"\") = %q, expected empty string", result)
+	}
+}
+
+func TestNormalizeSearchName_Searchability(t *testing.T) {
+	// Verify that different input representations normalize to the same search string
+	variations := []string{
+		"Mahé Birault",
+		"mahe birault",
+		"MAHE BIRAULT",
+		"Mahé  Birault",
+	}
+
+	normalized := normalizeSearchName(variations[0])
+	for _, variant := range variations[1:] {
+		if normalizeSearchName(variant) != normalized {
+			t.Fatalf("Search normalization failed: %q and %q should normalize to same value", variations[0], variant)
+		}
+	}
+}
+
+func TestExportShardedIndex_PopulatesSearchNames(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Create an index with drivers that have accents and punctuation
+	index := DriverIndex{
+		"mahé birault": {
+			{Name: "Mahé Birault", Avatar: "avatar1", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true},
+		},
+		"sven b.": {
+			{Name: "Sven B.", Avatar: "avatar2", Position: 2, LapTime: "1:21", TrackID: "1", ClassID: "1703", Found: true},
+		},
+		"josé garcía": {
+			{Name: "José García", Avatar: "avatar3", Position: 3, LapTime: "1:22", TrackID: "1", ClassID: "1703", Found: true},
+		},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+
+	// Verify SearchName is populated correctly for each driver
+	if names["mahé birault"].SearchName != "mahe birault" {
+		t.Fatalf("SearchName for 'Mahé Birault' = %q, expected 'mahe birault'", names["mahé birault"].SearchName)
+	}
+	if names["sven b."].SearchName != "sven b." {
+		t.Fatalf("SearchName for 'Sven B.' = %q, expected 'sven b.'", names["sven b."].SearchName)
+	}
+	if names["josé garcía"].SearchName != "jose garcia" {
+		t.Fatalf("SearchName for 'José García' = %q, expected 'jose garcia'", names["josé garcía"].SearchName)
+	}
+
+	// Verify frontend can search using either original or normalized name
+	if names["mahé birault"].Name != "Mahé Birault" {
+		t.Fatalf("Original name for 'Mahé Birault' = %q, expected 'Mahé Birault'", names["mahé birault"].Name)
+	}
+}
+
 func TestWriteReadGzipJSON_RoundTrip(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -641,6 +820,9 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if gzNames["alice speed"].Name != "Alice Speed" {
 		t.Fatalf("Expected gzip display name for alice speed, got %q", gzNames["alice speed"].Name)
 	}
+	if gzNames["alice speed"].SearchName != "alice speed" {
+		t.Fatalf("Expected gzip SearchName for alice speed, got %q", gzNames["alice speed"].SearchName)
+	}
 	if names[""].Name != "" {
 		t.Fatalf("Expected empty-name entry to be preserved in names index")
 	}
@@ -718,6 +900,95 @@ func TestExportShardedIndex_WritesNamesAndShardFiles(t *testing.T) {
 	if strings.Join(actual, ",") != strings.Join(expected, ",") {
 		t.Fatalf("Shard files = %v, expected %v", actual, expected)
 	}
+}
+
+// TestExportShardedIndex_MirrorContainsNormalizedNames verifies that mirror.json.gz
+// contains normalized search names for proper front-end lookup of drivers with punctuation and accents.
+// Real-world case: "Sven B." should normalize to "sven b." (dot preserved), "Mahé Birault" to "mahe birault".
+func TestExportShardedIndex_MirrorContainsNormalizedNames(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Build index with drivers that have punctuation and accents
+	index := DriverIndex{
+		"sven b.": []DriverResult{
+			{
+				Name:       "Sven B.",
+				Avatar:     "sven.png",
+				Country:    "Germany",
+				Team:       "Team X",
+				Rank:       "S",
+				Position:   1,
+				LapTime:    "1:23.456",
+				Car:        "Ferrari",
+				CarClass:   "GT3",
+				Difficulty: "Expert",
+				TrackID:    "1234",
+				DateTime:   "2026-04-18T10:00:00Z",
+			},
+		},
+		"mahe birault": []DriverResult{
+			{
+				Name:       "Mahé Birault",
+				Avatar:     "mahe.png",
+				Country:    "France",
+				Team:       "Team Y",
+				Rank:       "A",
+				Position:   2,
+				LapTime:    "1:24.123",
+				Car:        "McLaren",
+				CarClass:   "GT3",
+				Difficulty: "Expert",
+				TrackID:    "1234",
+				DateTime:   "2026-04-18T10:00:00Z",
+			},
+		},
+	}
+
+	_, err := ExportShardedIndex(index)
+	if err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load and verify mirror file
+	mirrors, err := readGzipJSON[[]string](ShardedMirrorFile)
+	if err != nil {
+		t.Fatalf("Failed to load mirror: %v", err)
+	}
+
+	// Convert to map for easier lookup
+	mirrorMap := make(map[string]struct{})
+	for _, m := range mirrors {
+		mirrorMap[m] = struct{}{}
+	}
+
+	// Verify normalized names are in mirror (not raw lowercase)
+	if _, found := mirrorMap["sven b."]; !found {
+		t.Errorf("Mirror should contain normalized 'sven b.' for 'Sven B.', got: %v", mirrors)
+	}
+	if _, found := mirrorMap["mahe birault"]; !found {
+		t.Errorf("Mirror should contain normalized 'mahe birault' for 'Mahé Birault', got: %v", mirrors)
+	}
+
+	// Verify the SearchName field was populated correctly in names index
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("Failed to load names index: %v", err)
+	}
+
+	if names["sven b."].SearchName != "sven b." {
+		t.Errorf("SearchName for 'sven b.' = %q, expected 'sven b.'", names["sven b."].SearchName)
+	}
+	if names["mahe birault"].SearchName != "mahe birault" {
+		t.Errorf("SearchName for 'mahe birault' = %q, expected 'mahe birault'", names["mahe birault"].SearchName)
+	}
+
+	// Front-end flow verification:
+	// 1. User types "Sven B." (clicking on a result)
+	// 2. Front-end normalizes it: "Sven B." → "sven b." (dot preserved)
+	// 3. Front-end looks for "sven b." in mirror → FOUND ✓
+	// 4. Front-end looks up driver by original lowercase key "sven b."
+	// 5. Front-end displays "Sven B." with metadata from names index
 }
 
 func TestExportShardedIndex_CreateShardDirectoryError(t *testing.T) {
@@ -844,6 +1115,270 @@ func TestExportShardedIndex_RemovesStaleShardFiles(t *testing.T) {
 	if _, exists := merged["bob racer"]; exists {
 		t.Fatal("Stale bob racer entry should not remain after shard cleanup")
 	}
+}
+
+// =============================================================================
+// LETTER-SHARDED NAMES INDEX TESTS (DATA INTEGRITY CRITICAL)
+// =============================================================================
+
+func TestExportShardedIndex_CreatesLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify all required letter files exist
+	expectedLetters := []string{"a", "b", "z", "_"}
+	for _, letter := range expectedLetters {
+		letterFile := filepath.Join(ShardedIndexDir, letter+".json.gz")
+		if _, err := os.Stat(letterFile); err != nil {
+			t.Fatalf("Expected letter file %s not found: %v", letterFile, err)
+		}
+	}
+
+	// Verify files are valid gzip JSON
+	for _, letter := range expectedLetters {
+		if _, err := LoadLetterNames(letter); err != nil {
+			t.Fatalf("Failed to load letter file %s: %v", letter, err)
+		}
+	}
+}
+
+func TestExportShardedIndex_LetterFilesContainCorrectDrivers(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load individual letter files and verify correct drivers
+	aShard, err := LoadLetterNames("a")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(a) failed: %v", err)
+	}
+	if _, exists := aShard["alice speed"]; !exists {
+		t.Fatalf("Expected 'alice speed' in shard a, got entries: %v", getKeys(aShard))
+	}
+	if _, exists := aShard["bob racer"]; exists {
+		t.Fatal("'bob racer' should not be in shard a")
+	}
+	if len(aShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard a, got %d", len(aShard))
+	}
+
+	bShard, err := LoadLetterNames("b")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(b) failed: %v", err)
+	}
+	if _, exists := bShard["bob racer"]; !exists {
+		t.Fatalf("Expected 'bob racer' in shard b, got entries: %v", getKeys(bShard))
+	}
+	if len(bShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard b, got %d", len(bShard))
+	}
+
+	zShard, err := LoadLetterNames("z")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(z) failed: %v", err)
+	}
+	if _, exists := zShard["zoe zoom"]; !exists {
+		t.Fatalf("Expected 'zoe zoom' in shard z, got entries: %v", getKeys(zShard))
+	}
+	if len(zShard) != 1 {
+		t.Fatalf("Expected 1 entry in shard z, got %d", len(zShard))
+	}
+
+	underscoreShard, err := LoadLetterNames("_")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(_) failed: %v", err)
+	}
+	if len(underscoreShard) != 2 {
+		t.Fatalf("Expected 2 entries in shard _, got %d: %v", len(underscoreShard), getKeys(underscoreShard))
+	}
+	if _, exists := underscoreShard["3fast"]; !exists {
+		t.Fatal("Expected '3fast' in shard _")
+	}
+	if _, exists := underscoreShard[""]; !exists {
+		t.Fatal("Expected empty-name entry in shard _")
+	}
+}
+
+func TestExportShardedIndex_LetterFilesPreserveMetadata(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	aShard, err := LoadLetterNames("a")
+	if err != nil {
+		t.Fatalf("LoadLetterNames(a) failed: %v", err)
+	}
+
+	aliceIdentity := aShard["alice speed"]
+	if aliceIdentity.Name != "Alice Speed" {
+		t.Fatalf("Expected Name='Alice Speed', got %q", aliceIdentity.Name)
+	}
+	if aliceIdentity.Avatar != "https://game.raceroom.com/avatar/alice.jpg" {
+		t.Fatalf("Expected avatar URL, got %q", aliceIdentity.Avatar)
+	}
+	if aliceIdentity.Country != "Germany" {
+		t.Fatalf("Expected Country='Germany', got %q", aliceIdentity.Country)
+	}
+	if aliceIdentity.Team != "Team A" {
+		t.Fatalf("Expected Team='Team A', got %q", aliceIdentity.Team)
+	}
+	if aliceIdentity.Rank != "S" {
+		t.Fatalf("Expected Rank='S', got %q", aliceIdentity.Rank)
+	}
+}
+
+func TestExportShardedIndex_LetterFilesSumEqualsMonolithic(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := sampleDriverIndex()
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Load the monolithic driver_index.json.gz
+	monolithic, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+
+	// Load and merge all letter files
+	merged, err := LoadAllLetterNames()
+	if err != nil {
+		t.Fatalf("LoadAllLetterNames failed: %v", err)
+	}
+
+	// Verify counts match
+	if len(merged) != len(monolithic) {
+		t.Fatalf("Letter files count = %d, monolithic count = %d", len(merged), len(monolithic))
+	}
+
+	// Verify all entries match exactly
+	for lowerName, expectedIdentity := range monolithic {
+		actualIdentity, exists := merged[lowerName]
+		if !exists {
+			t.Fatalf("Driver %q missing from letter files", lowerName)
+		}
+		if actualIdentity != expectedIdentity {
+			t.Fatalf("Identity mismatch for %q: got %+v, expected %+v", lowerName, actualIdentity, expectedIdentity)
+		}
+	}
+
+	// Verify no extra entries in merged
+	for lowerName := range merged {
+		if _, exists := monolithic[lowerName]; !exists {
+			t.Fatalf("Extra driver %q in letter files not in monolithic", lowerName)
+		}
+	}
+}
+
+func TestExportShardedIndex_LetterFilesNoDataLoss(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Create index with drivers from all letter categories
+	index := DriverIndex{
+		"alice":    {{Name: "Alice", Avatar: "avatar1", Position: 1, LapTime: "1:20", TrackID: "1", ClassID: "1703", Found: true}},
+		"bob":      {{Name: "Bob", Avatar: "avatar2", Position: 2, LapTime: "1:21", TrackID: "1", ClassID: "1703", Found: true}},
+		"charlie":  {{Name: "Charlie", Avatar: "avatar3", Position: 3, LapTime: "1:22", TrackID: "1", ClassID: "1703", Found: true}},
+		"zoe":      {{Name: "Zoe", Avatar: "avatar4", Position: 4, LapTime: "1:23", TrackID: "1", ClassID: "1703", Found: true}},
+		"3fast":    {{Name: "3Fast", Avatar: "avatar5", Position: 5, LapTime: "1:24", TrackID: "1", ClassID: "1703", Found: true}},
+		"_special": {{Name: "_Special", Avatar: "avatar6", Position: 6, LapTime: "1:25", TrackID: "1", ClassID: "1703", Found: true}},
+		"xyz":      {{Name: "XYZ", Avatar: "avatar7", Position: 7, LapTime: "1:26", TrackID: "1", ClassID: "1703", Found: true}},
+	}
+
+	if _, err := ExportShardedIndex(index); err != nil {
+		t.Fatalf("ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify all drivers can be loaded from letter files
+	driverMap := make(map[string]bool)
+	for _, letter := range []string{"a", "b", "c", "x", "z", "_"} {
+		letterNames, err := LoadLetterNames(letter)
+		if err != nil {
+			t.Logf("Letter %s: %v (may be empty)", letter, err)
+			continue
+		}
+		for lowerName := range letterNames {
+			driverMap[lowerName] = true
+		}
+	}
+
+	// Verify we have all drivers
+	expectedDrivers := []string{"alice", "bob", "charlie", "zoe", "3fast", "_special", "xyz"}
+	for _, driver := range expectedDrivers {
+		if !driverMap[driver] {
+			t.Fatalf("Driver %q not found in any letter file", driver)
+		}
+	}
+
+	if len(driverMap) != len(expectedDrivers) {
+		t.Fatalf("Expected %d drivers, found %d: %v", len(expectedDrivers), len(driverMap), driverMap)
+	}
+}
+
+func TestExportShardedIndex_RemovesStaleLetterFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// First export with many drivers
+	initial := DriverIndex{
+		"alice speed": {{Name: "Alice Speed", TrackID: "1111", ClassID: "1703", Found: true}},
+		"bob racer":   {{Name: "Bob Racer", TrackID: "1111", ClassID: "1703", Found: true}},
+		"zoe zoom":    {{Name: "Zoe Zoom", TrackID: "1111", ClassID: "1703", Found: true}},
+	}
+	if _, err := ExportShardedIndex(initial); err != nil {
+		t.Fatalf("Initial ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify z.json.gz exists
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "z.json.gz")); err != nil {
+		t.Fatalf("Expected z.json.gz after initial export: %v", err)
+	}
+
+	// Second export without 'z' drivers
+	updated := DriverIndex{
+		"alice speed": {{Name: "Alice Speed", TrackID: "1111", ClassID: "1703", Found: true}},
+		"bob racer":   {{Name: "Bob Racer", TrackID: "1111", ClassID: "1703", Found: true}},
+	}
+	if _, err := ExportShardedIndex(updated); err != nil {
+		t.Fatalf("Updated ExportShardedIndex failed: %v", err)
+	}
+
+	// Verify z.json.gz is removed
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "z.json.gz")); !os.IsNotExist(err) {
+		t.Fatalf("Expected z.json.gz to be removed, got err=%v", err)
+	}
+
+	// Verify a.json.gz and b.json.gz still exist
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "a.json.gz")); err != nil {
+		t.Fatalf("Expected a.json.gz to exist: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ShardedIndexDir, "b.json.gz")); err != nil {
+		t.Fatalf("Expected b.json.gz to exist: %v", err)
+	}
+}
+
+func getKeys(m DriverNamesIndex) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func TestExportStatusData_WritesJSONFile(t *testing.T) {
