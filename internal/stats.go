@@ -87,7 +87,7 @@ func newDriverStatsEntry(lowerName string, identity DriverIdentity) *DriverStats
 }
 
 func updateDriverStatsEntry(entry *DriverStatsEntry, result DriverResult) {
-	if result.Position == 1 {
+	if result.Position == 1 && result.TotalEntries >= 2 {
 		entry.PolePositions++
 	}
 	bested := result.TotalEntries - result.Position

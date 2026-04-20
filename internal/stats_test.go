@@ -169,10 +169,10 @@ func TestExportStatsFromIndex_UsesNamesMetadataAndSortFiltering(t *testing.T) {
 
 	index := DriverIndex{
 		"ghost": {
-			{Position: 1, TotalEntries: 1, ClassID: "1703", TrackID: "1111"},
+			{Position: 1, TotalEntries: 2, ClassID: "1703", TrackID: "1111"},
 		},
 		"shade": {
-			{Position: 2, TotalEntries: 8, ClassID: "1703", TrackID: "1111"},
+			{Position: 2, TotalEntries: 2, ClassID: "1703", TrackID: "1111"},
 		},
 	}
 
@@ -202,8 +202,58 @@ func TestExportStatsFromIndex_UsesNamesMetadataAndSortFiltering(t *testing.T) {
 	if len(class1703Bested.Results) != 1 {
 		t.Fatalf("Expected one bested result, got %d", len(class1703Bested.Results))
 	}
-	if class1703Bested.Results[0].DriverKey != "shade" {
-		t.Fatalf("Expected shade in bested export, got %q", class1703Bested.Results[0].DriverKey)
+	if class1703Bested.Results[0].DriverKey != "ghost" {
+		t.Fatalf("Expected ghost in bested export, got %q", class1703Bested.Results[0].DriverKey)
+	}
+}
+
+func TestExportStatsFromIndex_DoesNotCountSoloLeaderboardsAsPole(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	names := DriverNamesIndex{
+		"solo":   {{Name: "Solo Driver"}},
+		"rival":  {{Name: "Rival Driver"}},
+		"winner": {{Name: "Winner Driver"}},
+	}
+	seedLetterNames(t, names)
+
+	index := DriverIndex{
+		"solo": {
+			{Position: 1, TotalEntries: 1, ClassID: "1703", TrackID: "1111"},
+		},
+		"rival": {
+			{Position: 2, TotalEntries: 2, ClassID: "1703", TrackID: "2222"},
+		},
+		"winner": {
+			{Position: 1, TotalEntries: 2, ClassID: "1703", TrackID: "2222"},
+		},
+	}
+
+	if err := ExportStatsFromIndex(index); err != nil {
+		t.Fatalf("ExportStatsFromIndex failed: %v", err)
+	}
+
+	class1703Pole, err := readGzipJSON[DriverStatsData](filepath.Join(StatsClassesDir, "1703_pole.json.gz"))
+	if err != nil {
+		t.Fatalf("Failed to read class pole stats: %v", err)
+	}
+	if len(class1703Pole.Results) != 1 {
+		t.Fatalf("Expected one pole result, got %d", len(class1703Pole.Results))
+	}
+	if class1703Pole.Results[0].DriverKey != "winner" {
+		t.Fatalf("Expected winner in pole export, got %q", class1703Pole.Results[0].DriverKey)
+	}
+
+	overallPole, err := readGzipJSON[DriverStatsData](StatsOverallPoleFile)
+	if err != nil {
+		t.Fatalf("Failed to read overall pole stats: %v", err)
+	}
+	if len(overallPole.Results) != 1 {
+		t.Fatalf("Expected one overall pole result, got %d", len(overallPole.Results))
+	}
+	if overallPole.Results[0].DriverKey != "winner" {
+		t.Fatalf("Expected winner in overall pole export, got %q", overallPole.Results[0].DriverKey)
 	}
 }
 
