@@ -21,9 +21,9 @@ const (
 	AllCombinationsFile = "cache/all_combinations.json.gz"
 
 	// Sharded index paths
-	ShardedIndexDir   = "cache/index"
+	ShardedIndexDir   = "cache/index/metadata"
 	ShardedMirrorFile = "cache/index/mirror.json.gz"
-	ShardedShardsDir  = "cache/index/shards"
+	ShardedShardsDir  = "cache/index/entries"
 )
 
 // FailedFetch represents a failed fetch attempt
@@ -270,9 +270,9 @@ func partitionNamesByLetter(names DriverNamesIndex) map[string]DriverNamesIndex 
 }
 
 // ExportShardedIndex exports the driver index as letter-sharded metadata + results.
-//   - cache/index/{a..z,_}.json.gz — DriverNamesIndex partitions (letter-sharded names with metadata)
+//   - cache/index/metadata/{a..z,_}.json.gz — DriverNamesIndex partitions (letter-sharded names with metadata)
 //   - cache/index/mirror.json.gz — sorted lookup aliases (folded + accentuated names)
-//   - cache/index/shards/{a..z,_}.json.gz — ExportedDriverIndex partitions (compact results)
+//   - cache/index/entries/{a..z,_}.json.gz — ExportedDriverIndex partitions (compact results)
 //
 // All writes are atomic (temp+rename). Returns total compressed bytes written.
 func ExportShardedIndex(index DriverIndex) (int64, error) {
