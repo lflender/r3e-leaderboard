@@ -457,6 +457,16 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 				if part == "" {
 					continue
 				}
+				if normalizeForMatching(part) == "tcr" {
+					tcrCategoryIDs := getCategoryClassIDs("wtcr", carClasses)
+					if len(tcrCategoryIDs) == 0 {
+						allResolved = false
+						break
+					}
+					categoryIDs = append(categoryIDs, tcrCategoryIDs...)
+					displayParts = append(displayParts, "WTCR")
+					continue
+				}
 				classID := findCarClassID(part, carClasses)
 				if classID == "" {
 					allResolved = false
@@ -464,6 +474,18 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 				}
 				categoryIDs = append(categoryIDs, classID)
 				displayParts = append(displayParts, part)
+			}
+
+			if len(categoryIDs) > 1 {
+				seen := make(map[string]bool, len(categoryIDs))
+				unique := make([]string, 0, len(categoryIDs))
+				for _, id := range categoryIDs {
+					if !seen[id] {
+						seen[id] = true
+						unique = append(unique, id)
+					}
+				}
+				categoryIDs = unique
 			}
 
 			if allResolved && len(categoryIDs) > 0 {
@@ -492,6 +514,17 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 			newRace.CategoryIDs = getCategoryClassIDs(category, carClasses)
 			newRace.TrackID = findTrackID(race.Track, tracks)
 			newRace.MatchedOK = newRace.TrackID != ""
+			expandedRaces = append(expandedRaces, newRace)
+			continue
+		}
+
+		if normalizedClass == "tcr" {
+			newRace := race
+			newRace.CarClass = "WTCR"
+			newRace.CarClassID = "WTCR"
+			newRace.CategoryIDs = getCategoryClassIDs("wtcr", carClasses)
+			newRace.TrackID = findTrackID(race.Track, tracks)
+			newRace.MatchedOK = newRace.TrackID != "" && len(newRace.CategoryIDs) > 0
 			expandedRaces = append(expandedRaces, newRace)
 			continue
 		}
