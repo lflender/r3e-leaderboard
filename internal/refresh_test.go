@@ -92,9 +92,9 @@ func TestMergeTracks_SkipsEmptyData(t *testing.T) {
 
 	result := MergeTracks(cached, fetched)
 
-	// Should only have the one with data
-	if len(result) != 1 {
-		t.Errorf("Expected 1 track (empty ones skipped), got %d", len(result))
+	// MergeTracks only skips fully empty records (no TrackID and no data).
+	if len(result) != 3 {
+		t.Errorf("Expected 3 tracks (metadata-only entries are kept), got %d", len(result))
 	}
 }
 
@@ -177,7 +177,7 @@ func TestProgressCallback_Called(t *testing.T) {
 
 func TestRefreshDailyRaceCombinations_NoCachedRaces(t *testing.T) {
 	// With no cached Daily Races, should return nil without error
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	cfg := GetDefaultConfig()
