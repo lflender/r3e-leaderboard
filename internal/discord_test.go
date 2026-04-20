@@ -185,6 +185,98 @@ func TestParseDailySprintRaces_EmptyContent(t *testing.T) {
 	}
 }
 
+func TestParseDailySprintRaces_DailyHourlyFeatureAndMissingSeparatorSpaces(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "daily_hourly_structure",
+		Content: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+Daily Sprint Races (15 min)
+🆓 A110 – Mantorp Park
+Every half hour (--:15, --:45) LB fixed setup
+🏁 Super Touring - Silverstone Classic Int.
+Every hour (--:10) LB fixed setup
+🏁 DTM 2025 - Red Bull Ring
+Every half hour (--:20, --:50) LB fixed setup
+🏁 F4 -Hockenheim GP
+Every other hour (--:05) LB fixed setup
+🏁 TCR - Vallelunga
+Every other hour (--:05) LB fixed setup
+🏁 NXT GEN CUP - Mid Ohio Short
+Every other hour (--:25) LB fixed setup
+
+Daily Hourly Feature Races (~30 min)
+🔥 DTM 95 -Sachsenring
+25 min (14:00, 17:00, 20:00) LB open setup
+🔥 MX5 - Bathurst
+25 min (15:00, 18:00, 21:00) LB open setup
+🔥 GT4 - Macau
+25 min (16:00, 19:00, 22:00) LB open setup
+
+Weekdays Feature Races Mon, Tue, Thu (~30 - 45 min)
+🔥 Monday: M2 + KTM X-BOW - Vallelunga
+25 min (17:30, 19:30, 21:30) LB open setup
+
+Weekly Races (45–60 min)
+🏆 Friday: PCCNA + PCCD - Oschersleben GP
+45 min (17:00, 19:00, 21:00) open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	if len(result.Races) != 6 {
+		t.Fatalf("Expected 6 sprint races, got %d", len(result.Races))
+	}
+
+	if len(result.FeatureRaces) != 3 {
+		t.Fatalf("Expected 3 daily feature races, got %d", len(result.FeatureRaces))
+	}
+
+	expectedSprintTracks := map[string]string{
+		"A110":          "Mantorp Park",
+		"Super Touring": "Silverstone Classic Int.",
+		"DTM 2025":      "Red Bull Ring",
+		"F4":            "Hockenheim GP",
+		"TCR":           "Vallelunga",
+		"NXT GEN CUP":   "Mid Ohio Short",
+	}
+
+	for _, race := range result.Races {
+		expectedTrack, ok := expectedSprintTracks[race.CarClass]
+		if !ok {
+			t.Fatalf("Unexpected sprint race car class parsed: %q", race.CarClass)
+		}
+		if race.Track != expectedTrack {
+			t.Fatalf("Sprint race %q expected track %q, got %q", race.CarClass, expectedTrack, race.Track)
+		}
+		if !race.ParsedOK {
+			t.Fatalf("Sprint race %q expected ParsedOK=true", race.RawLine)
+		}
+	}
+
+	expectedFeatureTracks := map[string]string{
+		"DTM 95": "Sachsenring",
+		"MX5":    "Bathurst",
+		"GT4":    "Macau",
+	}
+
+	for _, race := range result.FeatureRaces {
+		expectedTrack, ok := expectedFeatureTracks[race.CarClass]
+		if !ok {
+			t.Fatalf("Unexpected feature race car class parsed: %q", race.CarClass)
+		}
+		if race.Track != expectedTrack {
+			t.Fatalf("Feature race %q expected track %q, got %q", race.CarClass, expectedTrack, race.Track)
+		}
+		if !race.ParsedOK {
+			t.Fatalf("Feature race %q expected ParsedOK=true", race.RawLine)
+		}
+	}
+}
+
 func TestNormalizeForMatching(t *testing.T) {
 	tests := []struct {
 		input    string
