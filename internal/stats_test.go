@@ -67,6 +67,12 @@ func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 	if _, err := os.Stat(StatsOverallBestedFile); err != nil {
 		t.Fatalf("Missing overall bested stats file: %v", err)
 	}
+	if _, err := os.Stat(StatsOverallPodiumFile); err != nil {
+		t.Fatalf("Missing overall podium stats file: %v", err)
+	}
+	if _, err := os.Stat(StatsOverallPercentileFile); err != nil {
+		t.Fatalf("Missing overall percentile stats file: %v", err)
+	}
 	if _, err := os.Stat(StatsManifestFile); err != nil {
 		t.Fatalf("Missing stats manifest file: %v", err)
 	}
@@ -106,6 +112,34 @@ func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 	}
 	if overallBested.Results[0].DriverKey != "alice" {
 		t.Fatalf("expected alice first by bested sort, got %q", overallBested.Results[0].DriverKey)
+	}
+
+	overallPodium, err := readGzipJSON[DriverStatsData](StatsOverallPodiumFile)
+	if err != nil {
+		t.Fatalf("Failed to read overall podium stats: %v", err)
+	}
+	if overallPodium.SortBy != StatsSortPodium {
+		t.Fatalf("overall podium sort_by = %q, expected %q", overallPodium.SortBy, StatsSortPodium)
+	}
+	if overallPodium.Results[0].DriverKey != "alice" {
+		t.Fatalf("expected alice first by podium sort, got %q", overallPodium.Results[0].DriverKey)
+	}
+	if overallPodium.Results[0].Podiums != 3 {
+		t.Fatalf("alice podiums = %d, expected 3", overallPodium.Results[0].Podiums)
+	}
+
+	overallPercentile, err := readGzipJSON[DriverStatsData](StatsOverallPercentileFile)
+	if err != nil {
+		t.Fatalf("Failed to read overall percentile stats: %v", err)
+	}
+	if overallPercentile.SortBy != StatsSortPercentile {
+		t.Fatalf("overall percentile sort_by = %q, expected %q", overallPercentile.SortBy, StatsSortPercentile)
+	}
+	if overallPercentile.Results[0].DriverKey != "alice" {
+		t.Fatalf("expected alice first by percentile sort (lowest), got %q", overallPercentile.Results[0].DriverKey)
+	}
+	if overallPercentile.Results[0].AvgPercentile != 4.76 {
+		t.Fatalf("alice avg percentile = %v, expected 4.76", overallPercentile.Results[0].AvgPercentile)
 	}
 
 	class1703, err := readGzipJSON[DriverStatsData](filepath.Join(StatsClassesDir, "1703_pole.json.gz"))
@@ -148,6 +182,12 @@ func TestExportStatsFromIndex_WritesAllScopes(t *testing.T) {
 	}
 	if manifest.Overall.BestedFile != filepath.ToSlash(StatsOverallBestedFile) {
 		t.Fatalf("manifest overall bested file = %q", manifest.Overall.BestedFile)
+	}
+	if manifest.Overall.PodiumFile != filepath.ToSlash(StatsOverallPodiumFile) {
+		t.Fatalf("manifest overall podium file = %q", manifest.Overall.PodiumFile)
+	}
+	if manifest.Overall.PercentileFile != filepath.ToSlash(StatsOverallPercentileFile) {
+		t.Fatalf("manifest overall percentile file = %q", manifest.Overall.PercentileFile)
 	}
 	if len(manifest.Classes) != 4 {
 		t.Fatalf("manifest classes count = %d, expected 4", len(manifest.Classes))
@@ -257,6 +297,73 @@ func TestExportStatsFromIndex_DoesNotCountSoloLeaderboardsAsPole(t *testing.T) {
 	}
 }
 
+func TestExportStatsFromIndex_PodiumAndPercentile(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	names := DriverNamesIndex{
+		"podium": {{Name: "Podium Driver"}},
+		"near":   {{Name: "Near Miss"}},
+		"solo":   {{Name: "Solo Driver"}},
+	}
+	seedLetterNames(t, names)
+
+	index := DriverIndex{
+		"podium": {
+			{Position: 1, TotalEntries: 5, ClassID: "1703", TrackID: "1111"},  // podium (pos<=3, entries>=4), percentile=0/4=0
+			{Position: 3, TotalEntries: 4, ClassID: "1703", TrackID: "2222"},  // podium (pos<=3, entries>=4), percentile=2/3
+			{Position: 4, TotalEntries: 10, ClassID: "1703", TrackID: "3333"}, // no podium (pos>3), percentile=3/9
+		},
+		"near": {
+			{Position: 3, TotalEntries: 3, ClassID: "1703", TrackID: "4444"}, // no podium (entries<4), percentile=2/2=1.0
+			{Position: 2, TotalEntries: 4, ClassID: "1703", TrackID: "5555"}, // podium (pos<=3, entries>=4), percentile=1/3
+		},
+		"solo": {
+			{Position: 1, TotalEntries: 1, ClassID: "1703", TrackID: "6666"}, // no podium (entries<4), percentile=0 (solo)
+		},
+	}
+
+	if err := ExportStatsFromIndex(index); err != nil {
+		t.Fatalf("ExportStatsFromIndex failed: %v", err)
+	}
+
+	overallPodium, err := readGzipJSON[DriverStatsData](StatsOverallPodiumFile)
+	if err != nil {
+		t.Fatalf("Failed to read overall podium stats: %v", err)
+	}
+
+	// Only podium (2) and near (1) have podiums; solo has none
+	if overallPodium.Count != 2 {
+		t.Fatalf("podium count = %d, expected 2", overallPodium.Count)
+	}
+	if overallPodium.Results[0].DriverKey != "podium" {
+		t.Fatalf("expected podium driver first, got %q", overallPodium.Results[0].DriverKey)
+	}
+	if overallPodium.Results[0].Podiums != 2 {
+		t.Fatalf("podium driver podiums = %d, expected 2", overallPodium.Results[0].Podiums)
+	}
+	if overallPodium.Results[1].Podiums != 1 {
+		t.Fatalf("near miss podiums = %d, expected 1", overallPodium.Results[1].Podiums)
+	}
+
+	overallPercentile, err := readGzipJSON[DriverStatsData](StatsOverallPercentileFile)
+	if err != nil {
+		t.Fatalf("Failed to read overall percentile stats: %v", err)
+	}
+
+	// All three drivers should appear (everyone has entries)
+	if overallPercentile.Count != 3 {
+		t.Fatalf("percentile count = %d, expected 3", overallPercentile.Count)
+	}
+	// Solo driver has 0% percentile (position 1 of 1), should be first
+	if overallPercentile.Results[0].DriverKey != "solo" {
+		t.Fatalf("expected solo first by percentile (0%%), got %q", overallPercentile.Results[0].DriverKey)
+	}
+	if overallPercentile.Results[0].AvgPercentile != 0 {
+		t.Fatalf("solo avg percentile = %v, expected 0", overallPercentile.Results[0].AvgPercentile)
+	}
+}
+
 func TestExportStatsFromShards_AfterBuildAndExportIndex(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -278,6 +385,12 @@ func TestExportStatsFromShards_AfterBuildAndExportIndex(t *testing.T) {
 	}
 	if _, err := os.Stat(StatsOverallBestedFile); err != nil {
 		t.Fatalf("Expected overall bested stats from ExportStatsFromShards: %v", err)
+	}
+	if _, err := os.Stat(StatsOverallPodiumFile); err != nil {
+		t.Fatalf("Expected overall podium stats from ExportStatsFromShards: %v", err)
+	}
+	if _, err := os.Stat(StatsOverallPercentileFile); err != nil {
+		t.Fatalf("Expected overall percentile stats from ExportStatsFromShards: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(StatsClassesDir, "1703_pole.json.gz")); err != nil {
 		t.Fatalf("Expected class stats file from ExportStatsFromShards: %v", err)
