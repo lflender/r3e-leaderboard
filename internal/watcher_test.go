@@ -115,9 +115,6 @@ func TestRefreshWatcher_StartAndStop(t *testing.T) {
 // =============================================================================
 
 func TestRefreshWatcher_DetectsTriggerFile(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_test")
 	defer cleanup()
 
@@ -139,7 +136,6 @@ func TestRefreshWatcher_DetectsTriggerFile(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
-	watcher.Start()
 
 	// Create trigger file
 	err := os.WriteFile(triggerPath, []byte(""), 0644)
@@ -147,8 +143,8 @@ func TestRefreshWatcher_DetectsTriggerFile(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect it
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly instead of waiting for the ticker
+	watcher.checkTrigger()
 
 	mu.Lock()
 	count := refreshCount
@@ -170,9 +166,6 @@ func TestRefreshWatcher_DetectsTriggerFile(t *testing.T) {
 }
 
 func TestRefreshWatcher_ParsesTrackIDsFromFile(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_trackids_test")
 	defer cleanup()
 
@@ -191,7 +184,6 @@ func TestRefreshWatcher_ParsesTrackIDsFromFile(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
-	watcher.Start()
 
 	// Create trigger file with track IDs (space-separated)
 	err := os.WriteFile(triggerPath, []byte("1234 5678 9012"), 0644)
@@ -199,8 +191,8 @@ func TestRefreshWatcher_ParsesTrackIDsFromFile(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect it
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly instead of waiting for the ticker
+	watcher.checkTrigger()
 
 	mu.Lock()
 	trackIDs := lastTrackIDs
@@ -220,9 +212,6 @@ func TestRefreshWatcher_ParsesTrackIDsFromFile(t *testing.T) {
 }
 
 func TestRefreshWatcher_ParsesNewlineSeparatedTrackIDs(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_newline_test")
 	defer cleanup()
 
@@ -241,7 +230,6 @@ func TestRefreshWatcher_ParsesNewlineSeparatedTrackIDs(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
-	watcher.Start()
 
 	// Create trigger file with track IDs (newline-separated)
 	err := os.WriteFile(triggerPath, []byte("1111\n2222\n3333"), 0644)
@@ -249,8 +237,8 @@ func TestRefreshWatcher_ParsesNewlineSeparatedTrackIDs(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect it
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly instead of waiting for the ticker
+	watcher.checkTrigger()
 
 	mu.Lock()
 	trackIDs := lastTrackIDs
@@ -266,9 +254,6 @@ func TestRefreshWatcher_ParsesNewlineSeparatedTrackIDs(t *testing.T) {
 // =============================================================================
 
 func TestRefreshWatcher_SkipsWhenBusy(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_busy_test")
 	defer cleanup()
 
@@ -288,7 +273,6 @@ func TestRefreshWatcher_SkipsWhenBusy(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, isBusy)
-	watcher.Start()
 
 	// Create trigger file
 	err := os.WriteFile(triggerPath, []byte(""), 0644)
@@ -296,8 +280,8 @@ func TestRefreshWatcher_SkipsWhenBusy(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect and process it
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly instead of waiting for the ticker
+	watcher.checkTrigger()
 
 	if refreshCount != 0 {
 		t.Errorf("Refresh callback should not be called when busy, was called %d times", refreshCount)
@@ -309,9 +293,6 @@ func TestRefreshWatcher_SkipsWhenBusy(t *testing.T) {
 // =============================================================================
 
 func TestRefreshWatcher_NoTriggerFile(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_no_trigger_test")
 	defer cleanup()
 
@@ -326,10 +307,9 @@ func TestRefreshWatcher_NoTriggerFile(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
-	watcher.Start()
 
-	// Wait a few check cycles
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly with no file present
+	watcher.checkTrigger()
 
 	if refreshCount != 0 {
 		t.Errorf("Refresh should not be called without trigger file, was called %d times", refreshCount)
@@ -337,9 +317,6 @@ func TestRefreshWatcher_NoTriggerFile(t *testing.T) {
 }
 
 func TestRefreshWatcher_EmptyTriggerFile(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_empty_test")
 	defer cleanup()
 
@@ -360,7 +337,6 @@ func TestRefreshWatcher_EmptyTriggerFile(t *testing.T) {
 	}
 
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
-	watcher.Start()
 
 	// Create empty trigger file
 	err := os.WriteFile(triggerPath, []byte(""), 0644)
@@ -368,8 +344,8 @@ func TestRefreshWatcher_EmptyTriggerFile(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect it
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly instead of waiting for the ticker
+	watcher.checkTrigger()
 
 	mu.Lock()
 	called := refreshCalled
@@ -386,9 +362,6 @@ func TestRefreshWatcher_EmptyTriggerFile(t *testing.T) {
 }
 
 func TestRefreshWatcher_NilCallbacks(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping slow watcher test in short mode")
-	}
 	tempDir, cleanup := TempTestDir(t, "watcher_nil_cb_test")
 	defer cleanup()
 
@@ -399,7 +372,6 @@ func TestRefreshWatcher_NilCallbacks(t *testing.T) {
 
 	// Both callbacks are nil
 	watcher := NewRefreshWatcher(ctx, triggerPath, 1, nil, nil)
-	watcher.Start()
 
 	// Create trigger file
 	err := os.WriteFile(triggerPath, []byte("1234"), 0644)
@@ -407,8 +379,8 @@ func TestRefreshWatcher_NilCallbacks(t *testing.T) {
 		t.Fatalf("Failed to create trigger file: %v", err)
 	}
 
-	// Wait for watcher to detect it - should not panic
-	time.Sleep(1500 * time.Millisecond)
+	// Trigger check directly - should not panic with nil callbacks
+	watcher.checkTrigger()
 
 	// No assertion - just verifying no panic with nil callbacks
 }

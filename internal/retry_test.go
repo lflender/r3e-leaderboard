@@ -124,7 +124,8 @@ func TestFetchWithTimeout_CancelledContext(t *testing.T) {
 }
 
 func TestFetchWithTimeout_TimeoutApplied(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
 	apiClient := NewAPIClient()
 	defer apiClient.Close()
@@ -149,7 +150,7 @@ func TestRetryRateLimiting(t *testing.T) {
 	// Verify that retry includes rate limiting delays
 	// We can't easily test the exact delay, but we can verify the function structure
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	apiClient := NewAPIClient()

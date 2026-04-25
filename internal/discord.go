@@ -136,35 +136,81 @@ func ParseDailySprintRaces(message *DiscordMessage) *DailySprintRacesResult {
 		FeatureRaces: []DailySprintRace{},
 	}
 
-	content := message.Content
-
-	// Parse Daily Sprint Races section
-	result.Races = parseRaceSection(content, "Daily Sprint Races", []string{
-		"Daily Feature Races",
-		"Weekly Races",
-		"Special Events",
-		"Endurance Races",
-		"Daily Endurance",
-		"Weekly Events",
-		"Championship",
-		"Competition",
-	})
-
-	// Parse Daily Feature Races section
-	result.FeatureRaces = parseRaceSection(content, "Daily Feature Races", []string{
-		"Weekly Races",
-		"Special Events",
-		"Endurance Races",
-		"Daily Endurance",
-		"Weekly Events",
-		"Championship",
-		"Competition",
-	})
+	result.Races, result.FeatureRaces = parseDailySections(message.Content)
 
 	// Match car classes and tracks to their IDs
 	matchRaceIDs(result)
 
 	return result
+}
+
+func parseDailySections(content string) ([]DailySprintRace, []DailySprintRace) {
+	lines := strings.Split(content, "\n")
+
+	var sprintRaces []DailySprintRace
+	var featureRaces []DailySprintRace
+	var currentRace *DailySprintRace
+	currentSection := "none"
+
+	flushCurrentRace := func() {
+		if currentRace == nil {
+			return
+		}
+
+		switch currentSection {
+		case "sprint":
+			sprintRaces = append(sprintRaces, *currentRace)
+		case "feature":
+			featureRaces = append(featureRaces, *currentRace)
+		}
+
+		currentRace = nil
+	}
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line == "" {
+			continue
+		}
+
+		lower := strings.ToLower(line)
+
+		if strings.Contains(lower, "daily sprint races") {
+			flushCurrentRace()
+			currentSection = "sprint"
+			continue
+		}
+
+		if strings.Contains(lower, "weekdays feature races") || strings.Contains(lower, "weekly races") {
+			flushCurrentRace()
+			currentSection = "none"
+			continue
+		}
+
+		if strings.Contains(lower, "daily") && strings.Contains(lower, "races") {
+			flushCurrentRace()
+			currentSection = "feature"
+			continue
+		}
+
+		if currentSection == "none" {
+			continue
+		}
+
+		if isRaceLine(line) {
+			flushCurrentRace()
+			currentRace = parseRaceLine(line)
+			continue
+		}
+
+		if currentRace != nil && isScheduleLine(line) {
+			currentRace.Schedule = extractSchedule(line)
+		}
+	}
+
+	flushCurrentRace()
+
+	return sprintRaces, featureRaces
 }
 
 func parseRaceSection(content string, sectionTitle string, endMarkers []string) []DailySprintRace {
@@ -278,25 +324,42 @@ func parseRaceLine(line string) *DailySprintRace {
 	// Clean up the line - remove emoji and special characters
 	cleaned := cleanRaceLine(line)
 
-	// Parse "Car Class - Track" or "Car Class – Track" format
-	// Handle both regular hyphen and en-dash
-	separators := []string{" - ", " – ", " — "}
-
-	for _, sep := range separators {
-		if idx := strings.Index(cleaned, sep); idx > 0 {
-			race.CarClass = strings.TrimSpace(cleaned[:idx])
-			trackPart := strings.TrimSpace(cleaned[idx+len(sep):])
-
-			// Clean up track name - remove any trailing metadata
-			race.Track = cleanTrackName(trackPart)
-			race.ParsedOK = race.CarClass != "" && race.Track != ""
-			return race
-		}
+	if carClass, track, ok := splitCarClassAndTrack(cleaned); ok {
+		race.CarClass = carClass
+		race.Track = cleanTrackName(track)
+		race.ParsedOK = race.CarClass != "" && race.Track != ""
+		return race
 	}
 
 	// If no separator found, try to parse anyway
 	race.ParsedOK = false
 	return race
+}
+
+func splitCarClassAndTrack(line string) (string, string, bool) {
+	// First prefer fully spaced separators to avoid splitting class names that include hyphens.
+	separators := []string{" - ", " – ", " — "}
+	for _, sep := range separators {
+		if idx := strings.Index(line, sep); idx > 0 {
+			left := strings.TrimSpace(line[:idx])
+			right := strings.TrimSpace(line[idx+len(sep):])
+			if left != "" && right != "" {
+				return left, right, true
+			}
+		}
+	}
+
+	// Fallback for formatting glitches like "F4 -Hockenheim GP" or "DTM 95 -Sachsenring".
+	re := regexp.MustCompile(`\s[-–—]\s*|\s*[-–—]\s`)
+	if loc := re.FindStringIndex(line); loc != nil && loc[0] > 0 {
+		left := strings.TrimSpace(line[:loc[0]])
+		right := strings.TrimSpace(line[loc[1]:])
+		if left != "" && right != "" {
+			return left, right, true
+		}
+	}
+
+	return "", "", false
 }
 
 // cleanRaceLine removes emoji and special characters from the line
@@ -394,6 +457,16 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 				if part == "" {
 					continue
 				}
+				if normalizeForMatching(part) == "tcr" {
+					tcrCategoryIDs := getCategoryClassIDs("wtcr", carClasses)
+					if len(tcrCategoryIDs) == 0 {
+						allResolved = false
+						break
+					}
+					categoryIDs = append(categoryIDs, tcrCategoryIDs...)
+					displayParts = append(displayParts, "WTCR")
+					continue
+				}
 				classID := findCarClassID(part, carClasses)
 				if classID == "" {
 					allResolved = false
@@ -401,6 +474,18 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 				}
 				categoryIDs = append(categoryIDs, classID)
 				displayParts = append(displayParts, part)
+			}
+
+			if len(categoryIDs) > 1 {
+				seen := make(map[string]bool, len(categoryIDs))
+				unique := make([]string, 0, len(categoryIDs))
+				for _, id := range categoryIDs {
+					if !seen[id] {
+						seen[id] = true
+						unique = append(unique, id)
+					}
+				}
+				categoryIDs = unique
 			}
 
 			if allResolved && len(categoryIDs) > 0 {
@@ -429,6 +514,17 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 			newRace.CategoryIDs = getCategoryClassIDs(category, carClasses)
 			newRace.TrackID = findTrackID(race.Track, tracks)
 			newRace.MatchedOK = newRace.TrackID != ""
+			expandedRaces = append(expandedRaces, newRace)
+			continue
+		}
+
+		if normalizedClass == "tcr" {
+			newRace := race
+			newRace.CarClass = "WTCR"
+			newRace.CarClassID = "WTCR"
+			newRace.CategoryIDs = getCategoryClassIDs("wtcr", carClasses)
+			newRace.TrackID = findTrackID(race.Track, tracks)
+			newRace.MatchedOK = newRace.TrackID != "" && len(newRace.CategoryIDs) > 0
 			expandedRaces = append(expandedRaces, newRace)
 			continue
 		}
