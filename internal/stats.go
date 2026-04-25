@@ -11,40 +11,55 @@ import (
 )
 
 const (
-	StatsDir                   = "cache/stats"
-	StatsClassesDir            = "cache/stats/classes"
-	StatsSuperclassesDir       = "cache/stats/superclasses"
-	StatsOverallPoleFile       = "cache/stats/overall_pole.json.gz"
-	StatsOverallBestedFile     = "cache/stats/overall_bested.json.gz"
-	StatsOverallPodiumFile     = "cache/stats/overall_podium.json.gz"
-	StatsOverallPercentileFile = "cache/stats/overall_percentile.json.gz"
-	StatsLegacyOverallFile     = "cache/stats/overall.json.gz"
-	StatsManifestFile          = "cache/stats/index.json"
+	StatsDir                     = "cache/stats"
+	StatsClassesDir              = "cache/stats/classes"
+	StatsSuperclassesDir         = "cache/stats/superclasses"
+	StatsOverallPoleFile         = "cache/stats/overall_pole.json.gz"
+	StatsOverallBestedFile       = "cache/stats/overall_bested.json.gz"
+	StatsOverallPodiumFile       = "cache/stats/overall_podium.json.gz"
+	StatsOverallAvgBestedFile    = "cache/stats/overall_avg_bested.json.gz"
+	StatsOverallEntriesFile      = "cache/stats/overall_entries.json.gz"
+	StatsOverallTopPoleFile      = "cache/stats/overall_top_pole.json.gz"
+	StatsOverallTopBestedFile    = "cache/stats/overall_top_bested.json.gz"
+	StatsOverallTopPodiumFile    = "cache/stats/overall_top_podium.json.gz"
+	StatsOverallTopAvgBestedFile = "cache/stats/overall_top_avg_bested.json.gz"
+	StatsOverallTopEntriesFile   = "cache/stats/overall_top_entries.json.gz"
+	StatsLegacyOverallFile       = "cache/stats/overall.json.gz"
+	StatsManifestFile            = "cache/stats/index.json"
+
+	StatsTopLimit            = 500
+	StatsClassTopLimit       = 1000
+	StatsClassMinEntries     = 2
+	StatsAvgBestedMinEntries = 5
+	StatsAvgBestedMinBested  = 100
 )
 
 type StatsSort string
 
 const (
-	StatsSortPole       StatsSort = "pole"
-	StatsSortBested     StatsSort = "bested"
-	StatsSortPodium     StatsSort = "podium"
-	StatsSortPercentile StatsSort = "percentile"
+	StatsSortPole      StatsSort = "pole"
+	StatsSortBested    StatsSort = "bested"
+	StatsSortPodium    StatsSort = "podium"
+	StatsSortAvgBested StatsSort = "avg_bested"
+	StatsSortEntries   StatsSort = "entries"
 )
 
 // DriverStatsEntry stores aggregated stats for a single driver.
 type DriverStatsEntry struct {
-	DriverKey     string  `json:"driver_key"`
-	Name          string  `json:"name"`
-	Avatar        string  `json:"avatar"`
-	Country       string  `json:"country"`
-	Team          string  `json:"team"`
-	Rank          string  `json:"rank"`
-	PolePositions int     `json:"pole_positions"`
-	BestedDrivers int     `json:"bested_drivers"`
-	Podiums       int     `json:"podiums"`
-	AvgPercentile float64 `json:"avg_percentile"`
-	percentileSum float64
-	entryCount    int
+	DriverKey      string  `json:"driver_key"`
+	Name           string  `json:"name"`
+	Avatar         string  `json:"avatar"`
+	Country        string  `json:"country"`
+	Team           string  `json:"team"`
+	Rank           string  `json:"rank"`
+	PolePositions  int     `json:"pole_positions"`
+	BestedDrivers  int     `json:"bested_drivers"`
+	Podiums        int     `json:"podiums"`
+	AvgBested      float64 `json:"avg_bested"`
+	Entries        int     `json:"entries"`
+	avgBestedSum   float64
+	avgBestedCount int
+	entryCount     int
 }
 
 // DriverStatsData represents one stats scope payload.
@@ -60,10 +75,11 @@ type DriverStatsData struct {
 
 // StatsSortFiles describes filenames for both ranking orders.
 type StatsSortFiles struct {
-	PoleFile       string `json:"pole_file"`
-	BestedFile     string `json:"bested_file"`
-	PodiumFile     string `json:"podium_file"`
-	PercentileFile string `json:"percentile_file"`
+	PoleFile      string `json:"pole_file"`
+	BestedFile    string `json:"bested_file"`
+	PodiumFile    string `json:"podium_file"`
+	AvgBestedFile string `json:"avg_bested_file"`
+	EntriesFile   string `json:"entries_file"`
 }
 
 // StatsScopeFile describes one generated scope file.
@@ -78,6 +94,7 @@ type StatsScopeFile struct {
 type StatsManifest struct {
 	UpdatedAt    time.Time        `json:"updated_at"`
 	Overall      StatsSortFiles   `json:"overall"`
+	OverallTop   StatsSortFiles   `json:"overall_top"`
 	Classes      []StatsScopeFile `json:"classes"`
 	Superclasses []StatsScopeFile `json:"superclasses"`
 }
@@ -110,15 +127,22 @@ func updateDriverStatsEntry(entry *DriverStatsEntry, result DriverResult) {
 	}
 	entry.BestedDrivers += bested
 	if result.TotalEntries > 1 {
-		entry.percentileSum += float64(result.Position-1) / float64(result.TotalEntries-1)
+		entry.avgBestedSum += float64(result.TotalEntries-result.Position) / float64(result.TotalEntries-1)
+		entry.avgBestedCount++
 	}
 	entry.entryCount++
 }
 
 func finalizeDriverStatsEntries(stats map[string]*DriverStatsEntry) {
 	for _, entry := range stats {
-		if entry.entryCount > 0 {
-			entry.AvgPercentile = math.Round(entry.percentileSum/float64(entry.entryCount)*10000) / 100
+		entry.Entries = entry.entryCount
+		if entry.avgBestedCount > 0 {
+			raw := entry.avgBestedSum / float64(entry.avgBestedCount) * 100
+			if raw >= 0.01 || raw == 0 {
+				entry.AvgBested = math.Round(raw*100) / 100
+			} else {
+				entry.AvgBested = math.Round(raw*10000) / 10000
+			}
 		}
 	}
 }
@@ -140,12 +164,25 @@ func sortDriverStatsEntries(entries []DriverStatsEntry, sortBy StatsSort) {
 			if entries[i].PolePositions != entries[j].PolePositions {
 				return entries[i].PolePositions > entries[j].PolePositions
 			}
-		case StatsSortPercentile:
-			if entries[i].AvgPercentile != entries[j].AvgPercentile {
-				return entries[i].AvgPercentile < entries[j].AvgPercentile
+		case StatsSortAvgBested:
+			if entries[i].AvgBested != entries[j].AvgBested {
+				return entries[i].AvgBested > entries[j].AvgBested
 			}
-			if entries[i].PolePositions != entries[j].PolePositions {
-				return entries[i].PolePositions > entries[j].PolePositions
+			if entries[i].Entries != entries[j].Entries {
+				return entries[i].Entries > entries[j].Entries
+			}
+			if entries[i].BestedDrivers != entries[j].BestedDrivers {
+				return entries[i].BestedDrivers > entries[j].BestedDrivers
+			}
+		case StatsSortEntries:
+			if entries[i].Entries != entries[j].Entries {
+				return entries[i].Entries > entries[j].Entries
+			}
+			if entries[i].AvgBested != entries[j].AvgBested {
+				return entries[i].AvgBested > entries[j].AvgBested
+			}
+			if entries[i].BestedDrivers != entries[j].BestedDrivers {
+				return entries[i].BestedDrivers > entries[j].BestedDrivers
 			}
 		default: // StatsSortPole
 			if entries[i].PolePositions != entries[j].PolePositions {
@@ -178,7 +215,11 @@ func statsMapToSortedEntries(stats map[string]*DriverStatsEntry, sortBy StatsSor
 			if entry.Podiums == 0 {
 				continue
 			}
-		case StatsSortPercentile:
+		case StatsSortAvgBested:
+			if entry.avgBestedCount == 0 {
+				continue
+			}
+		case StatsSortEntries:
 			if entry.entryCount == 0 {
 				continue
 			}
@@ -200,6 +241,41 @@ func buildStatsPayload(scopeType, scopeID, scopeName string, updatedAt time.Time
 	}
 	payload.Count = len(payload.Results)
 	return payload
+}
+
+func buildTopPayload(full DriverStatsData, limit int, minEntries int, minBested int) DriverStatsData {
+	filtered := full.Results
+
+	// For avg_bested, apply minEntries and minBested filter
+	if full.SortBy == StatsSortAvgBested {
+		filtered = make([]DriverStatsEntry, 0, len(full.Results))
+		for _, e := range full.Results {
+			if e.Entries >= minEntries && e.BestedDrivers >= minBested {
+				filtered = append(filtered, e)
+			}
+		}
+	} else if minEntries > 0 {
+		// For other sorts, filter by minEntries
+		filtered = make([]DriverStatsEntry, 0, len(full.Results))
+		for _, e := range full.Results {
+			if e.Entries >= minEntries {
+				filtered = append(filtered, e)
+			}
+		}
+	}
+
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return DriverStatsData{
+		ScopeType: full.ScopeType,
+		ScopeID:   full.ScopeID,
+		ScopeName: full.ScopeName,
+		SortBy:    full.SortBy,
+		UpdatedAt: full.UpdatedAt,
+		Results:   filtered,
+		Count:     len(filtered),
+	}
 }
 
 func sanitizeStatsFileName(name string) string {
@@ -336,7 +412,8 @@ func ExportStatsFromIndex(index DriverIndex) error {
 	overallPole := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortPole)
 	overallBested := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortBested)
 	overallPodium := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortPodium)
-	overallPercentile := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortPercentile)
+	overallAvgBested := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortAvgBested)
+	overallEntries := buildStatsPayload("overall", "overall", "Overall", now, overallStats, StatsSortEntries)
 
 	if _, err := writeGzipJSON(StatsOverallPoleFile, overallPole); err != nil {
 		return fmt.Errorf("failed to export overall pole stats: %w", err)
@@ -347,9 +424,30 @@ func ExportStatsFromIndex(index DriverIndex) error {
 	if _, err := writeGzipJSON(StatsOverallPodiumFile, overallPodium); err != nil {
 		return fmt.Errorf("failed to export overall podium stats: %w", err)
 	}
-	if _, err := writeGzipJSON(StatsOverallPercentileFile, overallPercentile); err != nil {
-		return fmt.Errorf("failed to export overall percentile stats: %w", err)
+	if _, err := writeGzipJSON(StatsOverallAvgBestedFile, overallAvgBested); err != nil {
+		return fmt.Errorf("failed to export overall avg_bested stats: %w", err)
 	}
+	if _, err := writeGzipJSON(StatsOverallEntriesFile, overallEntries); err != nil {
+		return fmt.Errorf("failed to export overall entries stats: %w", err)
+	}
+
+	// Top-500 overall files
+	if _, err := writeGzipJSON(StatsOverallTopPoleFile, buildTopPayload(overallPole, StatsTopLimit, 0, 0)); err != nil {
+		return fmt.Errorf("failed to export overall top pole stats: %w", err)
+	}
+	if _, err := writeGzipJSON(StatsOverallTopBestedFile, buildTopPayload(overallBested, StatsTopLimit, 0, 0)); err != nil {
+		return fmt.Errorf("failed to export overall top bested stats: %w", err)
+	}
+	if _, err := writeGzipJSON(StatsOverallTopPodiumFile, buildTopPayload(overallPodium, StatsTopLimit, 0, 0)); err != nil {
+		return fmt.Errorf("failed to export overall top podium stats: %w", err)
+	}
+	if _, err := writeGzipJSON(StatsOverallTopAvgBestedFile, buildTopPayload(overallAvgBested, StatsTopLimit, StatsAvgBestedMinEntries, StatsAvgBestedMinBested)); err != nil {
+		return fmt.Errorf("failed to export overall top avg_bested stats: %w", err)
+	}
+	if _, err := writeGzipJSON(StatsOverallTopEntriesFile, buildTopPayload(overallEntries, StatsTopLimit, 0, 0)); err != nil {
+		return fmt.Errorf("failed to export overall top entries stats: %w", err)
+	}
+
 	if err := os.Remove(StatsLegacyOverallFile); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove legacy overall stats file: %w", err)
 	}
@@ -373,13 +471,14 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		polePayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortPole)
 		bestedPayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortBested)
 		podiumPayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortPodium)
-		percentilePayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortPercentile)
+		avgBestedPayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortAvgBested)
+		entriesPayload := buildStatsPayload("class", classID, scopeName, now, classStats[classID], StatsSortEntries)
 
 		poleFileName := classID + "_pole.json.gz"
 		poleFilePath := filepath.Join(StatsClassesDir, poleFileName)
 		expectedClassFiles[poleFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(poleFilePath, polePayload); err != nil {
+		if _, err := writeGzipJSON(poleFilePath, buildTopPayload(polePayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export class pole stats %s: %w", classID, err)
 		}
 
@@ -387,7 +486,7 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		bestedFilePath := filepath.Join(StatsClassesDir, bestedFileName)
 		expectedClassFiles[bestedFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(bestedFilePath, bestedPayload); err != nil {
+		if _, err := writeGzipJSON(bestedFilePath, buildTopPayload(bestedPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export class bested stats %s: %w", classID, err)
 		}
 
@@ -395,26 +494,35 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		podiumFilePath := filepath.Join(StatsClassesDir, podiumFileName)
 		expectedClassFiles[podiumFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(podiumFilePath, podiumPayload); err != nil {
+		if _, err := writeGzipJSON(podiumFilePath, buildTopPayload(podiumPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export class podium stats %s: %w", classID, err)
 		}
 
-		percentileFileName := classID + "_percentile.json.gz"
-		percentileFilePath := filepath.Join(StatsClassesDir, percentileFileName)
-		expectedClassFiles[percentileFilePath] = struct{}{}
+		avgBestedFileName := classID + "_avg_bested.json.gz"
+		avgBestedFilePath := filepath.Join(StatsClassesDir, avgBestedFileName)
+		expectedClassFiles[avgBestedFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(percentileFilePath, percentilePayload); err != nil {
-			return fmt.Errorf("failed to export class percentile stats %s: %w", classID, err)
+		if _, err := writeGzipJSON(avgBestedFilePath, buildTopPayload(avgBestedPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
+			return fmt.Errorf("failed to export class avg_bested stats %s: %w", classID, err)
+		}
+
+		entriesFileName := classID + "_entries.json.gz"
+		entriesFilePath := filepath.Join(StatsClassesDir, entriesFileName)
+		expectedClassFiles[entriesFilePath] = struct{}{}
+
+		if _, err := writeGzipJSON(entriesFilePath, buildTopPayload(entriesPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
+			return fmt.Errorf("failed to export class entries stats %s: %w", classID, err)
 		}
 
 		manifestClasses = append(manifestClasses, StatsScopeFile{
 			ID:   classID,
 			Name: scopeName,
 			Files: StatsSortFiles{
-				PoleFile:       filepath.ToSlash(filepath.Join(StatsClassesDir, poleFileName)),
-				BestedFile:     filepath.ToSlash(filepath.Join(StatsClassesDir, bestedFileName)),
-				PodiumFile:     filepath.ToSlash(filepath.Join(StatsClassesDir, podiumFileName)),
-				PercentileFile: filepath.ToSlash(filepath.Join(StatsClassesDir, percentileFileName)),
+				PoleFile:      filepath.ToSlash(filepath.Join(StatsClassesDir, poleFileName)),
+				BestedFile:    filepath.ToSlash(filepath.Join(StatsClassesDir, bestedFileName)),
+				PodiumFile:    filepath.ToSlash(filepath.Join(StatsClassesDir, podiumFileName)),
+				AvgBestedFile: filepath.ToSlash(filepath.Join(StatsClassesDir, avgBestedFileName)),
+				EntriesFile:   filepath.ToSlash(filepath.Join(StatsClassesDir, entriesFileName)),
 			},
 			Count: polePayload.Count,
 		})
@@ -427,13 +535,14 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		polePayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortPole)
 		bestedPayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortBested)
 		podiumPayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortPodium)
-		percentilePayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortPercentile)
+		avgBestedPayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortAvgBested)
+		entriesPayload := buildStatsPayload("superclass", superclass, superclass, now, superclassStats[superclass], StatsSortEntries)
 
 		poleFileName := baseName + "_pole.json.gz"
 		poleFilePath := filepath.Join(StatsSuperclassesDir, poleFileName)
 		expectedSuperclassFiles[poleFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(poleFilePath, polePayload); err != nil {
+		if _, err := writeGzipJSON(poleFilePath, buildTopPayload(polePayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export superclass pole stats %s: %w", superclass, err)
 		}
 
@@ -441,7 +550,7 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		bestedFilePath := filepath.Join(StatsSuperclassesDir, bestedFileName)
 		expectedSuperclassFiles[bestedFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(bestedFilePath, bestedPayload); err != nil {
+		if _, err := writeGzipJSON(bestedFilePath, buildTopPayload(bestedPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export superclass bested stats %s: %w", superclass, err)
 		}
 
@@ -449,26 +558,35 @@ func ExportStatsFromIndex(index DriverIndex) error {
 		podiumFilePath := filepath.Join(StatsSuperclassesDir, podiumFileName)
 		expectedSuperclassFiles[podiumFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(podiumFilePath, podiumPayload); err != nil {
+		if _, err := writeGzipJSON(podiumFilePath, buildTopPayload(podiumPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
 			return fmt.Errorf("failed to export superclass podium stats %s: %w", superclass, err)
 		}
 
-		percentileFileName := baseName + "_percentile.json.gz"
-		percentileFilePath := filepath.Join(StatsSuperclassesDir, percentileFileName)
-		expectedSuperclassFiles[percentileFilePath] = struct{}{}
+		avgBestedFileName := baseName + "_avg_bested.json.gz"
+		avgBestedFilePath := filepath.Join(StatsSuperclassesDir, avgBestedFileName)
+		expectedSuperclassFiles[avgBestedFilePath] = struct{}{}
 
-		if _, err := writeGzipJSON(percentileFilePath, percentilePayload); err != nil {
-			return fmt.Errorf("failed to export superclass percentile stats %s: %w", superclass, err)
+		if _, err := writeGzipJSON(avgBestedFilePath, buildTopPayload(avgBestedPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
+			return fmt.Errorf("failed to export superclass avg_bested stats %s: %w", superclass, err)
+		}
+
+		entriesFileName := baseName + "_entries.json.gz"
+		entriesFilePath := filepath.Join(StatsSuperclassesDir, entriesFileName)
+		expectedSuperclassFiles[entriesFilePath] = struct{}{}
+
+		if _, err := writeGzipJSON(entriesFilePath, buildTopPayload(entriesPayload, StatsClassTopLimit, StatsClassMinEntries, 0)); err != nil {
+			return fmt.Errorf("failed to export superclass entries stats %s: %w", superclass, err)
 		}
 
 		manifestSuperclasses = append(manifestSuperclasses, StatsScopeFile{
 			ID:   superclass,
 			Name: superclass,
 			Files: StatsSortFiles{
-				PoleFile:       filepath.ToSlash(filepath.Join(StatsSuperclassesDir, poleFileName)),
-				BestedFile:     filepath.ToSlash(filepath.Join(StatsSuperclassesDir, bestedFileName)),
-				PodiumFile:     filepath.ToSlash(filepath.Join(StatsSuperclassesDir, podiumFileName)),
-				PercentileFile: filepath.ToSlash(filepath.Join(StatsSuperclassesDir, percentileFileName)),
+				PoleFile:      filepath.ToSlash(filepath.Join(StatsSuperclassesDir, poleFileName)),
+				BestedFile:    filepath.ToSlash(filepath.Join(StatsSuperclassesDir, bestedFileName)),
+				PodiumFile:    filepath.ToSlash(filepath.Join(StatsSuperclassesDir, podiumFileName)),
+				AvgBestedFile: filepath.ToSlash(filepath.Join(StatsSuperclassesDir, avgBestedFileName)),
+				EntriesFile:   filepath.ToSlash(filepath.Join(StatsSuperclassesDir, entriesFileName)),
 			},
 			Count: polePayload.Count,
 		})
@@ -484,10 +602,18 @@ func ExportStatsFromIndex(index DriverIndex) error {
 	manifest := StatsManifest{
 		UpdatedAt: now,
 		Overall: StatsSortFiles{
-			PoleFile:       filepath.ToSlash(StatsOverallPoleFile),
-			BestedFile:     filepath.ToSlash(StatsOverallBestedFile),
-			PodiumFile:     filepath.ToSlash(StatsOverallPodiumFile),
-			PercentileFile: filepath.ToSlash(StatsOverallPercentileFile),
+			PoleFile:      filepath.ToSlash(StatsOverallPoleFile),
+			BestedFile:    filepath.ToSlash(StatsOverallBestedFile),
+			PodiumFile:    filepath.ToSlash(StatsOverallPodiumFile),
+			AvgBestedFile: filepath.ToSlash(StatsOverallAvgBestedFile),
+			EntriesFile:   filepath.ToSlash(StatsOverallEntriesFile),
+		},
+		OverallTop: StatsSortFiles{
+			PoleFile:      filepath.ToSlash(StatsOverallTopPoleFile),
+			BestedFile:    filepath.ToSlash(StatsOverallTopBestedFile),
+			PodiumFile:    filepath.ToSlash(StatsOverallTopPodiumFile),
+			AvgBestedFile: filepath.ToSlash(StatsOverallTopAvgBestedFile),
+			EntriesFile:   filepath.ToSlash(StatsOverallTopEntriesFile),
 		},
 		Classes:      manifestClasses,
 		Superclasses: manifestSuperclasses,
