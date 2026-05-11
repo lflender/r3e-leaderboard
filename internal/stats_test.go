@@ -513,7 +513,7 @@ func TestBuildTopPayload_TruncatesAndFiltersAvgBested(t *testing.T) {
 		t.Fatalf("expected also_qualified second, got %q", topAvg.Results[1].DriverKey)
 	}
 
-	// Test class-level filtering: requires >= 2 entries for any sort
+	// Test class-level filtering: requires >= 2 entries for pole/bested/etc
 	classFull := DriverStatsData{
 		ScopeType: "class",
 		ScopeID:   "1703",
@@ -536,5 +536,31 @@ func TestBuildTopPayload_TruncatesAndFiltersAvgBested(t *testing.T) {
 	}
 	if topClass.Results[1].DriverKey != "solid" {
 		t.Fatalf("expected solid second, got %q", topClass.Results[1].DriverKey)
+	}
+
+	// Test class-level avg_bested filtering: requires >= 2 entries AND >= 10 bested drivers
+	classAvgBestedFull := DriverStatsData{
+		ScopeType: "class",
+		ScopeID:   "1703",
+		ScopeName: "Some Class",
+		SortBy:    StatsSortAvgBested,
+		Results: []DriverStatsEntry{
+			{DriverKey: "qualified", AvgBested: 85, Entries: 5, BestedDrivers: 20},
+			{DriverKey: "few_bested", AvgBested: 90, Entries: 10, BestedDrivers: 5}, // Has entries but too few bested
+			{DriverKey: "also_qualified", AvgBested: 80, Entries: 3, BestedDrivers: 15},
+			{DriverKey: "one_timer", AvgBested: 95, Entries: 1, BestedDrivers: 20}, // Too few entries
+		},
+		Count: 4,
+	}
+
+	topClassAvgBested := buildTopPayload(classAvgBestedFull, 1000, 2, 10)
+	if topClassAvgBested.Count != 2 {
+		t.Fatalf("expected 2 qualified avg_bested results for class (>= 2 entries AND >= 10 bested), got %d", topClassAvgBested.Count)
+	}
+	if topClassAvgBested.Results[0].DriverKey != "qualified" {
+		t.Fatalf("expected qualified first (highest avg_bested), got %q", topClassAvgBested.Results[0].DriverKey)
+	}
+	if topClassAvgBested.Results[1].DriverKey != "also_qualified" {
+		t.Fatalf("expected also_qualified second, got %q", topClassAvgBested.Results[1].DriverKey)
 	}
 }

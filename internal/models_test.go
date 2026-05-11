@@ -247,33 +247,6 @@ func TestGetDiscordCarClassAliases(t *testing.T) {
 	}
 }
 
-func TestGetDiscordTrackAliases(t *testing.T) {
-	aliases := GetDiscordTrackAliases()
-
-	if len(aliases) == 0 {
-		t.Fatal("GetDiscordTrackAliases returned empty map")
-	}
-
-	t.Logf("✅ GetDiscordTrackAliases returned %d aliases", len(aliases))
-
-	// Verify some expected aliases exist - these should match GetTracks() names exactly
-	expectedAliases := map[string]string{
-		"monza":      "Monza Circuit - Grand Prix",
-		"interlagos": "Interlagos - Grand Prix",
-		"zandvoort":  "Circuit Zandvoort - Grand Prix",
-	}
-
-	for alias, expected := range expectedAliases {
-		if val, ok := aliases[alias]; ok {
-			if val != expected {
-				t.Errorf("Alias %q maps to %q, expected %q", alias, val, expected)
-			}
-		} else {
-			t.Errorf("Expected alias %q not found", alias)
-		}
-	}
-}
-
 // =============================================================================
 // ALIAS CONSISTENCY TESTS
 // =============================================================================
@@ -368,29 +341,6 @@ func TestGetDiscordMultiClassAliases(t *testing.T) {
 		}
 	} else {
 		t.Error("Expected 'tt cup' alias not found")
-	}
-}
-
-func TestDiscordTrackAliases_ResolveToValidTracks(t *testing.T) {
-	aliases := GetDiscordTrackAliases()
-	tracks := GetTracks()
-
-	// Check that alias values can resolve to valid tracks
-	for alias, target := range aliases {
-		found := false
-		targetLower := normalizeForMatching(target)
-
-		for _, track := range tracks {
-			trackLower := normalizeForMatching(track.Name)
-			if trackLower == targetLower || contains(trackLower, targetLower) {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			t.Logf("⚠️ Alias %q -> %q may not resolve to a valid track", alias, target)
-		}
 	}
 }
 

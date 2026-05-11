@@ -462,61 +462,129 @@ func TestFindCarClassID_WithParenthetical(t *testing.T) {
 }
 
 // =============================================================================
-// TRACK ALIAS TESTS - Testing all Discord abbreviations
+// TOKEN-BASED TRACK MATCHING TESTS
 // =============================================================================
 
-func TestFindTrackID_AllAliases(t *testing.T) {
+func TestFindTrackID_TokenMatching(t *testing.T) {
 	tracks := GetTracks()
 
-	// Test all aliases defined in GetDiscordTrackAliases()
 	tests := []struct {
-		alias       string
+		input       string
 		expectedID  string
 		description string
 	}{
+		// Short names - single token match with GP/Intl default
 		{"autodrom most", "7112", "Autodrom Most - Grand Prix"},
-		{"most", "7112", "Autodrom Most (short)"},
+		{"most", "7112", "Autodrom Most (single token)"},
 		{"interlagos", "10463", "Interlagos - Grand Prix"},
 		{"monza", "1671", "Monza Circuit - Grand Prix"},
 		{"imola", "1850", "Imola - Grand Prix"},
-		{"zolder", "1684", "Circuit Zolder - Grand Prix"},
 		{"hungaroring", "1866", "Hungaroring - Grand Prix"},
-		{"zandvoort", "10782", "Circuit Zandvoort - Grand Prix"},
-		{"spa classic", "13368", "Circuit de Spa-Francorchamps - Classic"},
-		{"bathurst", "1846", "Mount Panorama Circuit - Bathurst"},
-		{"laguna seca", "1856", "WeatherTech Raceway Laguna Seca"},
-		{"daytona", "8367", "Daytona International Speedway"},
-		{"nordschleife nls", "4975", "Nordschleife - NLS"},
-		{"sonoma sprint", "2016", "Sonoma Raceway - Sprint"},
-		{"road america", "5276", "Road America - Grand Prix"},
-		{"red bull ring", "2556", "Red Bull Ring Spielberg"},
+		{"bathurst", "1846", "Bathurst Circuit - Mount Panorama"},
 		{"sachsenring", "3538", "Sachsenring - Grand Prix"},
 		{"salzburgring", "2026", "Salzburgring - Grand Prix"},
-		// New track aliases from user-provided messages
-		{"slovakiaring", "2064", "Slovakia Ring - Grand Prix"},
-		{"oschersleben alternate", "12571", "Oschersleben Alternate"},
-		{"zandvoort gp", "10782", "Zandvoort GP"},
+		{"norisring", "2518", "Norisring - Grand Prix"},
+
+		// GP abbreviation expansion
+		{"zandvoort gp", "10782", "Circuit Zandvoort - Grand Prix"},
 		{"red bull ring gp", "2556", "Red Bull Ring GP"},
 		{"aragon gp", "8704", "Motorland Aragón - Grand Prix"},
-		{"aragon national", "9041", "Motorland Aragón - National"},
 		{"donington gp", "10394", "Donington Park - Grand Prix"},
-		{"mid ohio chicane", "1676", "Mid Ohio - Chicane"},
-		{"brands hatch indy", "2520", "Brands Hatch - Indy"},
-		{"hockenheimring classic gp", "12112", "Hockenheimring Classic GP"},
-		{"mantorp park", "6010", "Mantorp Park - Long Circuit"},
-		{"portimao", "1778", "Portimao Circuit - Grand Prix"},
+		{"monza gp", "1671", "Monza Circuit - Grand Prix"},
+		{"hockenheim gp", "1693", "Hockenheimring - Grand Prix (substring match)"},
+		{"oschersleben gp", "12506", "Motorsport Arena Oschersleben - Grand Prix"},
 		{"silverstone gp", "4039", "Silverstone Circuit - Grand Prix"},
-		{"lausitzring", "6166", "DEKRA Lausitzring"},
 		{"shanghai gp", "2027", "Shanghai Circuit - Grand Prix"},
-		{"paul ricard", "11909", "Paul Ricard - Solution 1A"},
+		{"portimao gp", "1778", "Portimao Circuit - Grand Prix"},
+		{"suzuka gp", "1841", "Suzuka Circuit - Grand Prix"},
+		{"sepang gp", "6341", "Sepang - Grand Prix"},
+		{"assen gp", "9985", "TT Circuit Assen - Grand Prix"},
+		{"estoril gp", "2024", "Estoril Circuit - Grand Prix"},
+		{"brands hatch gp", "9473", "Brands Hatch - Grand Prix"},
+
+		// Layout-specific matching
+		{"brands hatch indy", "2520", "Brands Hatch - Indy"},
+		{"spa classic", "13368", "Circuit de Spa-Francorchamps - Classic"},
+		{"aragon national", "9041", "Motorland Aragón - National"},
+		{"mid ohio chicane", "1676", "Mid Ohio - Chicane"},
+		{"mid ohio short", "1675", "Mid Ohio - Short"},
+		{"sonoma sprint", "2016", "Sonoma Raceway - Sprint"},
+		{"sonoma long", "3912", "Sonoma Raceway - Long"},
+		{"nordschleife nls", "4975", "Nordschleife - NLS"},
+		{"oschersleben alternate", "12571", "Oschersleben Alternate"},
+		{"portimao short", "1785", "Portimao Circuit - Short"},
+		{"donington national", "10725", "Donington Park - National"},
+		{"zandvoort short", "11090", "Circuit Zandvoort - Short"},
+		{"hockenheimring classic gp", "12112", "Hockenheimring Classic - Grand Prix"},
+
+		// Default layout preference (GP or International)
+		{"zandvoort", "10782", "Circuit Zandvoort - Grand Prix (default)"},
+		{"portimao", "1778", "Portimao Circuit - Grand Prix (default)"},
+		{"vallelunga", "13187", "Vallelunga - International (default)"},
+		{"zolder", "1684", "Circuit Zolder - Grand Prix"},
+
+		// Abbreviation expansion: Int. → International
+		{"silverstone classic int.", "12390", "Silverstone Circuit Classic - International"},
+		{"silverstone international", "5816", "Silverstone Circuit - International"},
+		{"silverstone classic international", "12390", "Silverstone Circuit Classic - International"},
+
+		// FC → Fast Chicane
+		{"nürburgring sprint fc", "2011", "Nürburgring - Sprint Fast Chicane"},
+		{"nürburgring gp fc", "2010", "Nürburgring - Grand Prix Fast Chicane"},
+
+		// IL → Inner Loop
+		{"watkins glen gp il", "9324", "Watkins Glen - Grand Prix with Inner Loop"},
+
+		// 24h → 24 Hours
+		{"nordschleife 24h", "5095", "Nordschleife - 24 Hours"},
+
+		// w/ → with
+		{"watkins glen gp w/ loop", "9324", "Watkins Glen - Grand Prix with Inner Loop"},
+
+		// Diacritic handling
+		{"gellerasen gp", "5925", "Gelleråsen Arena - Grand Prix Circuit"},
+		{"nurburgring gp", "1691", "Nürburgring - Grand Prix (no diacritics)"},
+		{"red bull ring südschleife", "5794", "Red Bull Ring - Südschleife"},
+		{"red bull ring sudschleife", "5794", "Red Bull Ring - Südschleife (no diacritics)"},
+
+		// Substring token matching
+		{"slovakiaring", "2064", "Slovakia Ring (slovakiaring contains slovakia)"},
+		{"hockenheimring classic", "12112", "Hockenheimring Classic - Grand Prix"},
+
+		// Single-entry tracks
+		{"laguna seca", "1856", "WeatherTech Raceway Laguna Seca - Grand Prix"},
+		{"road america", "5276", "Road America - Grand Prix"},
+		{"red bull ring", "2556", "Red Bull Ring Spielberg - Grand Prix Circuit"},
+		{"daytona road course", "8367", "Daytona International Speedway - Road Course"},
+		{"diepholz", "12395", "Fliegerhorst Diepholz - Full Circuit"},
+		{"falkenberg", "6140", "Falkenberg Motorbana - Grand Prix"},
+
+		// Track names as used in Discord fixtures
+		{"Zhejiang Circuit GP", "8075", "Zhejiang Circuit - Grand Prix"},
+		{"Circuit de Pau-Ville", "11905", "Circuit de Pau-Ville - Grand Prix"},
+		{"Mantorp Park", "6010", "Mantorp Park - Long Circuit"},
+		{"Macau", "2123", "Macau - Grand Prix"},
+		{"Indianapolis Road", "9943", "Indianapolis Motor Speedway - Road Course"},
+		{"Indianapolis Road Course", "9943", "Indianapolis Motor Speedway - Road Course"},
+		{"Daytona Road", "8367", "Daytona - Road Course"},
+		{"Lausitzring", "6166", "DEKRA Lausitzring - Grand Prix Course"},
+		{"Paul Ricard", "11909", "Paul Ricard - Solution 1A"},
+
+		// Latest schedule format examples
+		{"Suzuka West", "2013", "Suzuka Circuit - West Course"},
+		{"Charade GP", "10904", "Circuit de Charade - Grand Prix"},
+		{"Portimao Moto", "1783", "Portimao Circuit - Moto"},
+		{"Brands Hatch GP", "9473", "Brands Hatch - Grand Prix"},
+		{"Silverstone National", "5817", "Silverstone Circuit - National"},
+		{"Spa GP", "13256", "Circuit de Spa-Francorchamps - Grand Prix"},
 	}
 
 	for _, test := range tests {
-		t.Run(test.alias, func(t *testing.T) {
-			result := findTrackID(test.alias, tracks)
+		t.Run(test.input, func(t *testing.T) {
+			result := findTrackID(test.input, tracks)
 			if result != test.expectedID {
 				t.Errorf("findTrackID(%q) = %q, expected %q (%s)",
-					test.alias, result, test.expectedID, test.description)
+					test.input, result, test.expectedID, test.description)
 			}
 		})
 	}
@@ -525,11 +593,96 @@ func TestFindTrackID_AllAliases(t *testing.T) {
 func TestFindTrackID_WithTypo(t *testing.T) {
 	tracks := GetTracks()
 
-	// Test that common typos are handled
-	result := findTrackID("stowe circut long", tracks) // "circut" instead of "circuit"
-	expected := "6055"
-	if result != expected {
-		t.Errorf("findTrackID with typo: got %q, expected %q", result, expected)
+	// Test that common typos are handled via edit distance fallback
+	tests := []struct {
+		input    string
+		expected string
+		desc     string
+	}{
+		{"stowe circut long", "6055", "circut → circuit"},
+		{"Nürbrugring GP fast Chicane", "2010", "Nürbrugring → Nürburgring"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.desc, func(t *testing.T) {
+			result := findTrackID(test.input, tracks)
+			if result != test.expected {
+				t.Errorf("findTrackID(%q) = %q, expected %q (%s)",
+					test.input, result, test.expected, test.desc)
+			}
+		})
+	}
+}
+
+func TestParseDailySprintRaces_LatestScheduleFormat(t *testing.T) {
+	fixtures := GetTestFixtures()
+
+	msg := &DiscordMessage{
+		ID:        "latest_schedule",
+		Content:   fixtures.SampleDiscordMessage18,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	// Sprint races
+	if len(result.Races) < 5 {
+		t.Fatalf("Expected at least 5 sprint races, got %d", len(result.Races))
+		for i, r := range result.Races {
+			t.Logf("Sprint %d: class=%q track=%q classID=%q trackID=%q", i, r.CarClass, r.Track, r.CarClassID, r.TrackID)
+		}
+	}
+
+	// Verify sprint race track resolutions
+	sprintExpected := []struct {
+		carClass    string
+		trackID     string
+		description string
+	}{
+		{"Super Touring", "2013", "Suzuka Circuit - West Course"},
+		{"DTM 13-16", "10904", "Circuit de Charade - Grand Prix"},
+		{"A110 Cup", "1783", "Portimao Circuit - Moto"},
+		{"MX-5", "9473", "Brands Hatch - Grand Prix"},
+		{"F4", "5817", "Silverstone Circuit - National"},
+	}
+
+	for i, expected := range sprintExpected {
+		if i >= len(result.Races) {
+			break
+		}
+		race := result.Races[i]
+		if race.TrackID != expected.trackID {
+			t.Errorf("Sprint %d (%s): expected track ID %q (%s), got %q (track=%q)",
+				i, expected.carClass, expected.trackID, expected.description, race.TrackID, race.Track)
+		}
+	}
+
+	// Feature races
+	if len(result.FeatureRaces) < 3 {
+		t.Fatalf("Expected at least 3 feature races, got %d", len(result.FeatureRaces))
+	}
+
+	featureExpected := []struct {
+		trackID     string
+		description string
+	}{
+		{"2123", "Macau - Grand Prix"},
+		{"13256", "Circuit de Spa-Francorchamps - Grand Prix"},
+		{"5095", "Nordschleife - 24 Hours"},
+	}
+
+	for i, expected := range featureExpected {
+		if i >= len(result.FeatureRaces) {
+			break
+		}
+		race := result.FeatureRaces[i]
+		if race.TrackID != expected.trackID {
+			t.Errorf("Feature %d: expected track ID %q (%s), got %q (track=%q)",
+				i, expected.trackID, expected.description, race.TrackID, race.Track)
+		}
 	}
 }
 
@@ -2129,6 +2282,50 @@ func TestParsePlusCombo(t *testing.T) {
 	if !race1.MatchedOK {
 		t.Errorf("Race 1: expected MatchedOK=true")
 	}
+}
+
+func TestParsePlusComboWithRangeCategory(t *testing.T) {
+	// Test "GT3 + WTCR 18-22" combo where WTCR 18-22 is a range category
+	msg := &DiscordMessage{
+		ID: "plus_range_test",
+		Content: `Daily Feature Races (~30 min)
+🔥 GT3 + WTCR 18-22 - Nordschleife 24h
+30 min (17:30, 19:30, 21:30) LB open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	if len(result.FeatureRaces) != 1 {
+		t.Fatalf("Expected 1 feature race, got %d", len(result.FeatureRaces))
+	}
+
+	race := result.FeatureRaces[0]
+	if !race.MatchedOK {
+		t.Errorf("Expected MatchedOK=true, got false (CarClass=%q, CarClassID=%q, CategoryIDs=%v, TrackID=%q)",
+			race.CarClass, race.CarClassID, race.CategoryIDs, race.TrackID)
+	}
+
+	// GT3 multi-class alias expands to GTR 3 + DTM 2024 + DTM 2025 (3 IDs)
+	// WTCR 18-22 expands to WTCR 2018-2022 + Touring Cars Cup (6 IDs)
+	// Total: 9 unique category IDs
+	expectedGT3IDs := []string{"1703", "12770", "13136"} // GTR 3, DTM 2024, DTM 2025
+	for i, expected := range expectedGT3IDs {
+		if i >= len(race.CategoryIDs) || race.CategoryIDs[i] != expected {
+			t.Errorf("Expected GT3 CategoryIDs to start with %v, got %v", expectedGT3IDs, race.CategoryIDs)
+			break
+		}
+	}
+
+	if len(race.CategoryIDs) != 9 {
+		t.Errorf("Expected 9 CategoryIDs (3 GT3 + 6 WTCR), got %d: %v", len(race.CategoryIDs), race.CategoryIDs)
+	}
+
+	t.Logf("Resolved: CarClass=%q CategoryIDs=%v TrackID=%q MatchedOK=%v",
+		race.CarClass, race.CategoryIDs, race.TrackID, race.MatchedOK)
 }
 
 func TestParseDailySprintRaces_Mar30MessageAliases(t *testing.T) {
