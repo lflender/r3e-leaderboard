@@ -5,43 +5,44 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const MultiplayerPositionsFile = "cache/mp_pos.json.gz"
+const MultiplayerPositionsDir = "cache/mp_pos"
+const MultiplayerPositionsFile = "cache/mp_pos/mp_pos.json.gz"
+const MultiplayerPositionsInactiveFile = "cache/mp_pos/mp_pos_inactive.json.gz"
 const multiplayerPositionsLegacyFile = "cache/mp_pos.json"
-
-var (
-	mpPosRowRe     = regexp.MustCompile(`(?is)<tr[^>]*>(.*?)</tr>`)
-	mpPosCellRe    = regexp.MustCompile(`(?is)<td[^>]*>(.*?)</td>`)
-	mpPosTagRe     = regexp.MustCompile(`(?is)<[^>]+>`)
-	mpPosNumRe     = regexp.MustCompile(`\d+`)
-	mpPosCountryRe = regexp.MustCompile(`flags/([a-z]{2})\.svg`)
-)
+const multiplayerPositionsLegacyGzFile = "cache/mp_pos.json.gz"
+const multiplayerRatingsURL = "https://game.raceroom.com/multiplayer-rating/ratings.json"
 
 // MultiplayerPosition represents a driver's multiplayer position.
 type MultiplayerPosition struct {
 	Position int    `json:"position"`
 	Name     string `json:"name"`
-	Country  string `json:"country"` // Two-letter country code (e.g., "nl", "gb", "pt")
+	UserID   string `json:"user_id"`            // Numeric user/path ID (e.g., "6050461")
+	Inactive bool   `json:"inactive,omitempty"` // True for drivers without an active ranked position
 }
 
 // MultiplayerPositionsData represents the exported top positions data.
 type MultiplayerPositionsData struct {
-	UpdatedAt   time.Time             `json:"updated_at"`
-	Count       int                   `json:"count"`
-	SourcePages []string              `json:"source_pages"`
-	Results     []MultiplayerPosition `json:"results"`
+	UpdatedAt time.Time             `json:"updated_at"`
+	Count     int                   `json:"count"`
+	Source    string                `json:"source"`
+	Results   []MultiplayerPosition `json:"results"`
+}
+
+// ratingsEntry is the raw JSON structure from ratings.json.
+type ratingsEntry struct {
+	UserId   int    `json:"UserId"`
+	Fullname string `json:"Fullname"`
+	Position *int   `json:"Position"` // nil when driver has no ranked position
 }
 
 // EnsureMultiplayerPositionsCache creates mp_pos cache if it does not exist.
@@ -55,85 +56,107 @@ func EnsureMultiplayerPositionsCache(ctx context.Context) error {
 	}
 
 	// Backward-compatible behavior: if legacy cache exists, avoid forcing a refresh.
-	_, legacyErr := os.Stat(multiplayerPositionsLegacyFile)
-	if legacyErr == nil {
-		return nil
-	}
-	if !errors.Is(legacyErr, os.ErrNotExist) {
-		return legacyErr
+	for _, legacy := range []string{multiplayerPositionsLegacyGzFile, multiplayerPositionsLegacyFile} {
+		_, legacyErr := os.Stat(legacy)
+		if legacyErr == nil {
+			return nil
+		}
+		if !errors.Is(legacyErr, os.ErrNotExist) {
+			return legacyErr
+		}
 	}
 
 	return RefreshMultiplayerPositions(ctx, 3000)
 }
 
-// RefreshMultiplayerPositions fetches the top `limit` multiplayer positions and writes mp_pos cache.
-// It calculates the number of pages needed (~500 entries per page) and fetches accordingly.
+// RefreshMultiplayerPositions fetches multiplayer ratings JSON and writes mp_pos cache.
+// Active drivers (with a ranked position) are written to mp_pos.json.gz.
+// Inactive drivers (without a ranked position) are written to mp_pos_inactive.json.gz.
 func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
 	if limit < 1 {
 		return fmt.Errorf("limit must be at least 1")
 	}
 
-	// Calculate number of pages needed (approximately 500 entries per page)
-	pagesNeeded := (limit + 499) / 500
-	pages := make([]string, pagesNeeded)
-	for i := 0; i < pagesNeeded; i++ {
-		pages[i] = fmt.Sprintf("https://game.raceroom.com/multiplayer-rating/%d.html", i+1)
-	}
+	log.Printf("🔍 Fetching multiplayer positions from %s (limit: %d)", multiplayerRatingsURL, limit)
 
-	log.Printf("🔍 Fetching multiplayer positions from %d pages (limit: %d)", len(pages), limit)
-
-	positions := make(map[int]MultiplayerPosition, limit)
-	for _, pageURL := range pages {
-		entries, err := fetchMultiplayerPositionsPage(ctx, pageURL)
-		if err != nil {
-			return err
-		}
-		log.Printf("✅ Parsed %d entries from %s", len(entries), pageURL)
-		for _, entry := range entries {
-			if entry.Position < 1 || entry.Position > limit {
-				continue
-			}
-			if _, exists := positions[entry.Position]; !exists {
-				positions[entry.Position] = entry
-			}
-		}
-	}
-
-	results := make([]MultiplayerPosition, 0, len(positions))
-	for _, entry := range positions {
-		results = append(results, entry)
-	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Position < results[j].Position
-	})
-	if len(results) > limit {
-		results = results[:limit]
-	}
-
-	if len(results) == 0 {
-		return fmt.Errorf("no multiplayer positions parsed")
-	}
-
-	data := MultiplayerPositionsData{
-		UpdatedAt:   time.Now(),
-		Count:       len(results),
-		SourcePages: pages,
-		Results:     results,
-	}
-
-	if err := exportMultiplayerPositions(data); err != nil {
+	entries, err := fetchMultiplayerRatings(ctx)
+	if err != nil {
 		return err
 	}
 
-	log.Printf("💾 Multiplayer positions exported to %s (%d entries)", MultiplayerPositionsFile, len(results))
+	activeResults, inactiveResults := processRatingsEntries(entries, limit)
+
+	if len(activeResults) == 0 {
+		return fmt.Errorf("no multiplayer positions parsed")
+	}
+
+	now := time.Now()
+
+	activeData := MultiplayerPositionsData{
+		UpdatedAt: now,
+		Count:     len(activeResults),
+		Source:    multiplayerRatingsURL,
+		Results:   activeResults,
+	}
+
+	inactiveData := MultiplayerPositionsData{
+		UpdatedAt: now,
+		Count:     len(inactiveResults),
+		Source:    multiplayerRatingsURL,
+		Results:   inactiveResults,
+	}
+
+	if err := exportMultiplayerPositions(activeData, inactiveData); err != nil {
+		return err
+	}
+
+	log.Printf("💾 Multiplayer positions exported to %s (%d active, %d inactive)", MultiplayerPositionsDir, len(activeResults), len(inactiveResults))
 	return nil
 }
 
-func fetchMultiplayerPositionsPage(ctx context.Context, url string) ([]MultiplayerPosition, error) {
+// processRatingsEntries processes raw ratings entries into separate active and inactive slices.
+// Active drivers (with Position 1..limit) are sorted by position.
+// Inactive drivers (without Position) get position = lastActivePosition+1 at the point
+// they appear in the list, and are only collected while lastActivePosition < limit.
+func processRatingsEntries(entries []ratingsEntry, limit int) (active []MultiplayerPosition, inactive []MultiplayerPosition) {
+	active = make([]MultiplayerPosition, 0, limit)
+	inactive = make([]MultiplayerPosition, 0)
+	lastActivePosition := 0
+
+	for _, e := range entries {
+		if e.Position != nil && *e.Position >= 1 && *e.Position <= limit {
+			active = append(active, MultiplayerPosition{
+				Position: *e.Position,
+				Name:     e.Fullname,
+				UserID:   strconv.Itoa(e.UserId),
+			})
+			if *e.Position > lastActivePosition {
+				lastActivePosition = *e.Position
+			}
+		} else if e.Position == nil && lastActivePosition < limit {
+			inactive = append(inactive, MultiplayerPosition{
+				Position: lastActivePosition + 1,
+				Name:     e.Fullname,
+				UserID:   strconv.Itoa(e.UserId),
+			})
+		}
+	}
+
+	sort.Slice(active, func(i, j int) bool {
+		return active[i].Position < active[j].Position
+	})
+	if len(active) > limit {
+		active = active[:limit]
+	}
+
+	return active, inactive
+}
+
+func fetchMultiplayerRatings(ctx context.Context) ([]ratingsEntry, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(reqCtx, "GET", multiplayerRatingsURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +170,7 @@ func fetchMultiplayerPositionsPage(ctx context.Context, url string) ([]Multiplay
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("multiplayer rating HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("multiplayer ratings HTTP %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -155,129 +178,57 @@ func fetchMultiplayerPositionsPage(ctx context.Context, url string) ([]Multiplay
 		return nil, err
 	}
 
-	htmlText := string(body)
-	rows := mpPosRowRe.FindAllStringSubmatch(htmlText, -1)
-	entries := make([]MultiplayerPosition, 0, 600)
-	for _, row := range rows {
-		cells := mpPosCellRe.FindAllStringSubmatch(row[1], -1)
-		if len(cells) == 0 {
-			continue
-		}
-
-		// Extract country code from the first cell (flag cell) before cleaning
-		country := ""
-		if len(cells) > 0 {
-			if match := mpPosCountryRe.FindStringSubmatch(cells[0][1]); len(match) > 1 {
-				country = strings.ToUpper(match[1])
-			}
-		}
-
-		cellTexts := make([]string, 0, len(cells))
-		for _, cell := range cells {
-			text := cleanMPPosCell(cell[1])
-			if text != "" {
-				cellTexts = append(cellTexts, text)
-			}
-		}
-		if len(cellTexts) < 2 {
-			continue
-		}
-
-		posIdx := -1
-		posVal := 0
-		for i, text := range cellTexts {
-			posMatch := mpPosNumRe.FindString(text)
-			if posMatch == "" {
-				continue
-			}
-			pos, err := strconv.Atoi(posMatch)
-			if err != nil || pos < 1 {
-				continue
-			}
-			if strings.Contains(text, "#") || len(text) <= 4 {
-				posIdx = i
-				posVal = pos
-				break
-			}
-		}
-		if posIdx == -1 {
-			continue
-		}
-
-		name := ""
-		for j := posIdx + 1; j < len(cellTexts); j++ {
-			if cellTexts[j] != "" {
-				name = cellTexts[j]
-				break
-			}
-		}
-		if name == "" {
-			continue
-		}
-
-		entries = append(entries, MultiplayerPosition{Position: posVal, Name: name, Country: country})
+	var entries []ratingsEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("multiplayer ratings JSON parse: %w", err)
 	}
 
-	if len(entries) == 0 {
-		log.Printf("⚠️ Multiplayer positions parse failed for %s: rows=%d, body=%d bytes", url, len(rows), len(body))
-		log.Printf("⚠️ Multiplayer positions response sample: %s", sampleMPPosText(htmlText, 600))
-		return nil, fmt.Errorf("no rows parsed from %s", url)
-	}
-
+	log.Printf("✅ Parsed %d entries from %s", len(entries), multiplayerRatingsURL)
 	return entries, nil
 }
 
-func cleanMPPosCell(value string) string {
-	stripped := mpPosTagRe.ReplaceAllString(value, " ")
-	stripped = html.UnescapeString(stripped)
-	stripped = strings.TrimSpace(stripped)
-	if stripped == "" {
-		return ""
-	}
-	return strings.Join(strings.Fields(stripped), " ")
-}
-
-func sampleMPPosText(value string, limit int) string {
-	if limit < 1 {
-		return ""
-	}
-
-	s := strings.TrimSpace(value)
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > limit {
-		return s[:limit] + "..."
-	}
-	return s
-}
-
-func exportMultiplayerPositions(data MultiplayerPositionsData) error {
-	cacheDir := filepath.Dir(MultiplayerPositionsFile)
-	if err := os.MkdirAll(cacheDir, 0755); err != nil {
+func exportMultiplayerPositions(activeData, inactiveData MultiplayerPositionsData) error {
+	if err := os.MkdirAll(MultiplayerPositionsDir, 0755); err != nil {
 		return err
 	}
 
-	_, err := writeGzipJSON(MultiplayerPositionsFile, data)
-	return err
+	if _, err := writeGzipJSON(MultiplayerPositionsFile, activeData); err != nil {
+		return err
+	}
+	if _, err := writeGzipJSON(MultiplayerPositionsInactiveFile, inactiveData); err != nil {
+		return err
+	}
+	return nil
 }
 
-// LoadMultiplayerPositionsMap loads mp_pos cache into a map of lowercased driver name -> position.
+// LoadMultiplayerPositionsMap loads the active mp_pos cache into a map of lowercased driver name -> position.
 func LoadMultiplayerPositionsMap() (map[string]int, error) {
+	return loadPositionsFromFile(MultiplayerPositionsFile)
+}
+
+// LoadMultiplayerPositionsInactiveMap loads the inactive mp_pos cache into a map of lowercased driver name -> position.
+func LoadMultiplayerPositionsInactiveMap() (map[string]int, error) {
+	return loadPositionsFromFile(MultiplayerPositionsInactiveFile)
+}
+
+func loadPositionsFromFile(path string) (map[string]int, error) {
 	var parsed MultiplayerPositionsData
-	if loaded, err := readGzipJSON[MultiplayerPositionsData](MultiplayerPositionsFile); err == nil {
+	if loaded, err := readGzipJSON[MultiplayerPositionsData](path); err == nil {
 		parsed = loaded
 	} else if os.IsNotExist(err) {
-		// Backward-compatible fallback: legacy uncompressed file.
-		data, legacyErr := os.ReadFile(multiplayerPositionsLegacyFile)
-		if legacyErr != nil {
-			if errors.Is(legacyErr, os.ErrNotExist) {
-				return map[string]int{}, nil
+		// Backward-compatible fallback: try legacy files.
+		for _, legacy := range []string{multiplayerPositionsLegacyGzFile, multiplayerPositionsLegacyFile} {
+			data, legacyErr := os.ReadFile(legacy)
+			if legacyErr != nil {
+				if errors.Is(legacyErr, os.ErrNotExist) {
+					continue
+				}
+				return nil, legacyErr
 			}
-			return nil, legacyErr
-		}
-		if unmarshalErr := json.Unmarshal(data, &parsed); unmarshalErr != nil {
-			return nil, unmarshalErr
+			if unmarshalErr := json.Unmarshal(data, &parsed); unmarshalErr != nil {
+				return nil, unmarshalErr
+			}
+			break
 		}
 	} else {
 		return nil, err

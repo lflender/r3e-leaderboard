@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -723,5 +724,81 @@ func TestIncrementalIndexUpdate_WorksWithoutMonolithicNamesFile(t *testing.T) {
 	}
 	if _, ok := names["omer binikli"]; !ok {
 		t.Fatal("Expected Ömer Binikli from unchanged combo after incremental update")
+	}
+}
+
+// TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex verifies that
+// FinalizeStartupIndex triggers a full rebuild when the main cache has combos
+// not covered by the current sharded index. This catches drivers that exist in
+// cache files but were never indexed because the sharded index was reused
+// from an incomplete previous build.
+func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	// Use REAL track/class IDs from GetTracks()/GetCarClasses() so that
+	// LoadAllCachedData (which iterates the config matrix) finds them.
+	// Monza (1671) + GTR3 (1703)  and  Laguna Seca (1856) + GT4 (5825)
+	comboA := testTrackInfo("Monza Circuit - Grand Prix", "1671", "1703", "Alice Speed", "Bob Racer")
+	comboB := testTrackInfo("WeatherTech Raceway Laguna Seca - Grand Prix", "1856", "5825", "Edward Johnson", "Zoe Zoom")
+
+	// Build an initial index with only combo A (2 drivers).
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{comboA}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	// Verify initial index has only 2 drivers.
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex failed: %v", err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("Expected 2 drivers in initial index, got %d", len(names))
+	}
+	if _, ok := names["edward johnson"]; ok {
+		t.Fatal("Edward Johnson should NOT be in the initial index")
+	}
+
+	// Now save combo B to the main cache (simulating data fetched and promoted
+	// to main cache but never indexed — e.g. fetched after the last periodic
+	// indexer tick, or the nightly rebuild was interrupted).
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	// FinalizeStartupIndex with currentIndexedCount=1 (only combo A was indexed).
+	// No temp cache files to promote. The function should rebuild from
+	// LoadAllCachedData which will find both combo A and combo B.
+	indexedCount, err := FinalizeStartupIndex(context.Background(), 1, time.Time{})
+	if err != nil {
+		t.Fatalf("FinalizeStartupIndex failed: %v", err)
+	}
+
+	if indexedCount < 2 {
+		t.Fatalf("Expected indexedCount >= 2 after rebuild, got %d", indexedCount)
+	}
+
+	// Verify Edward Johnson is now in the index.
+	names, err = LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatalf("LoadShardedNamesIndex after FinalizeStartupIndex failed: %v", err)
+	}
+	if _, ok := names["edward johnson"]; !ok {
+		t.Fatal("Edward Johnson should be in the index after FinalizeStartupIndex rebuild")
+	}
+
+	// Edward Johnson must now appear in the mirror.
+	mirrors := readJSONFile[[]string](t, ShardedMirrorFile)
+	mirrorSet := make(map[string]bool, len(mirrors))
+	for _, m := range mirrors {
+		mirrorSet[m] = true
+	}
+	if !mirrorSet["edward johnson"] {
+		t.Fatalf("Mirror should contain 'edward johnson' after rebuild, got %d entries", len(mirrors))
 	}
 }

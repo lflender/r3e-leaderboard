@@ -17,8 +17,8 @@ import (
 
 const (
 	StatusFile          = "cache/status.json"
-	TopCombinationsFile = "cache/top_combinations.json.gz"
-	AllCombinationsFile = "cache/all_combinations.json.gz"
+	TopCombinationsFile = "cache/combinations/top_combinations.json.gz"
+	AllCombinationsFile = "cache/combinations/all_combinations.json.gz"
 
 	// Sharded index paths
 	ShardedIndexDir   = "cache/index/metadata"
@@ -289,12 +289,27 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 	// can look up drivers by name without knowing pathIDs.
 	// Same-name drivers with different pathIDs are kept as separate identities
 	// under the same search-name key.
+	//
+	// When a single pathID has results with different display names (driver
+	// renamed themselves), we use the most recent name (by DateTime) for all
+	// results so the index always reflects the current identity.
 	nameKeyed := make(DriverIndex, len(index))
 	for _, results := range index {
 		if len(results) == 0 {
 			continue
 		}
-		lowerName := normalizeSearchName(results[0].Name)
+
+		// Find the most recent name for this pathID.
+		bestName := results[0].Name
+		bestTime := results[0].DateTime
+		for i := 1; i < len(results); i++ {
+			if results[i].DateTime > bestTime && results[i].Name != "" {
+				bestTime = results[i].DateTime
+				bestName = results[i].Name
+			}
+		}
+
+		lowerName := normalizeSearchName(bestName)
 		if lowerName == "" {
 			continue
 		}
@@ -336,8 +351,14 @@ func ExportShardedIndex(index DriverIndex) (int64, error) {
 				idx = len(identities) - 1
 			}
 
-			// Update identity from latest results
-			r := pidResults[0]
+			// Use the most recent result's metadata for this identity.
+			bestIdx := 0
+			for i := 1; i < len(pidResults); i++ {
+				if pidResults[i].DateTime > pidResults[bestIdx].DateTime {
+					bestIdx = i
+				}
+			}
+			r := pidResults[bestIdx]
 			if r.Name != "" {
 				identities[idx].Name = r.Name
 			}

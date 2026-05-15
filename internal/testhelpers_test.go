@@ -25,6 +25,7 @@ type TestFixtures struct {
 	SampleDiscordMessage15 string // Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
 	SampleDiscordMessage16 string // Feb 23, 2026 - Truck, Assen GP, Sonoma Long, GT3, Super Touring, MX5, DTM 1995
 	SampleDiscordMessage17 string // Mar 2, 2026 - DTM92, PCCD+PCCNA, Watkins Glen GP w/ Loop, DTM 2013-16
+	SampleDiscordMessage18 string // May 2026 - Latest format: Suzuka West, Charade GP, Portimao Moto, Spa GP
 	SampleTrackData        []map[string]interface{}
 }
 
@@ -465,6 +466,38 @@ Daily Feature Races (~30 min)
 ` + "`60 min` `(17:00, 19:00, 21:00)` `open setup`" + `
 🏆 **Sunday: Audi TT 16 - M235i - Oschersleben**
 ` + "`45 min` `(17:00, 19:00, 21:00)` `open setup`" + ``,
+
+		// May 2026 - Latest format with token-based track matching
+		SampleDiscordMessage18: `📅 This Week in Ranked Multiplayer
+(Updated every Monday, new combos weekly!)
+ 
+Daily Sprint Races (15 min)
+🏁 Super Touring – Suzuka West
+Every half hour (--:10) LB fixed setup
+🏁 DTM 13-16 – Charade GP
+Every half hour (--:20, --:50) LB fixed setup
+🆓 A110 Cup – Portimao Moto
+Every half hour (--:15, --:45) LB fixed setup
+🏁 MX-5 – Brands Hatch GP
+Every half hour (--:05) LB fixed setup
+🏁 F4 - Silverstone National
+Every half hour (--:25) practice 5 / LB fixed setup
+
+Daily Hourly Feature Races (20–30 min)
+🔥 Super Touring - Macau
+30 min (14:00, 17:00, 20:00) LB fixed setup
+🔥 Hypercars + GT3 - Spa GP
+25 min (15:00, 18:00, 21:00) LB open setup
+🔥 GT3 + WTCR 18-22 - Nordschleife 24h
+20 min (16:00, 19:00, 22:00) LB open setup
+ 
+Weekdays Feature Races Mon, Tue, Thu (30–45 min)
+🔥 Monday: PCCD + PCCNA - Oschersleben GP
+30 min (17:30, 19:30, 21:30) open setup
+🔥 Tuesday: F3 - Mid Ohio Chicane
+35 min (17:30, 19:30, 21:30) open setup
+🔥 Thursday: 944 Cup - Vallelunga
+40 min (17:30, 19:30, 21:30) open setup`,
 
 		// Sample leaderboard data matching real API structure
 		SampleTrackData: []map[string]interface{}{

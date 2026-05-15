@@ -384,8 +384,15 @@ func HasShardedIndex() bool {
 }
 
 // FinalizeStartupIndex promotes any pending temp-cache files and applies an
-// incremental update. If nothing changed and no index exists yet, it falls back
-// to building from the current main cache.
+// incremental update. When no promoted combos are found, it falls back to a
+// full rebuild from the main cache to ensure the index includes all cached
+// combinations — not just the ones that happened to pass through temp cache
+// during this startup cycle.
+//
+// Without the full-rebuild fallback, combos that exist in the main cache
+// but were never processed by any incremental update (e.g. fetched during a
+// previous cycle whose nightly rebuild was interrupted, or fetched after the
+// last periodic indexer tick) would be silently missing from the index.
 //
 // Returns the updated indexed-count baseline for orchestrator status tracking.
 func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDailyRaceRefresh time.Time) (int, error) {
@@ -403,23 +410,21 @@ func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDail
 		return currentIndexedCount, nil
 	}
 
-	if currentIndexedCount == 0 {
-		cachedTracks := LoadAllCachedData(ctx)
-		if len(cachedTracks) == 0 {
-			return 0, nil
-		}
-		if err := BuildAndExportIndex(cachedTracks); err != nil {
-			return currentIndexedCount, fmt.Errorf("failed to export startup final cache index: %w", err)
-		}
-		log.Println("✅ Final cache index complete")
-		return len(cachedTracks), nil
+	// No promoted combos — rebuild the full index from the main cache.
+	// This is the only reliable way to ensure the index includes every
+	// cached combination, including ones that were promoted to the main
+	// cache in a previous cycle but never made it into the sharded index
+	// (e.g. the nightly full rebuild was interrupted, or combos were
+	// fetched after the last periodic indexer tick).
+	cachedTracks := LoadAllCachedData(ctx)
+	if len(cachedTracks) == 0 {
+		return 0, nil
 	}
-
-	if err := refreshCombinationExportsFromCache(ctx, true); err != nil {
-		log.Printf("⚠️ Failed to refresh missing top/all combinations exports: %v", err)
+	if err := BuildAndExportIndex(cachedTracks); err != nil {
+		return currentIndexedCount, fmt.Errorf("failed to export startup final cache index: %w", err)
 	}
-
-	return currentIndexedCount, nil
+	log.Println("✅ Final cache index complete")
+	return len(cachedTracks), nil
 }
 
 func refreshCombinationExportsFromCache(ctx context.Context, onlyIfMissing bool) error {
