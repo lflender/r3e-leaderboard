@@ -2,9 +2,9 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -16,14 +16,11 @@ import (
 func TestEnsureMultiplayerPositionsCache_FileExists(t *testing.T) {
 	ctx := context.Background()
 
-	// Create or check if mp_pos.json exists
-	// If it exists, should return nil immediately
 	_, err := os.Stat(MultiplayerPositionsFile)
 	existsBefore := err == nil
 
 	result := EnsureMultiplayerPositionsCache(ctx)
 
-	// If file exists, should succeed with no error
 	if existsBefore && result != nil {
 		t.Logf("File exists, but got error: %v", result)
 	}
@@ -39,11 +36,8 @@ func TestEnsureMultiplayerPositionsCache_FileExists(t *testing.T) {
 func TestEnsureMultiplayerPositionsCache_FileDoesNotExist(t *testing.T) {
 	ctx := context.Background()
 
-	// Note: This test may fail if network is unavailable
-	// The function will attempt to fetch from the actual website
 	result := EnsureMultiplayerPositionsCache(ctx)
 
-	// If function runs successfully (network available), file should exist or error should be minimal
 	if result != nil {
 		t.Logf("EnsureMultiplayerPositionsCache returned error (likely network-related): %v", result)
 	}
@@ -78,14 +72,12 @@ func TestRefreshMultiplayerPositions_InvalidLimit(t *testing.T) {
 func TestRefreshMultiplayerPositions_ValidLimit(t *testing.T) {
 	ctx := context.Background()
 
-	// Use small limit for testing
 	result := RefreshMultiplayerPositions(ctx, 10)
 
 	if result != nil {
 		t.Logf("RefreshMultiplayerPositions(10) returned error (likely network-related): %v", result)
 	}
 
-	// If successful, verify file was created
 	if result == nil {
 		_, err := os.Stat(MultiplayerPositionsFile)
 		if err != nil {
@@ -94,42 +86,12 @@ func TestRefreshMultiplayerPositions_ValidLimit(t *testing.T) {
 	}
 }
 
-func TestRefreshMultiplayerPositions_PageCalculation(t *testing.T) {
-	// Test that page count is calculated correctly
-	// ~500 entries per page
-
-	tests := []struct {
-		limit         int
-		expectedPages int
-		desc          string
-	}{
-		{100, 1, "100 entries = 1 page"},
-		{500, 1, "500 entries = 1 page"},
-		{501, 2, "501 entries = 2 pages"},
-		{1000, 2, "1000 entries = 2 pages"},
-		{1001, 3, "1001 entries = 3 pages"},
-		{3000, 6, "3000 entries = 6 pages"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.desc, func(t *testing.T) {
-			// Verify calculation: (limit + 499) / 500
-			calculated := (test.limit + 499) / 500
-			if calculated != test.expectedPages {
-				t.Errorf("Page calculation for %d entries: got %d, expected %d",
-					test.limit, calculated, test.expectedPages)
-			}
-		})
-	}
-}
-
 func TestRefreshMultiplayerPositions_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
+	cancel()
 
 	result := RefreshMultiplayerPositions(ctx, 100)
 
-	// Should fail with context cancellation error
 	if result == nil {
 		t.Error("Expected error when context is cancelled")
 	}
@@ -141,7 +103,6 @@ func TestRefreshMultiplayerPositions_TimeoutContext(t *testing.T) {
 
 	result := RefreshMultiplayerPositions(ctx, 100)
 
-	// May timeout if network is slow - document this
 	t.Logf("RefreshMultiplayerPositions with 100ms timeout returned: %v", result)
 }
 
@@ -152,20 +113,20 @@ func TestRefreshMultiplayerPositions_TimeoutContext(t *testing.T) {
 func TestMultiplayerPosition_Fields(t *testing.T) {
 	pos := MultiplayerPosition{
 		Position: 1,
-		Name:     "TestPlayer",
-		Country:  "NL",
+		Name:     "Sjors Euser",
+		UserID:   "6050461",
 	}
 
 	if pos.Position != 1 {
 		t.Errorf("Position = %d, expected 1", pos.Position)
 	}
 
-	if pos.Name != "TestPlayer" {
-		t.Errorf("Name = %q, expected 'TestPlayer'", pos.Name)
+	if pos.Name != "Sjors Euser" {
+		t.Errorf("Name = %q, expected 'Sjors Euser'", pos.Name)
 	}
 
-	if pos.Country != "NL" {
-		t.Errorf("Country = %q, expected 'NL'", pos.Country)
+	if pos.UserID != "6050461" {
+		t.Errorf("UserID = %q, expected '6050461'", pos.UserID)
 	}
 }
 
@@ -175,21 +136,21 @@ func TestMultiplayerPosition_Fields(t *testing.T) {
 
 func TestMultiplayerPositionsData_Fields(t *testing.T) {
 	data := MultiplayerPositionsData{
-		UpdatedAt:   time.Now(),
-		Count:       10,
-		SourcePages: []string{"page1", "page2"},
+		UpdatedAt: time.Now(),
+		Count:     2,
+		Source:    multiplayerRatingsURL,
 		Results: []MultiplayerPosition{
-			{Position: 1, Name: "Player1", Country: "NL"},
-			{Position: 2, Name: "Player2", Country: "GB"},
+			{Position: 1, Name: "Sjors Euser", UserID: "6050461"},
+			{Position: 2, Name: "Lloyd Biddulph", UserID: "4910040"},
 		},
 	}
 
-	if data.Count != 10 {
-		t.Errorf("Count = %d, expected 10", data.Count)
+	if data.Count != 2 {
+		t.Errorf("Count = %d, expected 2", data.Count)
 	}
 
-	if len(data.SourcePages) != 2 {
-		t.Errorf("SourcePages = %d, expected 2", len(data.SourcePages))
+	if data.Source != multiplayerRatingsURL {
+		t.Errorf("Source = %q, expected %q", data.Source, multiplayerRatingsURL)
 	}
 
 	if len(data.Results) != 2 {
@@ -202,7 +163,68 @@ func TestMultiplayerPositionsData_Fields(t *testing.T) {
 }
 
 // =============================================================================
-// PROVIDED TEST FILE EXPORT TESTS
+// RATINGS JSON PARSING TESTS
+// =============================================================================
+
+func TestRatingsEntry_WithPosition(t *testing.T) {
+	raw := `{"UserId":6050461,"Username":"seuser","Fullname":"Sjors Euser","Rating":2519.346,"Position":1}`
+	var entry ratingsEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		t.Fatalf("Failed to parse ratings entry: %v", err)
+	}
+	if entry.UserId != 6050461 {
+		t.Errorf("UserId = %d, expected 6050461", entry.UserId)
+	}
+	if entry.Fullname != "Sjors Euser" {
+		t.Errorf("Fullname = %q, expected 'Sjors Euser'", entry.Fullname)
+	}
+	if entry.Position == nil {
+		t.Fatal("Position should not be nil")
+	}
+	if *entry.Position != 1 {
+		t.Errorf("Position = %d, expected 1", *entry.Position)
+	}
+}
+
+func TestRatingsEntry_WithoutPosition(t *testing.T) {
+	raw := `{"UserId":4753709,"Username":"jotaeleracing","Fullname":"Jose Luis","Rating":2459.496}`
+	var entry ratingsEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		t.Fatalf("Failed to parse ratings entry: %v", err)
+	}
+	if entry.Position != nil {
+		t.Errorf("Position should be nil for unranked driver, got %d", *entry.Position)
+	}
+}
+
+func TestRatingsEntry_ArrayParsing(t *testing.T) {
+	raw := `[
+		{"UserId":6050461,"Fullname":"Sjors Euser","Position":1},
+		{"UserId":4753709,"Fullname":"Jose Luis"},
+		{"UserId":4910040,"Fullname":"Lloyd Biddulph","Position":2}
+	]`
+	var entries []ratingsEntry
+	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
+		t.Fatalf("Failed to parse ratings array: %v", err)
+	}
+	if len(entries) != 3 {
+		t.Fatalf("Expected 3 entries, got %d", len(entries))
+	}
+
+	// Only 2 have positions
+	ranked := 0
+	for _, e := range entries {
+		if e.Position != nil {
+			ranked++
+		}
+	}
+	if ranked != 2 {
+		t.Errorf("Expected 2 ranked entries, got %d", ranked)
+	}
+}
+
+// =============================================================================
+// FILE PATH TESTS
 // =============================================================================
 
 func TestMultiplayerPositionsFile_Path(t *testing.T) {
@@ -215,55 +237,19 @@ func TestMultiplayerPositionsFile_Path(t *testing.T) {
 }
 
 func TestMultiplayerPositionsFile_IsValidPath(t *testing.T) {
-	// Verify path doesn't contain invalid characters
 	if filepath.IsAbs(MultiplayerPositionsFile) {
 		t.Error("MultiplayerPositionsFile should be relative path")
 	}
 
-	// Should be under cache directory
 	if !filepath.HasPrefix(MultiplayerPositionsFile, "cache") {
 		t.Error("MultiplayerPositionsFile should be under cache directory")
 	}
 }
 
-// =============================================================================
-// INTEGRATION TESTS
-// =============================================================================
-
-func TestMultiplayerPositions_RoundTrip(t *testing.T) {
-	// Note: EnsureMultiplayerPositionsCache uses global MultiplayerPositionsFile path
-	// This test documents the limitation - can't easily test with temp file
-	t.Logf("Note: MultiplayerPositions tests use global file path, can't easily isolate")
-}
-
-// =============================================================================
-// HTML PARSING REGEX TESTS
-// =============================================================================
-
-func TestMultiplayerPositions_CountryCodeExtraction(t *testing.T) {
-	// The mp_pos module uses regex to extract country codes from flags
-	// Tested implicitly through fetchMultiplayerPositionsPage
-	// Document that country codes are extracted as uppercase 2-letter codes
-
-	tests := []struct {
-		code string
-		desc string
-	}{
-		{"NL", "Netherlands"},
-		{"GB", "Great Britain"},
-		{"BE", "Belgium"},
-		{"DE", "Germany"},
-		{"FR", "France"},
-	}
-
-	for _, test := range tests {
-		if len(test.code) != 2 {
-			t.Errorf("Country code %q should be 2 letters", test.code)
-		}
-
-		if strings.ToUpper(test.code) != test.code {
-			t.Errorf("Country code %q should be uppercase", test.code)
-		}
+func TestMultiplayerRatingsURL(t *testing.T) {
+	expected := "https://game.raceroom.com/multiplayer-rating/ratings.json"
+	if multiplayerRatingsURL != expected {
+		t.Errorf("multiplayerRatingsURL = %q, expected %q", multiplayerRatingsURL, expected)
 	}
 }
 
@@ -272,28 +258,20 @@ func TestMultiplayerPositions_CountryCodeExtraction(t *testing.T) {
 // =============================================================================
 
 func TestRefreshMultiplayerPositions_NoDataParsed(t *testing.T) {
-	// This would occur if HTML parsing failed or no valid positions found
-	// Document the behavior - returns error if no entries parsed
-	t.Log("RefreshMultiplayerPositions returns error if no entries are parsed from HTML")
+	t.Log("RefreshMultiplayerPositions returns error if no ranked entries found in ratings JSON")
 }
 
 func TestEnsureMultiplayerPositionsCache_CreatesDirectory(t *testing.T) {
 	ctx := context.Background()
 
-	// If called for first time and file doesn't exist, it calls RefreshMultiplayerPositions
-	// which should create the file in the cache directory
-	// Verify cache directory exists or is created
-
 	cacheDir := filepath.Dir(MultiplayerPositionsFile)
 	if cacheDir != "." && cacheDir != "" {
-		// Create if needed
 		_ = os.MkdirAll(cacheDir, 0755)
 	}
 
 	result := EnsureMultiplayerPositionsCache(ctx)
 
 	if result == nil {
-		// File should exist or be creatable
 		_, err := os.Stat(cacheDir)
 		if err != nil {
 			t.Logf("Cache directory should be accessible: %v", err)
@@ -305,14 +283,10 @@ func TestEnsureMultiplayerPositionsCache_CreatesDirectory(t *testing.T) {
 // CONTEXT CANCELLATION TESTS
 // =============================================================================
 
-func TestFetchMultiplayerPositionsPage_ContextCancellation(t *testing.T) {
-	// fetchMultiplayerPositionsPage is not exported, but it respects context
-	// Document behavior: cancellation terminates fetch early
-
+func TestFetchMultiplayerRatings_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	// Testing through EnsureMultiplayerPositionsCache
 	result := EnsureMultiplayerPositionsCache(ctx)
 
 	if result != nil {
