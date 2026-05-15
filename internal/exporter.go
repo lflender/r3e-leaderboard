@@ -17,8 +17,8 @@ import (
 
 const (
 	StatusFile          = "cache/status.json"
-	TopCombinationsFile = "cache/top_combinations.json.gz"
-	AllCombinationsFile = "cache/all_combinations.json.gz"
+	TopCombinationsFile = "cache/combinations/top_combinations.json.gz"
+	AllCombinationsFile = "cache/combinations/all_combinations.json.gz"
 
 	// Sharded index paths
 	ShardedIndexDir   = "cache/index/metadata"
