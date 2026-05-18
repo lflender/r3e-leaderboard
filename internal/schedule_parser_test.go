@@ -600,6 +600,7 @@ func TestFindTrackID_WithTypo(t *testing.T) {
 		desc     string
 	}{
 		{"stowe circut long", "6055", "circut → circuit"},
+		{"Nürbrugring GP", "1691", "Nürbrugring GP → Nürburgring Grand Prix (not Watkins Glen)"},
 		{"Nürbrugring GP fast Chicane", "2010", "Nürbrugring → Nürburgring"},
 	}
 
