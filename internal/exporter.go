@@ -739,6 +739,12 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,
 		MemorySysMB:              m.Sys / 1024 / 1024,
+		// Preserve Daily Race and fetch-error fields
+		FailedFetchCount:      existingStatus.FailedFetchCount,
+		FailedFetches:         existingStatus.FailedFetches,
+		RetriedFetchCount:     existingStatus.RetriedFetchCount,
+		DailySprintRacesCount: existingStatus.DailySprintRacesCount,
+		LastDailyRaceRefresh:  existingStatus.LastDailyRaceRefresh,
 	}
 	return ExportStatusData(status)
 }

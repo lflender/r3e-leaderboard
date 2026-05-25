@@ -978,6 +978,16 @@ func boolToInt(b bool) int {
 	return 0
 }
 
+// trackLayoutPart returns the layout portion of a track name (after " - "), lowercased.
+// For example "Watkins Glen International - Grand Prix" returns "grand prix".
+// If no separator is found, returns the full name lowercased.
+func trackLayoutPart(name string) string {
+	if idx := strings.Index(name, " - "); idx >= 0 {
+		return strings.ToLower(name[idx+3:])
+	}
+	return strings.ToLower(name)
+}
+
 // findTrackID finds the best matching track ID using token-based fuzzy matching.
 // 1. Expand abbreviations (GP→Grand Prix, etc.) in both Discord text and track names
 // 2. Tokenize and score by number of matching tokens
@@ -1011,13 +1021,15 @@ func findTrackID(trackName string, tracks []TrackConfig) string {
 		trackNorm := removeDiacritics(normalizeForMatching(expandTrackAbbreviations(track.Name)))
 		dist := levenshteinDistance(discordNorm, trackNorm)
 
-		normalizedName := strings.ToLower(track.Name)
+		// Detect layout from the part after " - " only, so venue names like
+		// "Watkins Glen International" don't count as having an international layout.
+		layoutPart := trackLayoutPart(track.Name)
 		c := trackCandidate{
 			trackID:      track.TrackID,
 			matched:      matched,
 			unmatched:    unmatched,
-			hasGP:        strings.Contains(normalizedName, "grand prix"),
-			hasIntl:      strings.Contains(normalizedName, "international"),
+			hasGP:        strings.Contains(layoutPart, "grand prix"),
+			hasIntl:      strings.Contains(layoutPart, "international"),
 			editDistance: dist,
 		}
 
