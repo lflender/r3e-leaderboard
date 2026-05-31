@@ -343,8 +343,14 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		return err
 	}
 
+	// Export teams index
+	teamCount, err := ExportTeamsIndex(index)
+	if err != nil {
+		log.Printf("⚠️ Failed to export teams index: %v", err)
+	}
+
 	// Update status with index statistics
-	if err := UpdateStatusWithIndexMetrics(tracks, index, uniqueTrackCount, totalEntries, buildDuration); err != nil {
+	if err := UpdateStatusWithIndexMetrics(tracks, index, uniqueTrackCount, totalEntries, buildDuration, teamCount); err != nil {
 		log.Printf("⚠️ Failed to update status with index stats: %v", err)
 	}
 
@@ -721,6 +727,12 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		return err
 	}
 
+	// Export teams index
+	teamCount, err := ExportTeamsIndex(index)
+	if err != nil {
+		log.Printf("⚠️ Failed to export teams index: %v", err)
+	}
+
 	// Free the large index map after export. Use GC only — skip
 	// debug.FreeOSMemory() which does expensive madvise() syscalls on every
 	// freed page (scales with heap size) and releases pages that will just
@@ -749,6 +761,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		TotalUniqueTracks:        existingStatus.TotalUniqueTracks, // preserved — avoid iterating entire index
 		TotalDrivers:             driverCount,
 		TotalEntries:             totalEntries,
+		TotalTeams:               teamCount,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,

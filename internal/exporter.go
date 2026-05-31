@@ -24,6 +24,7 @@ const (
 	ShardedIndexDir   = "cache/index/metadata"
 	ShardedMirrorFile = "cache/index/mirror.json.gz"
 	ShardedShardsDir  = "cache/index/entries"
+	TeamsIndexFile    = "cache/index/teams.json.gz"
 )
 
 // FailedFetch represents a failed fetch attempt
@@ -54,6 +55,8 @@ type StatusData struct {
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
 	// Discord Daily Sprint Races data
 	DailySprintRacesCount int `json:"daily_sprint_races_count"`
+	// Teams index count
+	TotalTeams int `json:"total_teams"`
 	// Daily Race refresh tracking
 	LastDailyRaceRefresh time.Time `json:"last_daily_race_refresh"`
 }
@@ -500,6 +503,76 @@ func LoadAllShards() (DriverIndex, error) {
 	return merged, nil
 }
 
+// TeamDriver represents a driver within a team.
+type TeamDriver struct {
+	Name   string `json:"name"`
+	PathID string `json:"path_id"`
+}
+
+// TeamsIndex maps team name → list of drivers in that team.
+type TeamsIndex map[string][]TeamDriver
+
+// ExportTeamsIndex builds a teams index from the driver index and exports it
+// to cache/index/teams.json.gz. For each driver with a non-empty team, the
+// most recent result's name and pathID are used. Returns the number of teams.
+func ExportTeamsIndex(index DriverIndex) (int, error) {
+	teams := make(TeamsIndex)
+
+	for pathID, results := range index {
+		if len(results) == 0 {
+			continue
+		}
+
+		// Find the most recent result with a team set
+		var bestName string
+		var bestTeam string
+		var bestTime string
+		for _, r := range results {
+			if r.Team == "" {
+				continue
+			}
+			if bestTeam == "" || r.DateTime > bestTime {
+				bestTime = r.DateTime
+				bestTeam = r.Team
+				bestName = r.Name
+			}
+		}
+		if bestTeam == "" || strings.EqualFold(bestTeam, "Privateer") {
+			continue
+		}
+		// Fallback name from any result if team entry had no name
+		if bestName == "" {
+			for _, r := range results {
+				if r.Name != "" {
+					bestName = r.Name
+					break
+				}
+			}
+		}
+
+		teams[bestTeam] = append(teams[bestTeam], TeamDriver{
+			Name:   bestName,
+			PathID: pathID,
+		})
+	}
+
+	// Sort drivers within each team by name for stable output
+	for team := range teams {
+		drivers := teams[team]
+		sort.Slice(drivers, func(i, j int) bool {
+			return drivers[i].Name < drivers[j].Name
+		})
+		teams[team] = drivers
+	}
+
+	if _, err := writeGzipJSON(TeamsIndexFile, teams); err != nil {
+		return 0, fmt.Errorf("failed to export teams index: %w", err)
+	}
+
+	log.Printf("🏁 Teams index exported: %d teams", len(teams))
+	return len(teams), nil
+}
+
 // LoadLetterNames loads per-driver metadata for a specific letter from the letter-sharded names.
 // Key should be "a"-"z" or "_".
 func LoadLetterNames(key string) (DriverNamesIndex, error) {
@@ -708,7 +781,7 @@ func ExportStatusData(status StatusData) error {
 
 // UpdateStatusWithIndexMetrics updates the status file with index statistics
 // This is exported so indexer.go can update status after building the index
-func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration) error {
+func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration, teamCount int) error {
 	// Read current memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -735,6 +808,7 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             len(index),
 		TotalEntries:             totalEntries,
+		TotalTeams:               teamCount,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,
