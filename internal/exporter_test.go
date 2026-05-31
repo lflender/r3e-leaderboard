@@ -1782,18 +1782,18 @@ func TestExportTeamsIndex_Basic(t *testing.T) {
 	}
 
 	for teamName, expectedCount := range expectedTeams {
-		drivers, ok := teams[teamName]
+		entry, ok := teams[teamName]
 		if !ok {
 			t.Errorf("Missing team %q", teamName)
 			continue
 		}
-		if len(drivers) != expectedCount {
-			t.Errorf("Team %q: expected %d drivers, got %d", teamName, expectedCount, len(drivers))
+		if len(entry.Drivers) != expectedCount {
+			t.Errorf("Team %q: expected %d drivers, got %d", teamName, expectedCount, len(entry.Drivers))
 		}
 	}
 
 	// Verify driver details
-	if teams["Team A"][0].Name != "Alice Speed" || teams["Team A"][0].PathID != "2000001" {
+	if teams["Team A"].Drivers[0].Name != "Alice Speed" || teams["Team A"].Drivers[0].PathID != "2000001" {
 		t.Errorf("Team A driver mismatch: %+v", teams["Team A"])
 	}
 }
@@ -1876,14 +1876,14 @@ func TestExportTeamsIndex_MultipleDriversSameTeam(t *testing.T) {
 		t.Fatalf("Expected 1 team, got %d", len(teams))
 	}
 
-	drivers := teams["Shared Team"]
-	if len(drivers) != 3 {
-		t.Fatalf("Expected 3 drivers in team, got %d", len(drivers))
+	entry := teams["Shared Team"]
+	if len(entry.Drivers) != 3 {
+		t.Fatalf("Expected 3 drivers in team, got %d", len(entry.Drivers))
 	}
 
 	// Should be sorted by name
-	if drivers[0].Name != "Alpha" || drivers[1].Name != "Beta" || drivers[2].Name != "Gamma" {
-		t.Errorf("Drivers not sorted: %+v", drivers)
+	if entry.Drivers[0].Name != "Alpha" || entry.Drivers[1].Name != "Beta" || entry.Drivers[2].Name != "Gamma" {
+		t.Errorf("Drivers not sorted: %+v", entry.Drivers)
 	}
 }
 
@@ -1938,5 +1938,86 @@ func TestExportTeamsIndex_ExcludesPrivateer(t *testing.T) {
 	}
 	if _, ok := teams["Actual Racing Team"]; !ok {
 		t.Fatal("Expected 'Actual Racing Team' to be present")
+	}
+}
+
+func TestExportTeamsIndex_CountryMajority(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := DriverIndex{
+		"10": {
+			{Name: "A", PathID: "10", Team: "Swedish Team", Country: "Sweden", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"11": {
+			{Name: "B", PathID: "11", Team: "Swedish Team", Country: "Sweden", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"12": {
+			{Name: "C", PathID: "12", Team: "Swedish Team", Country: "Germany", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+	}
+
+	if _, err := ExportTeamsIndex(index); err != nil {
+		t.Fatalf("ExportTeamsIndex failed: %v", err)
+	}
+
+	teams := readJSONFile[TeamsIndex](t, TeamsIndexFile)
+	entry := teams["Swedish Team"]
+	if entry.Country != "Sweden" {
+		t.Errorf("Expected country 'Sweden' (2/3 majority), got %q", entry.Country)
+	}
+}
+
+func TestExportTeamsIndex_CountryVarious(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := DriverIndex{
+		"20": {
+			{Name: "D", PathID: "20", Team: "Mixed Team", Country: "Sweden", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"21": {
+			{Name: "E", PathID: "21", Team: "Mixed Team", Country: "Germany", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"22": {
+			{Name: "F", PathID: "22", Team: "Mixed Team", Country: "France", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"23": {
+			{Name: "G", PathID: "23", Team: "Mixed Team", Country: "Spain", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+	}
+
+	if _, err := ExportTeamsIndex(index); err != nil {
+		t.Fatalf("ExportTeamsIndex failed: %v", err)
+	}
+
+	teams := readJSONFile[TeamsIndex](t, TeamsIndexFile)
+	entry := teams["Mixed Team"]
+	if entry.Country != "Various" {
+		t.Errorf("Expected country 'Various' (no majority), got %q", entry.Country)
+	}
+}
+
+func TestExportTeamsIndex_CountryExact50PercentIsVarious(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	index := DriverIndex{
+		"30": {
+			{Name: "H", PathID: "30", Team: "Half Team", Country: "Sweden", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+		"31": {
+			{Name: "I", PathID: "31", Team: "Half Team", Country: "Germany", DateTime: "2025-01-01T00:00:00Z", TrackID: "1", ClassID: "1"},
+		},
+	}
+
+	if _, err := ExportTeamsIndex(index); err != nil {
+		t.Fatalf("ExportTeamsIndex failed: %v", err)
+	}
+
+	teams := readJSONFile[TeamsIndex](t, TeamsIndexFile)
+	entry := teams["Half Team"]
+	if entry.Country != "Various" {
+		t.Errorf("Expected 'Various' for exactly 50%% split, got %q", entry.Country)
 	}
 }

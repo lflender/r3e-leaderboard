@@ -509,14 +509,25 @@ type TeamDriver struct {
 	PathID string `json:"path_id"`
 }
 
-// TeamsIndex maps team name → list of drivers in that team.
-type TeamsIndex map[string][]TeamDriver
+// TeamEntry represents a team with its drivers and determined country.
+type TeamEntry struct {
+	Country string       `json:"country"`
+	Drivers []TeamDriver `json:"drivers"`
+}
+
+// TeamsIndex maps team name → team entry (country + drivers).
+type TeamsIndex map[string]TeamEntry
 
 // ExportTeamsIndex builds a teams index from the driver index and exports it
 // to cache/index/teams.json.gz. For each driver with a non-empty team, the
 // most recent result's name and pathID are used. Returns the number of teams.
 func ExportTeamsIndex(index DriverIndex) (int, error) {
-	teams := make(TeamsIndex)
+	// Intermediate structure to collect drivers per team before determining country
+	type teamBuilderEntry struct {
+		drivers []TeamDriver
+		pathIDs []string // track pathIDs to look up countries later
+	}
+	teamBuilders := make(map[string]*teamBuilderEntry)
 
 	for pathID, results := range index {
 		if len(results) == 0 {
@@ -550,19 +561,31 @@ func ExportTeamsIndex(index DriverIndex) (int, error) {
 			}
 		}
 
-		teams[bestTeam] = append(teams[bestTeam], TeamDriver{
+		if teamBuilders[bestTeam] == nil {
+			teamBuilders[bestTeam] = &teamBuilderEntry{}
+		}
+		teamBuilders[bestTeam].drivers = append(teamBuilders[bestTeam].drivers, TeamDriver{
 			Name:   bestName,
 			PathID: pathID,
 		})
+		teamBuilders[bestTeam].pathIDs = append(teamBuilders[bestTeam].pathIDs, pathID)
 	}
 
-	// Sort drivers within each team by name for stable output
-	for team := range teams {
-		drivers := teams[team]
-		sort.Slice(drivers, func(i, j int) bool {
-			return drivers[i].Name < drivers[j].Name
+	// Build final teams index with country determination
+	teams := make(TeamsIndex, len(teamBuilders))
+	for teamName, builder := range teamBuilders {
+		// Sort drivers within each team by name for stable output
+		sort.Slice(builder.drivers, func(i, j int) bool {
+			return builder.drivers[i].Name < builder.drivers[j].Name
 		})
-		teams[team] = drivers
+
+		// Determine team country from member countries
+		country := determineTeamCountry(index, builder.pathIDs)
+
+		teams[teamName] = TeamEntry{
+			Country: country,
+			Drivers: builder.drivers,
+		}
 	}
 
 	if _, err := writeGzipJSON(TeamsIndexFile, teams); err != nil {
@@ -571,6 +594,58 @@ func ExportTeamsIndex(index DriverIndex) (int, error) {
 
 	log.Printf("🏁 Teams index exported: %d teams", len(teams))
 	return len(teams), nil
+}
+
+// determineTeamCountry determines the country of a team based on its members.
+// If more than 50% of members share the same country, that country is used.
+// Otherwise, returns "Various".
+func determineTeamCountry(index DriverIndex, pathIDs []string) string {
+	if len(pathIDs) == 0 {
+		return "Various"
+	}
+
+	countryCounts := make(map[string]int)
+	total := 0
+
+	for _, pathID := range pathIDs {
+		results := index[pathID]
+		// Find the most recent country for this driver
+		var bestCountry string
+		var bestTime string
+		for _, r := range results {
+			if r.Country == "" {
+				continue
+			}
+			if bestCountry == "" || r.DateTime > bestTime {
+				bestTime = r.DateTime
+				bestCountry = r.Country
+			}
+		}
+		if bestCountry != "" {
+			countryCounts[bestCountry]++
+			total++
+		}
+	}
+
+	if total == 0 {
+		return "Various"
+	}
+
+	// Find the most common country
+	var topCountry string
+	var topCount int
+	for country, count := range countryCounts {
+		if count > topCount {
+			topCount = count
+			topCountry = country
+		}
+	}
+
+	// More than 50% must share the same country
+	if topCount*2 > total {
+		return topCountry
+	}
+	return "Various"
 }
 
 // LoadLetterNames loads per-driver metadata for a specific letter from the letter-sharded names.
