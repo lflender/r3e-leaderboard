@@ -24,6 +24,7 @@ const (
 	ShardedIndexDir   = "cache/index/metadata"
 	ShardedMirrorFile = "cache/index/mirror.json.gz"
 	ShardedShardsDir  = "cache/index/entries"
+	TeamsIndexFile    = "cache/index/teams.json.gz"
 )
 
 // FailedFetch represents a failed fetch attempt
@@ -54,6 +55,8 @@ type StatusData struct {
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
 	// Discord Daily Sprint Races data
 	DailySprintRacesCount int `json:"daily_sprint_races_count"`
+	// Teams index count
+	TotalTeams int `json:"total_teams"`
 	// Daily Race refresh tracking
 	LastDailyRaceRefresh time.Time `json:"last_daily_race_refresh"`
 }
@@ -500,6 +503,151 @@ func LoadAllShards() (DriverIndex, error) {
 	return merged, nil
 }
 
+// TeamDriver represents a driver within a team.
+type TeamDriver struct {
+	Name   string `json:"name"`
+	PathID string `json:"path_id"`
+}
+
+// TeamEntry represents a team with its drivers and determined country.
+type TeamEntry struct {
+	Country string       `json:"country"`
+	Drivers []TeamDriver `json:"drivers"`
+}
+
+// TeamsIndex maps team name → team entry (country + drivers).
+type TeamsIndex map[string]TeamEntry
+
+// ExportTeamsIndex builds a teams index from the driver index and exports it
+// to cache/index/teams.json.gz. For each driver with a non-empty team, the
+// most recent result's name and pathID are used. Returns the number of teams.
+func ExportTeamsIndex(index DriverIndex) (int, error) {
+	// Intermediate structure to collect drivers per team before determining country
+	type teamBuilderEntry struct {
+		drivers []TeamDriver
+		pathIDs []string // track pathIDs to look up countries later
+	}
+	teamBuilders := make(map[string]*teamBuilderEntry)
+
+	for pathID, results := range index {
+		if len(results) == 0 {
+			continue
+		}
+
+		// Find the most recent result with a team set
+		var bestName string
+		var bestTeam string
+		var bestTime string
+		for _, r := range results {
+			if r.Team == "" {
+				continue
+			}
+			if bestTeam == "" || r.DateTime > bestTime {
+				bestTime = r.DateTime
+				bestTeam = r.Team
+				bestName = r.Name
+			}
+		}
+		if bestTeam == "" || strings.EqualFold(bestTeam, "Privateer") {
+			continue
+		}
+		// Fallback name from any result if team entry had no name
+		if bestName == "" {
+			for _, r := range results {
+				if r.Name != "" {
+					bestName = r.Name
+					break
+				}
+			}
+		}
+
+		if teamBuilders[bestTeam] == nil {
+			teamBuilders[bestTeam] = &teamBuilderEntry{}
+		}
+		teamBuilders[bestTeam].drivers = append(teamBuilders[bestTeam].drivers, TeamDriver{
+			Name:   bestName,
+			PathID: pathID,
+		})
+		teamBuilders[bestTeam].pathIDs = append(teamBuilders[bestTeam].pathIDs, pathID)
+	}
+
+	// Build final teams index with country determination
+	teams := make(TeamsIndex, len(teamBuilders))
+	for teamName, builder := range teamBuilders {
+		// Sort drivers within each team by name for stable output
+		sort.Slice(builder.drivers, func(i, j int) bool {
+			return builder.drivers[i].Name < builder.drivers[j].Name
+		})
+
+		// Determine team country from member countries
+		country := determineTeamCountry(index, builder.pathIDs)
+
+		teams[teamName] = TeamEntry{
+			Country: country,
+			Drivers: builder.drivers,
+		}
+	}
+
+	if _, err := writeGzipJSON(TeamsIndexFile, teams); err != nil {
+		return 0, fmt.Errorf("failed to export teams index: %w", err)
+	}
+
+	log.Printf("🏁 Teams index exported: %d teams", len(teams))
+	return len(teams), nil
+}
+
+// determineTeamCountry determines the country of a team based on its members.
+// If more than 50% of members share the same country, that country is used.
+// Otherwise, returns "Various".
+func determineTeamCountry(index DriverIndex, pathIDs []string) string {
+	if len(pathIDs) == 0 {
+		return "Various"
+	}
+
+	countryCounts := make(map[string]int)
+	total := 0
+
+	for _, pathID := range pathIDs {
+		results := index[pathID]
+		// Find the most recent country for this driver
+		var bestCountry string
+		var bestTime string
+		for _, r := range results {
+			if r.Country == "" {
+				continue
+			}
+			if bestCountry == "" || r.DateTime > bestTime {
+				bestTime = r.DateTime
+				bestCountry = r.Country
+			}
+		}
+		if bestCountry != "" {
+			countryCounts[bestCountry]++
+			total++
+		}
+	}
+
+	if total == 0 {
+		return "Various"
+	}
+
+	// Find the most common country
+	var topCountry string
+	var topCount int
+	for country, count := range countryCounts {
+		if count > topCount {
+			topCount = count
+			topCountry = country
+		}
+	}
+
+	// More than 50% must share the same country
+	if topCount*2 > total {
+		return topCountry
+	}
+	return "Various"
+}
+
 // LoadLetterNames loads per-driver metadata for a specific letter from the letter-sharded names.
 // Key should be "a"-"z" or "_".
 func LoadLetterNames(key string) (DriverNamesIndex, error) {
@@ -708,7 +856,7 @@ func ExportStatusData(status StatusData) error {
 
 // UpdateStatusWithIndexMetrics updates the status file with index statistics
 // This is exported so indexer.go can update status after building the index
-func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration) error {
+func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration, teamCount int) error {
 	// Read current memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -735,6 +883,7 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             len(index),
 		TotalEntries:             totalEntries,
+		TotalTeams:               teamCount,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,

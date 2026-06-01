@@ -396,6 +396,8 @@ func TestFindCarClassID_AllAliases(t *testing.T) {
 		{"dtm", "13136", "DTM 2025"},
 		{"audi tt 16", "5726", "Audi Sport TT Cup 2016"},
 		{"m235i", "6344", "BMW M235i Racing Cup"},
+		{"bmw 235i", "6344", "BMW M235i Racing Cup"},
+		{"235i", "6344", "BMW M235i Racing Cup"},
 		{"silhouette series", "1717", "Silhouette Series"},
 		{"group 5", "1708", "Group 5"},
 		{"touring classics", "1712", "Touring Classics"},
@@ -766,6 +768,8 @@ func TestFindCarClassID_FixedAliases(t *testing.T) {
 		{"bmw m1 procar", "2378", "BMW M1 Procar → Procar"},
 		{"m1 cup", "2378", "M1 Cup → Procar"},
 		{"m235i", "6344", "M235i → BMW M235i Racing Cup"},
+		{"bmw 235i", "6344", "BMW 235i → BMW M235i Racing Cup"},
+		{"235i", "6344", "235i → BMW M235i Racing Cup"},
 	}
 
 	for _, test := range tests {
@@ -2770,5 +2774,46 @@ func TestFindTrackID_NewAliases(t *testing.T) {
 					test.alias, result, test.expectedID, test.description)
 			}
 		})
+	}
+}
+
+func TestParseDailySprintRaces_BMW235i(t *testing.T) {
+	// Regression test: Discord says "BMW 235i" but should match "BMW M235i Racing Cup"
+	msg := &DiscordMessage{
+		ID: "bmw235i_test",
+		Content: "📅 **This Week in Ranked Multiplayer**\n" +
+			"(Updated every Monday, new combos weekly!)\n" +
+			"\n" +
+			"## **Daily Sprint Races (15 min)**\n" +
+			"🏁 **Super Touring – Bathurst**\n" +
+			"Every half hour (--:10) LB fixed setup\n" +
+			"\n" +
+			"## **Daily Hourly Feature Races (20–30 min)**\n" +
+			"🔥 **BMW 235i - Nordschleife NLS**\n" +
+			"30 min (14:00, 17:00, 20:00) LB fixed setup\n" +
+			"🔥 **Praga R1 - Imola**\n" +
+			"20 min (16:00, 19:00, 22:00) LB open setup",
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+
+	// The feature race "BMW 235i" should match BMW M235i Racing Cup (class ID 6344)
+	found := false
+	for _, race := range result.FeatureRaces {
+		t.Logf("Feature race: CarClass=%q ClassID=%q Track=%q TrackID=%q MatchedOK=%v",
+			race.CarClass, race.CarClassID, race.Track, race.TrackID, race.MatchedOK)
+		if race.CarClassID == "6344" {
+			found = true
+			if !race.MatchedOK {
+				t.Errorf("BMW 235i race matched class but MatchedOK=false (TrackID=%q)", race.TrackID)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("Expected 'BMW 235i' to resolve to BMW M235i Racing Cup (classID=6344), but it was not found in feature races")
 	}
 }
