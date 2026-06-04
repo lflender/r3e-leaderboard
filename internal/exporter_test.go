@@ -2021,3 +2021,141 @@ func TestExportTeamsIndex_CountryExact50PercentIsVarious(t *testing.T) {
 		t.Errorf("Expected 'Various' for exactly 50%% split, got %q", entry.Country)
 	}
 }
+
+// =============================================================================
+// WRITE GZIP JSON TESTS
+// =============================================================================
+
+func TestWriteGzipJSON_RoundTrip(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "gzip_roundtrip_test")
+	defer cleanup()
+
+	path := filepath.Join(tempDir, "test.json.gz")
+	payload := map[string]interface{}{"hello": "world", "count": float64(42)}
+
+	n, err := writeGzipJSON(path, payload)
+	if err != nil {
+		t.Fatalf("writeGzipJSON failed: %v", err)
+	}
+	if n <= 0 {
+		t.Errorf("expected positive byte count, got %d", n)
+	}
+
+	// Read back and verify
+	got, err := readGzipJSON[map[string]interface{}](path)
+	if err != nil {
+		t.Fatalf("readGzipJSON failed: %v", err)
+	}
+	if got["hello"] != "world" {
+		t.Errorf("hello = %v, expected 'world'", got["hello"])
+	}
+	if got["count"] != float64(42) {
+		t.Errorf("count = %v, expected 42", got["count"])
+	}
+}
+
+func TestWriteGzipJSON_CreatesParentDirectory(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "gzip_mkdir_test")
+	defer cleanup()
+
+	path := filepath.Join(tempDir, "nested", "dir", "test.json.gz")
+	_, err := writeGzipJSON(path, []string{"a", "b"})
+	if err != nil {
+		t.Fatalf("writeGzipJSON should create parent directories: %v", err)
+	}
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file to exist at %s: %v", path, err)
+	}
+}
+
+func TestWriteGzipJSON_SliceRoundTrip(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "gzip_slice_test")
+	defer cleanup()
+
+	path := filepath.Join(tempDir, "mirrors.json.gz")
+	original := []string{"alice", "bob", "charlie"}
+
+	if _, err := writeGzipJSON(path, original); err != nil {
+		t.Fatalf("writeGzipJSON failed: %v", err)
+	}
+
+	got, err := readGzipJSON[[]string](path)
+	if err != nil {
+		t.Fatalf("readGzipJSON failed: %v", err)
+	}
+	if len(got) != len(original) {
+		t.Fatalf("expected %d elements, got %d", len(original), len(got))
+	}
+	for i, v := range original {
+		if got[i] != v {
+			t.Errorf("element %d: got %q, expected %q", i, got[i], v)
+		}
+	}
+}
+
+// =============================================================================
+// EXPORT STATUS DATA TESTS
+// =============================================================================
+
+func TestExportStatusData_WritesAndReadsBack(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	status := StatusData{
+		FetchInProgress: true,
+		TotalDrivers:    12345,
+		TrackCount:      100,
+		TotalEntries:    999,
+	}
+
+	if err := ExportStatusData(status); err != nil {
+		t.Fatalf("ExportStatusData failed: %v", err)
+	}
+
+	readBack := ReadStatusData()
+	if !readBack.FetchInProgress {
+		t.Error("FetchInProgress should be true after read-back")
+	}
+	if readBack.TotalDrivers != 12345 {
+		t.Errorf("TotalDrivers = %d, expected 12345", readBack.TotalDrivers)
+	}
+	if readBack.TrackCount != 100 {
+		t.Errorf("TrackCount = %d, expected 100", readBack.TrackCount)
+	}
+	if readBack.TotalEntries != 999 {
+		t.Errorf("TotalEntries = %d, expected 999", readBack.TotalEntries)
+	}
+}
+
+func TestExportStatusData_EmptyStatus(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if err := ExportStatusData(StatusData{}); err != nil {
+		t.Fatalf("ExportStatusData failed for empty status: %v", err)
+	}
+
+	if _, err := os.Stat(StatusFile); err != nil {
+		t.Errorf("status file should exist after export: %v", err)
+	}
+}
+
+func TestExportStatusData_Overwrite(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	// Write once
+	if err := ExportStatusData(StatusData{TotalDrivers: 1}); err != nil {
+		t.Fatalf("first ExportStatusData failed: %v", err)
+	}
+	// Overwrite
+	if err := ExportStatusData(StatusData{TotalDrivers: 2}); err != nil {
+		t.Fatalf("second ExportStatusData failed: %v", err)
+	}
+
+	readBack := ReadStatusData()
+	if readBack.TotalDrivers != 2 {
+		t.Errorf("TotalDrivers = %d after overwrite, expected 2", readBack.TotalDrivers)
+	}
+}
