@@ -677,6 +677,41 @@ func TestIncrementalIndexUpdate_PreservesUnchangedCombinations(t *testing.T) {
 	}
 }
 
+func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{comboA}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	comboB := testTrackInfo("Track B", "2222", "1757", "Bob Racer")
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"2222-1757"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	if status.TrackCount != 2 {
+		t.Fatalf("TrackCount = %d, expected 2", status.TrackCount)
+	}
+	if status.TotalFetchedCombinations != 2 {
+		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
+	}
+	if status.TotalUniqueTracks != 2 {
+		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	}
+}
+
 func TestIncrementalIndexUpdate_WorksWithoutMonolithicNamesFile(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()

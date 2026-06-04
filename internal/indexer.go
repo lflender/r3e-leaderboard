@@ -751,14 +751,16 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	if dailyRaceTS.IsZero() {
 		dailyRaceTS = existingStatus.LastDailyRaceRefresh
 	}
+	totalCached := cache.CountCachedCombinations()
+	uniqueCachedTracks := cache.CountUniqueTracks()
 
 	status := StatusData{
 		FetchInProgress:          existingStatus.FetchInProgress,
 		LastScrapeStart:          existingStatus.LastScrapeStart,
 		LastScrapeEnd:            existingStatus.LastScrapeEnd,
-		TrackCount:               existingStatus.TrackCount,
-		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations,
-		TotalUniqueTracks:        existingStatus.TotalUniqueTracks, // preserved — avoid iterating entire index
+		TrackCount:               totalCached,
+		TotalFetchedCombinations: totalCached,
+		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             driverCount,
 		TotalEntries:             totalEntries,
 		TotalTeams:               teamCount,

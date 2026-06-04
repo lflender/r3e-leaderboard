@@ -1,11 +1,7 @@
 package internal
 
 import (
-	"compress/gzip"
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 )
