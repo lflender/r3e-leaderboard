@@ -2817,3 +2817,86 @@ func TestParseDailySprintRaces_BMW235i(t *testing.T) {
 		t.Errorf("Expected 'BMW 235i' to resolve to BMW M235i Racing Cup (classID=6344), but it was not found in feature races")
 	}
 }
+
+// =============================================================================
+// PARSE RACE SECTION TESTS
+// =============================================================================
+
+func TestParseRaceSection_NotFound(t *testing.T) {
+	content := "Some content without the target section"
+	races := parseRaceSection(content, "Daily Sprint Races", []string{"Daily Feature Races"})
+	if len(races) != 0 {
+		t.Errorf("expected 0 races when section not found, got %d", len(races))
+	}
+}
+
+func TestParseRaceSection_Found(t *testing.T) {
+	content := `Some prefix
+Daily Sprint Races (15 min)
+🏁 GT3 - Monza
+Every hour (--:20, --:50) LB fixed setup
+🏁 Super Touring - Zhejiang
+Every other hour (--:10) LB fixed setup
+
+Daily Feature Races (~30 min)
+🔥 GT3 - Daytona
+30 min (17:30) LB open setup`
+
+	races := parseRaceSection(content, "Daily Sprint Races", []string{"Daily Feature Races"})
+	if len(races) == 0 {
+		t.Error("expected to find races in section, got 0")
+	}
+}
+
+func TestParseRaceSection_WithEndMarker(t *testing.T) {
+	content := `Daily Sprint Races (15 min)
+🏁 GT3 - Monza
+Every hour (--:20, --:50) LB fixed setup
+
+Weekly Races
+🏆 DTM - Hockenheimring
+45 min (17:00) open setup`
+
+	races := parseRaceSection(content, "Daily Sprint Races", []string{"Weekly Races"})
+	// No race in weekly section should bleed through
+	for _, r := range races {
+		if r.CarClass == "DTM" {
+			t.Error("Weekly Races section should have been excluded by end marker")
+		}
+	}
+}
+
+func TestParseRaceSection_EmptySection(t *testing.T) {
+	content := `Daily Sprint Races (15 min)
+Daily Feature Races (~30 min)
+🔥 GT3 - Daytona
+30 min (17:30) LB open setup`
+
+	races := parseRaceSection(content, "Daily Sprint Races", []string{"Daily Feature Races"})
+	if len(races) != 0 {
+		t.Errorf("expected 0 races in empty section (all content after end marker), got %d", len(races))
+	}
+}
+
+func TestParseRaceSection_MultipleEndMarkers(t *testing.T) {
+	content := `Daily Sprint Races (15 min)
+🏁 MX5 - Brands Hatch
+Every hour (--:20) LB fixed setup
+
+Daily Feature Races (~30 min)
+🔥 GT3 - Daytona
+
+Weekly Races
+🏆 LMDh - Spa`
+
+	races := parseRaceSection(content, "Daily Sprint Races", []string{"Daily Feature Races", "Weekly Races"})
+	if len(races) == 0 {
+		t.Error("expected to parse races before the end markers")
+	}
+	// Races from feature or weekly sections should not appear
+	for _, r := range races {
+		if r.CarClass == "GT3" || r.CarClass == "LMDh" {
+			t.Errorf("unexpected car class %q from excluded section", r.CarClass)
+		}
+	}
+}

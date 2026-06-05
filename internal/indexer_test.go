@@ -677,6 +677,83 @@ func TestIncrementalIndexUpdate_PreservesUnchangedCombinations(t *testing.T) {
 	}
 }
 
+func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{comboA}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	comboB := testTrackInfo("Track B", "2222", "1757", "Bob Racer")
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"2222-1757"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	// When not in a fetch (FetchInProgress=false), TrackCount should equal cache count
+	if status.TrackCount != 2 {
+		t.Fatalf("TrackCount = %d, expected 2 (cache count when idle)", status.TrackCount)
+	}
+	if status.TotalFetchedCombinations != 2 {
+		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
+	}
+	if status.TotalUniqueTracks != 2 {
+		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	}
+}
+
+func TestIncrementalIndexUpdate_PreservesTrackCountDuringRefresh(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{comboA}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	// Simulate a refresh in progress: set FetchInProgress=true with a specific TrackCount
+	existingStatus := ReadStatusData()
+	existingStatus.FetchInProgress = true
+	existingStatus.TrackCount = 5000 // Orchestrator's progress value
+	if err := ExportStatusData(existingStatus); err != nil {
+		t.Fatalf("ExportStatusData failed: %v", err)
+	}
+
+	comboB := testTrackInfo("Track B", "2222", "1757", "Bob Racer")
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"2222-1757"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	// During a fetch, TrackCount is preserved from the orchestrator's progress value
+	if status.TrackCount != 5000 {
+		t.Fatalf("TrackCount = %d, expected 5000 (preserved during refresh)", status.TrackCount)
+	}
+	if status.TotalFetchedCombinations != 2 {
+		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
+	}
+}
+
 func TestIncrementalIndexUpdate_WorksWithoutMonolithicNamesFile(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
@@ -800,5 +877,148 @@ func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
 	}
 	if !mirrorSet["edward johnson"] {
 		t.Fatalf("Mirror should contain 'edward johnson' after rebuild, got %d entries", len(mirrors))
+	}
+}
+
+// =============================================================================
+// NEW PERIODIC INDEXER TESTS
+// =============================================================================
+
+func TestNewPeriodicIndexer_ValidInterval(t *testing.T) {
+	ctx := context.Background()
+	callbacks := IndexerCallbacks{
+		GetState:      func() IndexerState { return IndexerState{} },
+		UpdateIndexed: func(count int) {},
+		ExportStatus:  func() {},
+	}
+	pi := NewPeriodicIndexer(ctx, 5, callbacks)
+	if pi == nil {
+		t.Fatal("NewPeriodicIndexer returned nil")
+	}
+	if pi.interval != 5*time.Minute {
+		t.Errorf("interval = %v, expected 5m", pi.interval)
+	}
+	if pi.ctx != ctx {
+		t.Error("ctx not stored correctly")
+	}
+}
+
+func TestNewPeriodicIndexer_InvalidInterval_DefaultsTo30(t *testing.T) {
+	ctx := context.Background()
+	callbacks := IndexerCallbacks{
+		GetState:      func() IndexerState { return IndexerState{} },
+		UpdateIndexed: func(count int) {},
+		ExportStatus:  func() {},
+	}
+
+	pi0 := NewPeriodicIndexer(ctx, 0, callbacks)
+	if pi0.interval != 30*time.Minute {
+		t.Errorf("interval for 0 = %v, expected 30m", pi0.interval)
+	}
+
+	piNeg := NewPeriodicIndexer(ctx, -5, callbacks)
+	if piNeg.interval != 30*time.Minute {
+		t.Errorf("interval for -5 = %v, expected 30m", piNeg.interval)
+	}
+}
+
+func TestPeriodicIndexer_Start_ContextCancel(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	callbacks := IndexerCallbacks{
+		GetState:      func() IndexerState { return IndexerState{FetchInProgress: true, TrackCount: 0} },
+		UpdateIndexed: func(count int) {},
+		ExportStatus:  func() {},
+	}
+	pi := NewPeriodicIndexer(ctx, 60, callbacks)
+	pi.Start()
+	cancel() // triggers goroutine exit via ctx.Done
+	// Give the goroutine time to exit; no hang means success
+	time.Sleep(50 * time.Millisecond)
+}
+
+// =============================================================================
+// MERGE CACHED COMBINATIONS TESTS
+// =============================================================================
+
+func TestMergeCachedCombinations_EmptyComboIDs(t *testing.T) {
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1111", ClassID: "1703"},
+		{Name: "Track B", TrackID: "2222", ClassID: "1757"},
+	}
+	result := mergeCachedCombinations(tracks, []string{})
+	if len(result) != 2 {
+		t.Errorf("expected 2 tracks with empty comboIDs, got %d", len(result))
+	}
+}
+
+func TestMergeCachedCombinations_InvalidTokenFormat(t *testing.T) {
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1111", ClassID: "1703"},
+	}
+	// Tokens without exactly one dash are skipped
+	result := mergeCachedCombinations(tracks, []string{"nodash", "a-b-c-extra"})
+	if len(result) != 1 {
+		t.Errorf("expected 1 track after skipping invalid tokens, got %d", len(result))
+	}
+}
+
+func TestMergeCachedCombinations_NonExistentCacheFile(t *testing.T) {
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1111", ClassID: "1703"},
+	}
+	// Valid format "trackID-classID" but no cache file on disk → skipped
+	result := mergeCachedCombinations(tracks, []string{"9999-8888"})
+	if len(result) != 1 {
+		t.Errorf("expected 1 track when cache file doesn't exist, got %d", len(result))
+	}
+}
+
+func TestMergeCachedCombinations_NilComboIDs(t *testing.T) {
+	tracks := []TrackInfo{
+		{Name: "Track A", TrackID: "1111", ClassID: "1703"},
+	}
+	result := mergeCachedCombinations(tracks, nil)
+	if len(result) != 1 {
+		t.Errorf("expected 1 track with nil comboIDs, got %d", len(result))
+	}
+}
+
+// =============================================================================
+// HAS SHARDED INDEX TESTS
+// =============================================================================
+
+func TestHasShardedIndex_NoFiles(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if HasShardedIndex() {
+		t.Error("expected false when no index files exist")
+	}
+}
+
+func TestHasShardedIndex_WithBothDirectories(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	os.MkdirAll(ShardedIndexDir, 0755)
+	os.MkdirAll(ShardedShardsDir, 0755)
+	os.WriteFile(filepath.Join(ShardedIndexDir, "a.json.gz"), []byte("dummy"), 0644)
+	os.WriteFile(filepath.Join(ShardedShardsDir, "a.json.gz"), []byte("dummy"), 0644)
+
+	if !HasShardedIndex() {
+		t.Error("expected true when both letter and shard files exist")
+	}
+}
+
+func TestHasShardedIndex_LetterFilesOnly(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	os.MkdirAll(ShardedIndexDir, 0755)
+	os.WriteFile(filepath.Join(ShardedIndexDir, "a.json.gz"), []byte("dummy"), 0644)
+	// No shard entries dir → should return false
+
+	if HasShardedIndex() {
+		t.Error("expected false when only letter files exist but no shard entries")
 	}
 }

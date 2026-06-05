@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-// =============================================================================
-// LOAD ALL CACHED DATA TESTS
-// =============================================================================
 
 func TestLoadAllCachedData_EmptyContext(t *testing.T) {
 	ctx := context.Background()
