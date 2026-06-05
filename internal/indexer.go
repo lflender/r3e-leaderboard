@@ -754,11 +754,19 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	totalCached := cache.CountCachedCombinations()
 	uniqueCachedTracks := cache.CountUniqueTracks()
 
+	// When a full refresh is in progress, track_count is managed by the orchestrator
+	// (it reflects real-time fetch progress). Preserve it in that case.
+	// When idle, track_count should equal the actual cache count.
+	trackCount := totalCached
+	if existingStatus.FetchInProgress {
+		trackCount = existingStatus.TrackCount
+	}
+
 	status := StatusData{
 		FetchInProgress:          existingStatus.FetchInProgress,
 		LastScrapeStart:          existingStatus.LastScrapeStart,
 		LastScrapeEnd:            existingStatus.LastScrapeEnd,
-		TrackCount:               totalCached,
+		TrackCount:               trackCount,
 		TotalFetchedCombinations: totalCached,
 		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             driverCount,

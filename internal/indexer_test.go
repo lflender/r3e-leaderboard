@@ -701,14 +701,56 @@ func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) 
 	}
 
 	status := readJSONFile[StatusData](t, StatusFile)
+	// When not in a fetch (FetchInProgress=false), TrackCount should equal cache count
 	if status.TrackCount != 2 {
-		t.Fatalf("TrackCount = %d, expected 2", status.TrackCount)
+		t.Fatalf("TrackCount = %d, expected 2 (cache count when idle)", status.TrackCount)
 	}
 	if status.TotalFetchedCombinations != 2 {
 		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
 	}
 	if status.TotalUniqueTracks != 2 {
 		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	}
+}
+
+func TestIncrementalIndexUpdate_PreservesTrackCountDuringRefresh(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+
+	comboA := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
+	if err := cache.SaveTrackData(comboA); err != nil {
+		t.Fatalf("SaveTrackData comboA failed: %v", err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{comboA}); err != nil {
+		t.Fatalf("Initial BuildAndExportIndex failed: %v", err)
+	}
+
+	// Simulate a refresh in progress: set FetchInProgress=true with a specific TrackCount
+	existingStatus := ReadStatusData()
+	existingStatus.FetchInProgress = true
+	existingStatus.TrackCount = 5000 // Orchestrator's progress value
+	if err := ExportStatusData(existingStatus); err != nil {
+		t.Fatalf("ExportStatusData failed: %v", err)
+	}
+
+	comboB := testTrackInfo("Track B", "2222", "1757", "Bob Racer")
+	if err := cache.SaveTrackData(comboB); err != nil {
+		t.Fatalf("SaveTrackData comboB failed: %v", err)
+	}
+
+	if err := IncrementalIndexUpdate([]string{"2222-1757"}); err != nil {
+		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
+	}
+
+	status := readJSONFile[StatusData](t, StatusFile)
+	// During a fetch, TrackCount is preserved from the orchestrator's progress value
+	if status.TrackCount != 5000 {
+		t.Fatalf("TrackCount = %d, expected 5000 (preserved during refresh)", status.TrackCount)
+	}
+	if status.TotalFetchedCombinations != 2 {
+		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
 	}
 }
 
