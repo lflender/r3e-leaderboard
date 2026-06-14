@@ -701,9 +701,9 @@ func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) 
 	}
 
 	status := readJSONFile[StatusData](t, StatusFile)
-	// When not in a fetch (FetchInProgress=false), TrackCount should equal cache count
+	// TrackCount = non-empty combinations computed from the index
 	if status.TrackCount != 2 {
-		t.Fatalf("TrackCount = %d, expected 2 (cache count when idle)", status.TrackCount)
+		t.Fatalf("TrackCount = %d, expected 2 (non-empty combos in index)", status.TrackCount)
 	}
 	if status.TotalFetchedCombinations != 2 {
 		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)

@@ -93,6 +93,43 @@ func (dc *DataCache) CountCachedCombinations() int {
 	return len(files)
 }
 
+// CountNonEmptyCombinations returns the number of cached combinations that
+// have at least one leaderboard entry. It reads from the pre-computed
+// all_combinations.json.gz export (which already filters out empty combos).
+// Falls back to scanning cache files directly if the export is unavailable.
+func (dc *DataCache) CountNonEmptyCombinations() int {
+	// Try reading from the pre-computed export first (fast path)
+	file, err := os.Open(AllCombinationsFile)
+	if err == nil {
+		defer file.Close()
+		gzReader, err := gzip.NewReader(file)
+		if err == nil {
+			defer gzReader.Close()
+			var header struct {
+				Count int `json:"count"`
+			}
+			if err := json.NewDecoder(gzReader).Decode(&header); err == nil && header.Count > 0 {
+				return header.Count
+			}
+		}
+	}
+
+	// Slow path: scan cache files and check entry_count in each
+	pattern := filepath.Join(dc.getTrackCacheDir(), "track_*", "class_*.json.gz")
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, f := range files {
+		summary, err := readCachedEntrySummary(f)
+		if err == nil && summary.EntryCount > 0 {
+			count++
+		}
+	}
+	return count
+}
+
 // CountUniqueTracks returns the number of distinct track folders in cache.
 func (dc *DataCache) CountUniqueTracks() int {
 	entries, err := os.ReadDir(dc.getTrackCacheDir())
