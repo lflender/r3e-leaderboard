@@ -86,7 +86,7 @@ func RefreshDailyRaceCombinations(ctx context.Context, cfg Config, refreshMPPosi
 
 	// Merge promoted IDs with daily race trackIDs to ensure all are included,
 	// even if some daily race files were already in main cache
-	allIDs := mergeUniqueStrings(promotedIDs, trackIDs)
+	allIDs := MergeUniqueStrings(promotedIDs, trackIDs)
 
 	// Update status with last refresh time
 	UpdateDailyRaceRefreshTime()
@@ -108,8 +108,8 @@ func RefreshDailyRaceCombinations(ctx context.Context, cfg Config, refreshMPPosi
 	return allIDs, nil
 }
 
-// mergeUniqueStrings combines multiple string slices, removing duplicates.
-func mergeUniqueStrings(slices ...[]string) []string {
+// MergeUniqueStrings combines multiple string slices, removing duplicates.
+func MergeUniqueStrings(slices ...[]string) []string {
 	seen := make(map[string]bool)
 	for _, s := range slices {
 		for _, v := range s {

@@ -332,21 +332,21 @@ func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
 // =============================================================================
 
 func TestMergeUniqueStrings_BothEmpty(t *testing.T) {
-	result := mergeUniqueStrings(nil, nil)
+	result := MergeUniqueStrings(nil, nil)
 	if len(result) != 0 {
 		t.Errorf("Expected 0 items, got %d", len(result))
 	}
 }
 
 func TestMergeUniqueStrings_OneSlice(t *testing.T) {
-	result := mergeUniqueStrings([]string{"a", "b", "c"})
+	result := MergeUniqueStrings([]string{"a", "b", "c"})
 	if len(result) != 3 {
 		t.Errorf("Expected 3 items, got %d", len(result))
 	}
 }
 
 func TestMergeUniqueStrings_Deduplication(t *testing.T) {
-	result := mergeUniqueStrings(
+	result := MergeUniqueStrings(
 		[]string{"1111-2222", "3333-4444"},
 		[]string{"3333-4444", "5555-6666"},
 	)
@@ -366,7 +366,7 @@ func TestMergeUniqueStrings_Deduplication(t *testing.T) {
 }
 
 func TestMergeUniqueStrings_ThreeSlices(t *testing.T) {
-	result := mergeUniqueStrings(
+	result := MergeUniqueStrings(
 		[]string{"a"},
 		[]string{"b"},
 		[]string{"c", "a"}, // duplicate
@@ -378,7 +378,7 @@ func TestMergeUniqueStrings_ThreeSlices(t *testing.T) {
 
 func TestMergeUniqueStrings_NilAndNonEmpty(t *testing.T) {
 	// Simulates: no pre-promoted files, but some daily race IDs
-	result := mergeUniqueStrings(nil, []string{"9958-8600", "7112-1703"})
+	result := MergeUniqueStrings(nil, []string{"9958-8600", "7112-1703"})
 	if len(result) != 2 {
 		t.Errorf("Expected 2 items, got %d: %v", len(result), result)
 	}
@@ -479,7 +479,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 	// If we merge promoted IDs with daily race trackIDs (like the fix does),
 	// the result should include BOTH
 	dailyRaceIDs := []string{"7112-1703"}
-	allIDs := mergeUniqueStrings(promoted, dailyRaceIDs)
+	allIDs := MergeUniqueStrings(promoted, dailyRaceIDs)
 
 	if len(allIDs) != 2 {
 		t.Errorf("Merged IDs should contain 2 combos, got %d: %v", len(allIDs), allIDs)

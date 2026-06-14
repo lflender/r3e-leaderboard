@@ -295,7 +295,9 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	log.Println("✅ Full refresh completed, memory released")
 }
 
-// performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples
+// performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples.
+// Uses incremental index update (same as the Daily Race loop) instead of a full rebuild,
+// reducing a ~2 minute operation to ~5-10 seconds.
 func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
 	o.rebuildMu.Lock()
 	defer o.rebuildMu.Unlock()
@@ -303,52 +305,59 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 	opCtx := o.startFetchOperation()
 
 	log.Printf("🎯 Starting targeted refresh for %d token(s)...", len(trackIDs))
-	// Don't update lastScrapeStart - that's only for full refreshes
 	o.fetchInProgress = true
-	o.lastIndexedCount = 0
 	o.exportStatus()
 
-	// Build initial index from cache
-	o.buildBootstrapIndex()
+	// Fetch the targeted combos and promote temp cache
+	internal.FetchTargetedTrackDataWithCallback(opCtx, trackIDs, nil, origin)
 
-	// Start periodic indexing
-	log.Printf("⏱️ Starting periodic indexing every %d minutes during targeted refresh...", indexingIntervalMinutes)
-	o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
+	tempCache := internal.NewTempDataCache()
+	promotedIDs, err := tempCache.PromoteTempCache()
+	if err != nil {
+		log.Printf("⚠️ Failed to promote temp cache in targeted refresh: %v", err)
+	}
 
-	// Progress callback for status updates
-	progressCallback := func(merged []internal.TrackInfo) {
-		o.tracks = merged
-		if len(merged)%50 == 0 && len(merged) > 0 {
-			log.Printf("📊 %d track/class combinations available (cached + refreshed)", len(merged))
-			o.exportStatus()
+	// Merge promoted IDs with requested trackIDs to ensure all are included
+	allIDs := internal.MergeUniqueStrings(promotedIDs, trackIDs)
+
+	// Use incremental index update — loads only the affected shards + changed cache files
+	if len(allIDs) > 0 {
+		if internal.HasShardedIndex() {
+			if err := internal.IncrementalIndexUpdate(allIDs); err != nil {
+				log.Printf("⚠️ Incremental index update failed, falling back to full rebuild: %v", err)
+				o.fullRebuildFallback()
+			} else {
+				log.Printf("✅ Incremental index updated with %d changed combos (targeted refresh)", len(allIDs))
+				dataCache := internal.NewDataCache()
+				o.lastIndexedCount = dataCache.CountCachedCombinations()
+			}
+		} else {
+			// No sharded index exists yet — must do a full build
+			log.Println("ℹ️ No sharded index found, performing full build for targeted refresh")
+			o.fullRebuildFallback()
 		}
 	}
-
-	// Perform the targeted refresh (delegated to internal package)
-	// finalTracks is metadata-only (Data=nil)
-	finalTracks := internal.PerformTargetedRefresh(opCtx, trackIDs, progressCallback, origin)
-	_ = finalTracks // used only for progress tracking above
-
-	// Build final index from disk cache (all temp cache files are promoted by now).
-	o.logIndexBuild("targeted refresh final")
-	cachedTracks := internal.LoadAllCachedData(o.appContext)
-	if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
-		log.Printf("⚠️ Failed to export index: %v", err)
-	} else {
-		o.lastIndexedCount = len(cachedTracks)
-	}
-	log.Println("✅ Final index complete (targeted refresh)")
-	cachedTracks = nil
 
 	// Finalize
 	o.tracks = nil
 	o.fetchInProgress = false
 	o.exportStatus()
 
-	// Free memory after targeted refresh
+	log.Println("✅ Targeted refresh completed")
+}
+
+// fullRebuildFallback loads all cached data and builds a full index.
+// Used as a fallback when incremental update is not possible.
+func (o *Orchestrator) fullRebuildFallback() {
+	o.logIndexBuild("targeted refresh fallback")
+	cachedTracks := internal.LoadAllCachedData(o.appContext)
+	if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
+		log.Printf("⚠️ Failed to export index: %v", err)
+	} else {
+		o.lastIndexedCount = len(cachedTracks)
+	}
+	cachedTracks = nil
 	runtime.GC()
-	debug.FreeOSMemory()
-	log.Println("✅ Targeted refresh completed, memory released")
 }
 
 // StartRefreshFileTrigger watches for a lightweight file trigger to start a full refresh
@@ -426,19 +435,14 @@ func (o *Orchestrator) exportStatus() {
 		discordCount = len(discordRaces.Races)
 	}
 
-	// TrackCount: use in-memory count if available, otherwise use lastIndexedCount
-	trackCount := len(o.tracks)
-	if trackCount == 0 {
-		trackCount = o.lastIndexedCount
-	}
-
 	// Update ONLY the fetch/scrape status fields that the orchestrator manages
-	// All other fields (metrics from indexing) are preserved from the last BuildAndExportIndex call
+	// TrackCount is managed exclusively by the indexer (BuildAndExportIndex /
+	// IncrementalIndexUpdate) — the orchestrator must never overwrite it.
 	status := internal.StatusData{
 		FetchInProgress:          o.fetchInProgress,
 		LastScrapeStart:          scrapeStart,
 		LastScrapeEnd:            scrapeEnd,
-		TrackCount:               trackCount,
+		TrackCount:               existingStatus.TrackCount,               // Preserved from indexing
 		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations, // Preserved from indexing
 		TotalUniqueTracks:        existingStatus.TotalUniqueTracks,        // Preserved from indexing
 		TotalDrivers:             existingStatus.TotalDrivers,             // Preserved from indexing
@@ -551,7 +555,7 @@ func (o *Orchestrator) buildBootstrapIndex() {
 	if internal.HasShardedIndex() {
 		log.Println("ℹ️ Reusing existing sharded index for bootstrap (skipping full rebuild)")
 		dataCache := internal.NewDataCache()
-		o.lastIndexedCount = dataCache.CountCachedCombinations()
+		o.lastIndexedCount = dataCache.CountNonEmptyCombinations()
 		return
 	}
 

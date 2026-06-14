@@ -720,6 +720,18 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	// 5. Capture stats we need BEFORE export, then nil the index immediately after
 	driverCount := len(index)
 
+	// Count unique non-empty track+class combinations from the index
+	comboSet := make(map[string]struct{}, 1024)
+	for _, results := range index {
+		for _, r := range results {
+			if r.TrackID != "" && r.ClassID != "" {
+				comboSet[r.TrackID+"_"+r.ClassID] = struct{}{}
+			}
+		}
+	}
+	nonEmptyCombos := len(comboSet)
+	comboSet = nil
+
 	// Export sharded index (names file + per-letter shards)
 	if _, err := ExportShardedIndex(index); err != nil {
 		index = nil
@@ -740,6 +752,11 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	index = nil
 	runtime.GC()
 
+	// Refresh combination exports after index update
+	if err := refreshCombinationExportsFromCache(context.Background(), false); err != nil {
+		log.Printf("⚠️ Failed to refresh top/all combinations exports after incremental update: %v", err)
+	}
+
 	// Lightweight status update — preserve existing values for fields we can't
 	// compute cheaply (uniqueTracks, totalFetchedCombinations, etc.)
 	existingStatus := ReadStatusData()
@@ -756,8 +773,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 	// When a full refresh is in progress, track_count is managed by the orchestrator
 	// (it reflects real-time fetch progress). Preserve it in that case.
-	// When idle, track_count should equal the actual cache count.
-	trackCount := totalCached
+	// When idle, track_count = non-empty combos computed directly from the index.
+	trackCount := nonEmptyCombos
 	if existingStatus.FetchInProgress {
 		trackCount = existingStatus.TrackCount
 	}
@@ -788,10 +805,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 
 	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
 		float64(m.Alloc)/(1024*1024))
-
-	if err := refreshCombinationExportsFromCache(context.Background(), false); err != nil {
-		log.Printf("⚠️ Failed to refresh top/all combinations exports after incremental update: %v", err)
-	}
 
 	return nil
 }
