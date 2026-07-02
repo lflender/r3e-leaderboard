@@ -321,6 +321,7 @@ touch /cache/refresh_now
 echo "1693" > /cache/refresh_now       # All classes for track 1693
 echo "1778" >> /cache/refresh_now      # All classes for track 1778
 echo "5276-8600" >> /cache/refresh_now # Only class 8600 for track 5276
+echo "track=6164&class=1685" >> /cache/refresh_now # Only class 1685 for track 6164
 ```
 
 ## � Server Requirements

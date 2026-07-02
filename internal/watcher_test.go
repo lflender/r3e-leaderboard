@@ -249,6 +249,50 @@ func TestRefreshWatcher_ParsesNewlineSeparatedTrackIDs(t *testing.T) {
 	}
 }
 
+func TestRefreshWatcher_ParsesQueryStringTrackIDs(t *testing.T) {
+	tempDir, cleanup := TempTestDir(t, "watcher_query_test")
+	defer cleanup()
+
+	triggerPath := filepath.Join(tempDir, "refresh_trigger")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	lastTrackIDs := []string{}
+
+	onRefresh := func(trackIDs []string, origin string) {
+		mu.Lock()
+		lastTrackIDs = trackIDs
+		mu.Unlock()
+	}
+
+	watcher := NewRefreshWatcher(ctx, triggerPath, 1, onRefresh, nil)
+
+	// Create trigger file with query-string track/class pairs
+	err := os.WriteFile(triggerPath, []byte("track=6164&class=1685 track=1111&class=2222"), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create trigger file: %v", err)
+	}
+
+	watcher.checkTrigger()
+
+	mu.Lock()
+	trackIDs := lastTrackIDs
+	mu.Unlock()
+
+	if len(trackIDs) != 2 {
+		t.Fatalf("Expected 2 track IDs, got %d: %v", len(trackIDs), trackIDs)
+	}
+
+	expected := []string{"6164-1685", "1111-2222"}
+	for i, id := range expected {
+		if trackIDs[i] != id {
+			t.Errorf("Track ID %d: expected '%s', got '%s'", i, id, trackIDs[i])
+		}
+	}
+}
+
 // =============================================================================
 // BUSY CHECK TESTS
 // =============================================================================
