@@ -74,6 +74,19 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 	return o.lastScrapeStart, o.lastScrapeEnd, o.fetchInProgress
 }
 
+func (o *Orchestrator) shouldRefreshDailyRacesAtStartup(now time.Time) bool {
+	if o.lastDailyRaceRefresh.IsZero() {
+		return true
+	}
+
+	delay := time.Duration(o.config.Schedule.DailyRaceRefreshIntervalMins) * time.Minute
+	if delay <= 0 {
+		return true
+	}
+
+	return now.Sub(o.lastDailyRaceRefresh) >= delay
+}
+
 // StartBackgroundDataLoading initiates the background data loading process
 func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	go func() {
@@ -88,11 +101,16 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		log.Println("🔄 Phase 3: Fetch daily races combos")
 		var startupDailyRaceChangedCombos []string
 		hasExistingShardedIndex := internal.HasShardedIndex()
-		if changedCombos, err := internal.RefreshDailyRaceCombinations(opCtx, o.config, false); err != nil {
-			log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
+
+		if o.shouldRefreshDailyRacesAtStartup(time.Now()) {
+			if changedCombos, err := internal.RefreshDailyRaceCombinations(opCtx, o.config, false); err != nil {
+				log.Printf("⚠️ Daily Race refresh failed at startup: %v", err)
+			} else {
+				o.lastDailyRaceRefresh = time.Now()
+				startupDailyRaceChangedCombos = changedCombos
+			}
 		} else {
-			o.lastDailyRaceRefresh = time.Now()
-			startupDailyRaceChangedCombos = changedCombos
+			log.Printf("⏭️ Skipping startup Daily Race refresh; last refresh was %s ago (delay %dm)", time.Since(o.lastDailyRaceRefresh).Round(time.Second), o.config.Schedule.DailyRaceRefreshIntervalMins)
 		}
 
 		willFetchFresh := false
@@ -330,6 +348,13 @@ func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingInterva
 				log.Printf("✅ Incremental index updated with %d changed combos (targeted refresh)", len(allIDs))
 				dataCache := internal.NewDataCache()
 				o.lastIndexedCount = dataCache.CountCachedCombinations()
+
+				// Ensure driver stats are exported so they remain current after targeted updates
+				if err := internal.ExportStatsFromShards(); err != nil {
+					log.Printf("⚠️ Failed to export stats after targeted refresh: %v", err)
+				} else {
+					log.Println("✅ Stats export complete after targeted refresh")
+				}
 			}
 		} else {
 			// No sharded index exists yet — must do a full build
@@ -355,6 +380,13 @@ func (o *Orchestrator) fullRebuildFallback() {
 		log.Printf("⚠️ Failed to export index: %v", err)
 	} else {
 		o.lastIndexedCount = len(cachedTracks)
+
+		// Export stats after a full rebuild fallback to keep driver stats up-to-date
+		if err := internal.ExportStatsFromShards(); err != nil {
+			log.Printf("⚠️ Failed to export stats after full rebuild fallback: %v", err)
+		} else {
+			log.Println("✅ Stats export complete after full rebuild fallback")
+		}
 	}
 	cachedTracks = nil
 	runtime.GC()
@@ -556,6 +588,15 @@ func (o *Orchestrator) buildBootstrapIndex() {
 		log.Println("ℹ️ Reusing existing sharded index for bootstrap (skipping full rebuild)")
 		dataCache := internal.NewDataCache()
 		o.lastIndexedCount = dataCache.CountNonEmptyCombinations()
+
+		// Ensure driver stats are up-to-date when reusing the sharded index on startup
+		if o.lastIndexedCount > 0 {
+			if err := internal.ExportStatsFromShards(); err != nil {
+				log.Printf("⚠️ Failed to export stats during bootstrap: %v", err)
+			} else {
+				log.Println("✅ Stats export complete during bootstrap")
+			}
+		}
 		return
 	}
 
