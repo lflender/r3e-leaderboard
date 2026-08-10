@@ -69,6 +69,26 @@ func TestGetScrapeTimestampsReflectsState(t *testing.T) {
 	}
 }
 
+func TestShouldRefreshDailyRacesAtStartup(t *testing.T) {
+	cfg := internal.GetDefaultConfig()
+	now := time.Now()
+	o := &Orchestrator{config: cfg}
+
+	if !o.shouldRefreshDailyRacesAtStartup(now) {
+		t.Fatal("expected startup refresh when no previous refresh exists")
+	}
+
+	o.lastDailyRaceRefresh = now.Add(-time.Duration(cfg.Schedule.DailyRaceRefreshIntervalMins-1) * time.Minute)
+	if o.shouldRefreshDailyRacesAtStartup(now) {
+		t.Fatal("expected startup refresh to be skipped when last refresh occurred less than the configured delay ago")
+	}
+
+	o.lastDailyRaceRefresh = now.Add(-time.Duration(cfg.Schedule.DailyRaceRefreshIntervalMins+1) * time.Minute)
+	if !o.shouldRefreshDailyRacesAtStartup(now) {
+		t.Fatal("expected startup refresh when last refresh occurred longer than the configured delay ago")
+	}
+}
+
 // TestCancelFetch verifies the context cancel function is invoked.
 func TestCancelFetch(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
