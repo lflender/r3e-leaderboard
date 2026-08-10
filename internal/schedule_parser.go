@@ -9,6 +9,29 @@ import (
 	"unicode"
 )
 
+const (
+	SprintRacesTitle  = "Sprint Races"
+	FeatureRacesTitle = "Feature Races"
+)
+
+func sprintRaceSectionAliases() []string {
+	return []string{SprintRacesTitle, "Daily Sprint Races", "Daily Sprint Races (15 min)"}
+}
+
+func featureRaceSectionAliases() []string {
+	return []string{FeatureRacesTitle, "Daily Feature Races", "Daily Feature Races (~30 min)", "Daily Hourly Feature Races", "Daily Hourly Feature Races (~30 min)"}
+}
+
+func matchesSectionTitle(line string, aliases []string) bool {
+	lowerLine := strings.ToLower(line)
+	for _, alias := range aliases {
+		if strings.Contains(lowerLine, strings.ToLower(alias)) {
+			return true
+		}
+	}
+	return false
+}
+
 // DailySprintRace represents a parsed race from the Daily Sprint Races section
 type DailySprintRace struct {
 	RawLine      string   `json:"raw_line"`                     // Original line from Discord
@@ -87,7 +110,7 @@ func parseDailySections(content string) ([]DailySprintRace, []DailySprintRace) {
 
 		lower := strings.ToLower(line)
 
-		if strings.Contains(lower, "daily sprint races") {
+		if matchesSectionTitle(lower, sprintRaceSectionAliases()) {
 			flushCurrentRace()
 			currentSection = "sprint"
 			continue
@@ -99,7 +122,7 @@ func parseDailySections(content string) ([]DailySprintRace, []DailySprintRace) {
 			continue
 		}
 
-		if strings.Contains(lower, "daily") && strings.Contains(lower, "races") {
+		if matchesSectionTitle(lower, featureRaceSectionAliases()) {
 			flushCurrentRace()
 			currentSection = "feature"
 			continue
@@ -117,6 +140,7 @@ func parseDailySections(content string) ([]DailySprintRace, []DailySprintRace) {
 
 		if currentRace != nil && isScheduleLine(line) {
 			currentRace.Schedule = extractSchedule(line)
+			continue
 		}
 	}
 
@@ -126,7 +150,24 @@ func parseDailySections(content string) ([]DailySprintRace, []DailySprintRace) {
 }
 
 func parseRaceSection(content string, sectionTitle string, endMarkers []string) []DailySprintRace {
-	startIdx := strings.Index(content, sectionTitle)
+	aliases := []string{sectionTitle}
+	if sectionTitle == SprintRacesTitle {
+		aliases = sprintRaceSectionAliases()
+	} else if sectionTitle == FeatureRacesTitle {
+		aliases = featureRaceSectionAliases()
+	} else if sectionTitle == "Daily Sprint Races" {
+		aliases = sprintRaceSectionAliases()
+	} else if sectionTitle == "Daily Feature Races" || sectionTitle == "Daily Hourly Feature Races" {
+		aliases = featureRaceSectionAliases()
+	}
+
+	startIdx := -1
+	for _, alias := range aliases {
+		if idx := strings.Index(content, alias); idx >= 0 {
+			startIdx = idx
+			break
+		}
+	}
 	if startIdx == -1 {
 		return []DailySprintRace{}
 	}
@@ -152,7 +193,7 @@ func parseRaceSection(content string, sectionTitle string, endMarkers []string) 
 			continue
 		}
 
-		if strings.Contains(line, sectionTitle) {
+		if matchesSectionTitle(line, aliases) {
 			continue
 		}
 
@@ -173,7 +214,7 @@ func parseRaceSection(content string, sectionTitle string, endMarkers []string) 
 	return races
 }
 
-// isRaceLine checks if a line is a race entry (starts with emoji like 🆓, 🏁, or custom emoji)
+// isRaceLine checks if a line is a race entry (starts with emoji, markdown image blocks, or custom emoji)
 func isRaceLine(line string) bool {
 	// Skip if this is a schedule line - check this first
 	if isScheduleLine(line) {
@@ -187,6 +228,12 @@ func isRaceLine(line string) bool {
 		if strings.HasPrefix(line, ind) {
 			return true
 		}
+	}
+
+	// Markdown image format used in the newer Discord layout,
+	// e.g. ![🆓](https://...) **A110 Alpine – Sepang North**
+	if matched, _ := regexp.MatchString(`^!\[[^\]]*\]\([^)]*\)`, line); matched {
+		return true
 	}
 
 	// Check for custom Discord emoji format :name: at the start
@@ -206,20 +253,44 @@ func isRaceLine(line string) bool {
 func isScheduleLine(line string) bool {
 	cleaned := strings.ReplaceAll(line, "⁨", "")
 	cleaned = strings.ReplaceAll(cleaned, "⁩", "")
-	lower := strings.ToLower(cleaned)
-
-	scheduleKeywords := []string{"every hour", "every other hour", "every half hour"}
-	for _, kw := range scheduleKeywords {
-		if strings.Contains(lower, kw) {
-			return true
-		}
+	cleaned = strings.ReplaceAll(cleaned, "`", "")
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return false
 	}
 
-	if strings.Contains(lower, "min") || strings.Contains(lower, "laps") {
+	candidate := cleaned
+	if idx := strings.Index(strings.ToLower(candidate), "lb"); idx >= 0 {
+		candidate = strings.TrimSpace(candidate[:idx])
+	}
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return false
+	}
+
+	lower := strings.ToLower(candidate)
+
+	if strings.HasPrefix(lower, "every ") {
 		return true
 	}
 
-	if matched, _ := regexp.MatchString(`\(\d{2}:\d{2}`, cleaned); matched {
+	if strings.Contains(lower, "every second hour") || strings.Contains(lower, "every 30 min") || strings.Contains(lower, "every 30 minutes") {
+		return true
+	}
+
+	if strings.Contains(lower, "min") || strings.Contains(lower, "mins") || strings.Contains(lower, "minutes") || strings.Contains(lower, "laps") {
+		return true
+	}
+
+	if matched, _ := regexp.MatchString(`(?:^|\s)\d{1,2}:\d{2}(?:\s|$)`, candidate); matched {
+		return true
+	}
+
+	if matched, _ := regexp.MatchString(`(?:^|\s)\d{1,2}:\d{2}(?:\s*/\s*\d{1,2}:\d{2})+`, candidate); matched {
+		return true
+	}
+
+	if matched, _ := regexp.MatchString(`^\d{1,2}:\d{2}(\s*/\s*\d{1,2}:\d{2})*$`, candidate); matched {
 		return true
 	}
 
@@ -318,13 +389,22 @@ func cleanTrackName(track string) string {
 
 // extractSchedule extracts schedule information from a schedule line
 func extractSchedule(line string) string {
-	// Clean up special characters
 	line = strings.ReplaceAll(line, "⁨", "")
 	line = strings.ReplaceAll(line, "⁩", "")
+	line = strings.ReplaceAll(line, "`", "")
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ""
+	}
 
-	// Extract just the schedule part (e.g., "Every hour (--:20, --:50)")
 	if idx := strings.Index(line, "LB"); idx > 0 {
-		return strings.TrimSpace(line[:idx])
+		line = strings.TrimSpace(line[:idx])
+	}
+
+	line = strings.TrimSpace(line)
+	line = strings.TrimSuffix(line, " ")
+	if strings.Contains(line, "  ") {
+		line = strings.Join(strings.Fields(line), " ")
 	}
 
 	return strings.TrimSpace(line)

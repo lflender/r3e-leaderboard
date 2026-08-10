@@ -956,6 +956,9 @@ func TestExtractSchedule(t *testing.T) {
 		{"Every hour (--:20, --:50) LB fixed setup", "Every hour (--:20, --:50)"},
 		{"⁨Every other hour (--:55)⁩ ⁨LB⁩ ⁨fixed setup⁩", "Every other hour (--:55)"},
 		{"Every half hour (--:15, --:45) LB fixed setup Weekly F2P", "Every half hour (--:15, --:45)"},
+		{"Every second hour (--:15)", "Every second hour (--:15)"},
+		{"17:00 / 19:00 / 21:00 / 23:00 / 01:00 / 03:00 / 05:00", "17:00 / 19:00 / 21:00 / 23:00 / 01:00 / 03:00 / 05:00"},
+		{"18:00 / 20:00 / 22:00 / 00:00 / 02:00 / 04:00 / 06:00 LB open setup 3 laps", "18:00 / 20:00 / 22:00 / 00:00 / 02:00 / 04:00 / 06:00"},
 	}
 
 	for _, test := range tests {
@@ -963,6 +966,47 @@ func TestExtractSchedule(t *testing.T) {
 		if result != test.expected {
 			t.Errorf("extractSchedule(%q) = %q, expected %q", test.input, result, test.expected)
 		}
+	}
+}
+
+func TestParseDailySprintRaces_NewScheduleMetadataFormat(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "new_schedule_metadata",
+		Content: `## **Sprint Races**
+![🆓](https://discord.com/assets/a79a44870d9a39d4.svg) **A110 Alpine – Sepang North**
+` + "`Every second hour (--:15)` `LB` `fixed setup`" + `
+![🏁](https://discord.com/assets/e5333cf49e7d6d2b.svg) **Super Touring – Suzuka GP**
+` + "`Every 30 min (--:10, --:40)` `LB` `fixed setup`" + `
+
+## **Feature Races**
+![🔥](https://discord.com/assets/a7bd71d6389d0dfe.svg) **PCCA + PCCNA – Oschersleben GP**
+17:00 / 19:00 / 21:00 / 23:00 / 01:00 / 03:00 / 05:00
+LB open setup
+![🔥](https://discord.com/assets/a7bd71d6389d0dfe.svg) **Super Touring – Nordschleife NLS**
+18:00 / 20:00 / 22:00 / 00:00 / 02:00 / 04:00 / 06:00
+LB open setup 3 laps`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+	if len(result.Races) != 2 {
+		t.Fatalf("Expected 2 sprint races, got %d", len(result.Races))
+	}
+	if len(result.FeatureRaces) != 2 {
+		t.Fatalf("Expected 2 feature races, got %d", len(result.FeatureRaces))
+	}
+
+	if result.Races[0].Schedule != "Every second hour (--:15)" {
+		t.Fatalf("A110 schedule = %q, expected %q", result.Races[0].Schedule, "Every second hour (--:15)")
+	}
+	if result.FeatureRaces[0].Schedule != "17:00 / 19:00 / 21:00 / 23:00 / 01:00 / 03:00 / 05:00" {
+		t.Fatalf("Feature schedule = %q, expected %q", result.FeatureRaces[0].Schedule, "17:00 / 19:00 / 21:00 / 23:00 / 01:00 / 03:00 / 05:00")
+	}
+	if result.FeatureRaces[1].Schedule != "18:00 / 20:00 / 22:00 / 00:00 / 02:00 / 04:00 / 06:00" {
+		t.Fatalf("Second feature schedule = %q, expected %q", result.FeatureRaces[1].Schedule, "18:00 / 20:00 / 22:00 / 00:00 / 02:00 / 04:00 / 06:00")
 	}
 }
 
@@ -2229,6 +2273,42 @@ func TestFindCarClassID_PorscheCarreraCupAliases(t *testing.T) {
 // =============================================================================
 // PLUS COMBO TESTS - Generic + multi-class handling
 // =============================================================================
+
+func TestFindCarClassID_AlpineA110NameOrder(t *testing.T) {
+	classes := GetCarClasses()
+	for _, input := range []string{"A110 Alpine", "Alpine A110", "A110"} {
+		result := findCarClassID(input, classes)
+		if result != "13397" {
+			t.Fatalf("findCarClassID(%q) = %q, expected %q", input, result, "13397")
+		}
+	}
+}
+
+func TestParsePlusCombo_PCCAAndPCCNA(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "pcca_combo_test",
+		Content: `Daily Feature Races (~30 min)
+🔥 PCCA + PCCNA - Norisring
+30 min (17:30, 19:30, 21:30) LB open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil {
+		t.Fatal("ParseDailySprintRaces returned nil")
+	}
+	if len(result.FeatureRaces) != 1 {
+		t.Fatalf("Expected 1 feature race, got %d", len(result.FeatureRaces))
+	}
+
+	race := result.FeatureRaces[0]
+	if !race.MatchedOK {
+		t.Fatalf("Expected MatchedOK=true, got false for %q", race.CarClass)
+	}
+	if len(race.CategoryIDs) != 2 || race.CategoryIDs[0] != "12015" || race.CategoryIDs[1] != "12969" {
+		t.Fatalf("Expected CategoryIDs [12015 12969], got %v", race.CategoryIDs)
+	}
+}
 
 func TestParsePlusCombo(t *testing.T) {
 	// Test generic + combo parsing with a minimal message

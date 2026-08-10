@@ -271,6 +271,7 @@ func GetCarClasses() []CarClassConfig {
 		{"DTM 2023", "12196"},
 		{"DTM 2024", "12770"},
 		{"DTM 2025", "13136"},
+		{"DTM 2026", "13571"},
 		{"Drift", "1711"},
 		{"FR US Cup", "5383"},
 		{"FR X-17 Cup", "5824"},
@@ -425,7 +426,11 @@ func GetClassIDToSuperclassMap() map[string]string {
 // NOTE: All values MUST exactly match class names in GetCarClasses()
 func GetDiscordCarClassAliases() map[string]string {
 	return map[string]string{
+		"a110":               "Alpine A110 Cup",
 		"a110 cup":           "Alpine A110 Cup",
+		"a110 alpine":        "Alpine A110 Cup",
+		"alpine a110":        "Alpine A110 Cup",
+		"alpine a110 cup":    "Alpine A110 Cup",
 		"aquila":             "Aquila CR1 Cup",
 		"audi tt 16":         "Audi Sport TT Cup 2016",
 		"audi tt 2016":       "Audi Sport TT Cup 2016",
@@ -465,6 +470,7 @@ func GetDiscordCarClassAliases() map[string]string {
 		"porsche 964":        "Porsche 964 Cup",
 		"992":                "Porsche 992 GT3 Cup",
 		"992 cup":            "Porsche 992 GT3 Cup",
+		"pcca":               "Porsche Carrera Cup Deutschland 2023",
 		"pccd":               "Porsche Carrera Cup Deutschland 2023",
 		"pccna":              "Porsche Carrera Cup North America 2024",
 		"pccs":               "Porsche Carrera Cup Scandinavia",
