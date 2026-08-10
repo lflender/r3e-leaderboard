@@ -1,19 +1,20 @@
 package internal
 
 import (
-"context"
-"encoding/json"
-"fmt"
-"io"
-"log"
-"net/http"
-"strings"
-"time"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"strings"
+	"time"
 )
 
 const (
-discordAPIBase = "https://discord.com/api/v10"
+	discordAPIBase = "https://discord.com/api/v10"
 )
+
 // DiscordMessage represents a message from Discord API
 type DiscordMessage struct {
 	ID        string    `json:"id"`
@@ -86,7 +87,7 @@ func (d *DiscordClient) FetchRecentMessages(ctx context.Context, withinMinutes i
 // FindDailySprintRacesMessage finds a message containing the Daily Sprint Races section
 func (d *DiscordClient) FindDailySprintRacesMessage(messages []DiscordMessage) *DiscordMessage {
 	for i := range messages {
-		if strings.Contains(messages[i].Content, "Daily Sprint Races") {
+		if matchesSectionTitle(messages[i].Content, sprintRaceSectionAliases()) {
 			return &messages[i]
 		}
 	}
@@ -181,8 +182,8 @@ func (d *DiscordClient) CheckForNewDailySprintRaces(ctx context.Context, withinM
 		}
 	}
 
-	logRaces("Daily Sprint Races", result.Races)
-	logRaces("Daily Feature Races", result.FeatureRaces)
+	logRaces(SprintRacesTitle, result.Races)
+	logRaces(FeatureRacesTitle, result.FeatureRaces)
 
 	return result, nil
 }
