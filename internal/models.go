@@ -271,6 +271,7 @@ func GetCarClasses() []CarClassConfig {
 		{"DTM 2023", "12196"},
 		{"DTM 2024", "12770"},
 		{"DTM 2025", "13136"},
+		{"DTM 2026", "13571"},
 		{"Drift", "1711"},
 		{"FR US Cup", "5383"},
 		{"FR X-17 Cup", "5824"},
