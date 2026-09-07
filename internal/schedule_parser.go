@@ -623,6 +623,9 @@ func resolveCarClassPart(part string, carClasses []CarClassConfig, multiClassAli
 
 	// 4. Single class lookup
 	if id := findCarClassID(part, carClasses); id != "" {
+		if name := findCarClassNameByID(id, carClasses); name != "" {
+			return []string{id}, name
+		}
 		return []string{id}, part
 	}
 
@@ -799,6 +802,15 @@ func findCarClassIDByExactName(className string, classes []CarClassConfig) strin
 	for _, class := range classes {
 		if class.Name == className {
 			return class.ClassID
+		}
+	}
+	return ""
+}
+
+func findCarClassNameByID(classID string, classes []CarClassConfig) string {
+	for _, class := range classes {
+		if class.ClassID == classID {
+			return class.Name
 		}
 	}
 	return ""

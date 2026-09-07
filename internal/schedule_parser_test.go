@@ -836,6 +836,38 @@ func TestParseDailySprintRaces_MultiClassAlias(t *testing.T) {
 	}
 }
 
+func TestParseDailySprintRaces_GTR4AndM35iCombo(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "gtr4_m35i_combo",
+		Content: `This Week in Ranked Multiplayer
+
+Daily Feature Races (~30 min)
+🔥 GTR4 + M35i – Nordschleife NLS
+18:00 / 20:00 / 22:00 LB open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil || len(result.FeatureRaces) != 1 {
+		t.Fatalf("expected one feature race, got %#v", result)
+	}
+
+	race := result.FeatureRaces[0]
+	if !race.MatchedOK {
+		t.Fatalf("expected combo to match, got class ID %q, category IDs %v, track ID %q", race.CarClassID, race.CategoryIDs, race.TrackID)
+	}
+	if race.TrackID != "4975" {
+		t.Errorf("expected Nordschleife NLS track ID 4975, got %q", race.TrackID)
+	}
+	if race.CarClass != "GTR 4 + BMW M235i Racing Cup" {
+		t.Errorf("expected resolved class display name, got %q", race.CarClass)
+	}
+	expectedIDs := []string{"5825", "6344"}
+	if len(race.CategoryIDs) != len(expectedIDs) || race.CategoryIDs[0] != expectedIDs[0] || race.CategoryIDs[1] != expectedIDs[1] {
+		t.Errorf("expected category IDs %v, got %v", expectedIDs, race.CategoryIDs)
+	}
+}
+
 func TestParseDailySprintRaces_FixedAliasesInMessage(t *testing.T) {
 	fixtures := GetTestFixtures()
 
@@ -2142,7 +2174,7 @@ func TestParseDailySprintRaces_Mar2Message(t *testing.T) {
 		categoryIDs []string
 	}{
 		// PCCD + PCCNA → combo with two class IDs
-		{"PCCD + PCCNA", "PCCD + PCCNA", "2518", true, []string{"12015", "12969"}},
+		{"Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024", "Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024", "2518", true, []string{"12015", "12969"}},
 		// DTM92 → DTM 1992 via matchYearBasedClass
 		{"DTM92", "3499", "4975", false, nil},
 	}
@@ -2333,8 +2365,8 @@ func TestParsePlusCombo(t *testing.T) {
 
 	// PCCD + PCCNA combo
 	race0 := result.FeatureRaces[0]
-	if race0.CarClass != "PCCD + PCCNA" {
-		t.Errorf("Race 0: expected CarClass 'PCCD + PCCNA', got '%s'", race0.CarClass)
+	if race0.CarClass != "Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024" {
+		t.Errorf("Race 0: expected resolved combo name, got '%s'", race0.CarClass)
 	}
 	if len(race0.CategoryIDs) != 2 {
 		t.Errorf("Race 0: expected 2 CategoryIDs, got %d: %v", len(race0.CategoryIDs), race0.CategoryIDs)
@@ -2349,8 +2381,8 @@ func TestParsePlusCombo(t *testing.T) {
 
 	// GT4 + WTCR combo
 	race1 := result.FeatureRaces[1]
-	if race1.CarClass != "GT4 + WTCR" {
-		t.Errorf("Race 1: expected CarClass 'GT4 + WTCR', got '%s'", race1.CarClass)
+	if race1.CarClass != "GTR 4 + WTCR" {
+		t.Errorf("Race 1: expected CarClass 'GTR 4 + WTCR', got '%s'", race1.CarClass)
 	}
 	if len(race1.CategoryIDs) != 7 {
 		t.Errorf("Race 1: expected 7 CategoryIDs, got %d: %v", len(race1.CategoryIDs), race1.CategoryIDs)
