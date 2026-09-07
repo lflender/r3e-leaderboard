@@ -472,6 +472,9 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 
 			if allResolved && len(categoryIDs) > 0 {
 				displayName := strings.Join(displayParts, " + ")
+				if superclass := commonSuperclass(categoryIDs); superclass != "" {
+					displayName = superclass
+				}
 				newRace.CarClass = displayName
 				newRace.CarClassID = displayName
 				newRace.CategoryIDs = categoryIDs
@@ -566,6 +569,24 @@ func matchRaceIDsForList(races []DailySprintRace, tracks []TrackConfig, carClass
 	}
 
 	return expandedRaces
+}
+
+func commonSuperclass(classIDs []string) string {
+	if len(classIDs) < 2 {
+		return ""
+	}
+
+	superclassByID := GetClassIDToSuperclassMap()
+	common := superclassByID[classIDs[0]]
+	if common == "" {
+		return ""
+	}
+	for _, classID := range classIDs[1:] {
+		if superclassByID[classID] != common {
+			return ""
+		}
+	}
+	return common
 }
 
 // resolveCarClassPart resolves a single car class part (from a + combo or standalone)

@@ -2174,7 +2174,7 @@ func TestParseDailySprintRaces_Mar2Message(t *testing.T) {
 		categoryIDs []string
 	}{
 		// PCCD + PCCNA → combo with two class IDs
-		{"Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024", "Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024", "2518", true, []string{"12015", "12969"}},
+		{"Porsche Cup", "Porsche Cup", "2518", true, []string{"12015", "12969"}},
 		// DTM92 → DTM 1992 via matchYearBasedClass
 		{"DTM92", "3499", "4975", false, nil},
 	}
@@ -2365,8 +2365,8 @@ func TestParsePlusCombo(t *testing.T) {
 
 	// PCCD + PCCNA combo
 	race0 := result.FeatureRaces[0]
-	if race0.CarClass != "Porsche Carrera Cup Deutschland 2023 + Porsche Carrera Cup North America 2024" {
-		t.Errorf("Race 0: expected resolved combo name, got '%s'", race0.CarClass)
+	if race0.CarClass != "Porsche Cup" {
+		t.Errorf("Race 0: expected Porsche Cup grouping, got '%s'", race0.CarClass)
 	}
 	if len(race0.CategoryIDs) != 2 {
 		t.Errorf("Race 0: expected 2 CategoryIDs, got %d: %v", len(race0.CategoryIDs), race0.CategoryIDs)
