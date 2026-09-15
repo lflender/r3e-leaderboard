@@ -2445,6 +2445,38 @@ func TestParsePlusComboWithRangeCategory(t *testing.T) {
 		race.CarClass, race.CategoryIDs, race.TrackID, race.MatchedOK)
 }
 
+func TestParsePlusComboWithDiscordMarkdownEmoji(t *testing.T) {
+	msg := &DiscordMessage{
+		ID: "markdown_emoji_combo_test",
+		Content: `This Week in Ranked Multiplayer
+
+Feature Races
+![:DTM:](https://cdn.discordapp.com/emojis/1400813181013590016.webp?size=44) : **GT 3 + DTM 26 – Nordschleife NLS**
+18:00 / 20:00 / 22:00 LB open setup`,
+		Timestamp: time.Now(),
+	}
+
+	result := ParseDailySprintRaces(msg)
+	if result == nil || len(result.FeatureRaces) != 1 {
+		t.Fatalf("Expected one feature race, got %#v", result)
+	}
+
+	race := result.FeatureRaces[0]
+	if !race.MatchedOK {
+		t.Fatalf("Expected combo to match, got CarClass=%q Track=%q ClassID=%q TrackID=%q",
+			race.CarClass, race.Track, race.CarClassID, race.TrackID)
+	}
+	if race.CarClass != "GTR 3 + DTM 2026" {
+		t.Errorf("Expected resolved class names, got %q", race.CarClass)
+	}
+	if len(race.CategoryIDs) != 2 || race.CategoryIDs[0] != "1703" || race.CategoryIDs[1] != "13571" {
+		t.Errorf("Expected CategoryIDs [1703 13571], got %v", race.CategoryIDs)
+	}
+	if race.TrackID != "4975" {
+		t.Errorf("Expected Nordschleife NLS track ID 4975, got %q", race.TrackID)
+	}
+}
+
 func TestParseDailySprintRaces_Mar30MessageAliases(t *testing.T) {
 	msg := &DiscordMessage{
 		ID: "mar30_test",
