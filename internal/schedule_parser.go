@@ -347,6 +347,11 @@ func splitCarClassAndTrack(line string) (string, string, bool) {
 
 // cleanRaceLine removes emoji and special characters from the line
 func cleanRaceLine(line string) string {
+	// Remove markdown image blocks used for Discord emoji, e.g. ![:DTM:](https://...)
+	markdownImage := regexp.MustCompile(`!\[[^\]]*\]\([^)]*\)`)
+	line = markdownImage.ReplaceAllString(line, "")
+	line = strings.ReplaceAll(line, "**", "")
+
 	// Remove custom Discord emoji <:name:id> or <a:name:id>
 	reCustom := regexp.MustCompile(`<a?:[a-zA-Z0-9_]+:\d+>`)
 	line = reCustom.ReplaceAllString(line, "")
