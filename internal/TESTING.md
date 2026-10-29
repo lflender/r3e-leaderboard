@@ -86,7 +86,15 @@ discord_test.go:382: findTrackID("monza") = "", expected "1671" (Monza Circuit -
 ### API Tests (`api_test.go`)
 - `TestNewAPIClient` - Client initialization
 - `TestAPIResponse_Unmarshal` - JSON parsing
+- `TestAPIClient_FetchLeaderboardData_Success` - Fetching across 100-result pages
+- `TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol` - Recovering from a changed endpoint and request header
+- `TestAPIClient_FetchLeaderboardData_DoesNotDiscoverDuringMaintenance` - Reporting maintenance rather than masking it as an endpoint change
+- `TestAPIClient_FetchLeaderboardData_EmptyLeaderboard` - Treating RaceRoom's empty binary response as a valid empty leaderboard
 - `TestAPIClient_FetchLeaderboardData_ContextCancellation` - Cancellation handling
+
+### Leaderboard Response Tests (`leaderboard_response_test.go`)
+- `TestDecodeLeaderboardResponse` - Decoding current RaceRoom leaderboard responses
+- `TestDecodeLeaderboardResponse_MalformedPayload` - Malformed response handling
 
 ### Model Tests (`models_test.go`)
 - `TestGetTracks_UniqueIDs` - No duplicate track IDs
