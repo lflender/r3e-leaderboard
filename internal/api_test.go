@@ -3,8 +3,10 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -123,38 +125,194 @@ func TestAPIResult_Unmarshal(t *testing.T) {
 // =============================================================================
 
 func TestAPIClient_FetchLeaderboardData_Success(t *testing.T) {
-	// Create mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Check request has correct headers
-		if r.Header.Get("Accept") == "application/json" {
-			// Return mock leaderboard data
-			response := APIResponse{}
-			response.Context.C.Results = []map[string]interface{}{
-				{
-					"driver":           map[string]interface{}{"name": "Mock Driver 1"},
-					"laptime":          "1:30.000",
-					"relative_laptime": "",
-					"index":            float64(0),
-				},
-				{
-					"driver":           map[string]interface{}{"name": "Mock Driver 2"},
-					"laptime":          "1:31.500",
-					"relative_laptime": "+1.500s",
-					"index":            float64(1),
-				},
+		if r.URL.Path != leaderboardAPIEndpoint {
+			t.Errorf("Request path = %q, want %q", r.URL.Path, leaderboardAPIEndpoint)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("Request method = %q, want POST", r.Method)
+		}
+		if r.Header.Get("xr") != leaderboardRequestXR {
+			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), leaderboardRequestXR)
+		}
+
+		var request struct {
+			CompetitionID int `json:"competitionId"`
+			Filters       struct {
+				Filters []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"filters"`
+			} `json:"filters"`
+			Start int `json:"start"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Decode request body: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if request.CompetitionID != -1 {
+			t.Errorf("competitionId = %d, want -1", request.CompetitionID)
+		}
+		if len(request.Filters.Filters) != 2 ||
+			request.Filters.Filters[0].Name != "track" ||
+			request.Filters.Filters[0].Value != "7112" ||
+			request.Filters.Filters[1].Name != "car_class" ||
+			request.Filters.Filters[1].Value != "class-1703" {
+			t.Errorf("Unexpected filters: %+v", request.Filters.Filters)
+		}
+
+		count := leaderboardPageSize
+		if request.Start == leaderboardPageSize {
+			count = 1
+		} else if request.Start != 0 {
+			t.Errorf("Unexpected page start %d", request.Start)
+			count = 0
+		}
+
+		w.Header().Set("Content-Type", "application/javascript-binast")
+		_, _ = w.Write(encodeTestLeaderboardResponse(request.Start, count))
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
+	if err != nil {
+		t.Fatalf("FetchLeaderboardData returned error: %v", err)
+	}
+	if len(results) != 101 {
+		t.Fatalf("FetchLeaderboardData returned %d results, want 101", len(results))
+	}
+	if results[0]["index"] != float64(0) || results[100]["index"] != float64(100) {
+		t.Errorf("Unexpected result indexes: first=%v last=%v", results[0]["index"], results[100]["index"])
+	}
+	if results[100]["laptime"] != "1:30.000" {
+		t.Errorf("Last result lap time = %v, want 1:30.000", results[100]["laptime"])
+	}
+}
+
+func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
+	const discoveredEndpoint = "/iapi/0123456789abcdef0123456789abcdef"
+	const discoveredXR = "updated-xr"
+	var discoveryRequests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case leaderboardAPIEndpoint:
+			http.NotFound(w, r)
+		case "/leaderboard/":
+			discoveryRequests++
+			_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
+		case "/assets/client.js":
+			bundle := "wf=$(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
+				"Eg=e=>cg(`/iapi/0123456789abcdef0123456789abcdef`,e,void 0,void 0,wf.decode)," +
+				"xr:`updated-xr`"
+			_, _ = w.Write([]byte(bundle))
+		case discoveredEndpoint:
+			if got := r.Header.Get("xr"); got != discoveredXR {
+				t.Errorf("xr header = %q, want %q", got, discoveredXR)
 			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-		} else {
-			// Initial page request - just return OK
-			w.WriteHeader(http.StatusOK)
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(encodeTestLeaderboardResponse(0, 1))
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()
 
-	// Note: We can't easily inject the mock URL into the real API client
-	// without modifying the production code. This test demonstrates the pattern.
-	t.Log("✅ Mock server pattern test passed")
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
+	if err != nil {
+		t.Fatalf("FetchLeaderboardData returned error: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("FetchLeaderboardData returned %d results, want 1", len(results))
+	}
+	if discoveryRequests != 1 {
+		t.Errorf("Discovery requests = %d, want 1", discoveryRequests)
+	}
+	if client.protocol.endpoint != discoveredEndpoint || client.protocol.xr != discoveredXR {
+		t.Errorf("Cached protocol = %+v, want endpoint %q and xr %q",
+			client.protocol, discoveredEndpoint, discoveredXR)
+	}
+}
+
+func TestAPIClient_FetchLeaderboardData_DoesNotDiscoverDuringMaintenance(t *testing.T) {
+	var discoveryRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case leaderboardAPIEndpoint:
+			http.NotFound(w, r)
+		case "/leaderboard/":
+			discoveryRequests++
+			http.Error(w, "maintenance", http.StatusServiceUnavailable)
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	_, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
+	if err == nil {
+		t.Fatal("Expected endpoint discovery to fail while RaceRoom is in maintenance")
+	}
+	if !strings.Contains(err.Error(), "API returned status code 404") {
+		t.Errorf("Error %q does not report the stale endpoint response", err)
+	}
+	if !strings.Contains(err.Error(), "discovery failed") || !strings.Contains(err.Error(), "503") {
+		t.Errorf("Error %q does not report the maintenance response", err)
+	}
+	if discoveryRequests != 1 {
+		t.Errorf("Discovery requests = %d, want 1", discoveryRequests)
+	}
+}
+
+func TestAPIClient_FetchLeaderboardData_EmptyLeaderboard(t *testing.T) {
+	var discoveryRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case leaderboardAPIEndpoint:
+			w.Header().Set("Content-Type", "application/javascript-binast")
+		case "/leaderboard/":
+			discoveryRequests++
+			t.Error("Did not expect discovery for a valid empty leaderboard response")
+			http.Error(w, "unexpected discovery", http.StatusInternalServerError)
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	results, _, err := client.FetchLeaderboardData(context.Background(), "13352", "255")
+	if err != nil {
+		t.Fatalf("FetchLeaderboardData returned error for empty leaderboard: %v", err)
+	}
+	if results == nil {
+		t.Fatal("FetchLeaderboardData returned nil results, want empty slice")
+	}
+	if len(results) != 0 {
+		t.Errorf("FetchLeaderboardData returned %d results, want 0", len(results))
+	}
+	if discoveryRequests != 0 {
+		t.Errorf("Discovery requests = %d, want 0", discoveryRequests)
+	}
 }
 
 func TestAPIClient_FetchLeaderboardData_ContextCancellation(t *testing.T) {
@@ -178,24 +336,26 @@ func TestAPIClient_FetchLeaderboardData_ContextCancellation(t *testing.T) {
 }
 
 func TestAPIClient_FetchLeaderboardData_Timeout(t *testing.T) {
-	// Create a server that delays response
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(100 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// Create context with short timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
 	client := NewAPIClient()
 	defer client.Close()
+	client.baseURL = server.URL
 
-	// This will fail because we can't redirect the real API URL to our mock
-	// The test demonstrates the timeout pattern
-	_ = ctx // Mark as used (would be passed to FetchLeaderboardData in integration test)
-	t.Log("✅ Timeout pattern test passed")
+	_, _, err := client.FetchLeaderboardData(ctx, "1234", "5678")
+	if err == nil {
+		t.Fatal("Expected timeout error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Error = %v, want context deadline exceeded", err)
+	}
 }
 
 // =============================================================================
@@ -203,24 +363,14 @@ func TestAPIClient_FetchLeaderboardData_Timeout(t *testing.T) {
 // =============================================================================
 
 func TestAPIURL_Format(t *testing.T) {
-	trackID := "7112"
-	classID := "1703"
-
-	expectedMainURL := "https://game.raceroom.com/leaderboard/?car_class=class-1703&track=7112"
-	expectedAPIURL := "https://game.raceroom.com/leaderboard/listing/0?track=7112&car_class=class-1703&start=0&count=1500"
-
-	// Construct URLs as the API client would
-	fullClassID := "class-" + classID
-	mainURL := "https://game.raceroom.com/leaderboard/?car_class=" + fullClassID + "&track=" + trackID
-
-	if mainURL != expectedMainURL {
-		t.Errorf("Main URL = %q, expected %q", mainURL, expectedMainURL)
+	if raceRoomBaseURL != "https://game.raceroomracing.com" {
+		t.Errorf("RaceRoom base URL = %q, unexpected", raceRoomBaseURL)
 	}
-
-	apiURL := "https://game.raceroom.com/leaderboard/listing/0?track=" + trackID + "&car_class=" + fullClassID + "&start=0&count=1500"
-
-	if apiURL != expectedAPIURL {
-		t.Errorf("API URL = %q, expected %q", apiURL, expectedAPIURL)
+	if leaderboardAPIEndpoint == "" || leaderboardRequestXR == "" {
+		t.Error("Default leaderboard protocol values must be configured")
+	}
+	if leaderboardPageSize != 100 {
+		t.Errorf("Leaderboard page size = %d, want 100", leaderboardPageSize)
 	}
 }
 

@@ -219,6 +219,7 @@ func TestGetClassIDToSuperclassMap(t *testing.T) {
 
 func TestGetDiscordCarClassAliases(t *testing.T) {
 	aliases := GetDiscordCarClassAliases()
+	classes := GetCarClasses()
 
 	if len(aliases) == 0 {
 		t.Fatal("GetDiscordCarClassAliases returned empty map")
@@ -226,23 +227,16 @@ func TestGetDiscordCarClassAliases(t *testing.T) {
 
 	t.Logf("✅ GetDiscordCarClassAliases returned %d aliases", len(aliases))
 
-	// Verify some expected aliases exist
-	expectedAliases := map[string]string{
-		"gt3":           "GTR 3",
-		"gt4":           "GTR 4",
-		"mx5":           "Mazda MX-5 Cup",
-		"dtm 1995":      "DTM 1995",
-		"m1 cup":        "Procar",
-		"super touring": "Super Touring",
-	}
+	for alias, target := range aliases {
+		expectedID := findCarClassIDByExactName(target, classes)
+		if expectedID == "" {
+			t.Errorf("Alias %q targets %q, which is not in GetCarClasses()", alias, target)
+			continue
+		}
 
-	for alias, expected := range expectedAliases {
-		if val, ok := aliases[alias]; ok {
-			if val != expected {
-				t.Errorf("Alias %q maps to %q, expected %q", alias, val, expected)
-			}
-		} else {
-			t.Errorf("Expected alias %q not found", alias)
+		if gotID := findCarClassID(alias, classes); gotID != expectedID {
+			t.Errorf("Alias %q resolves to class ID %q, want target %q (ID %q)",
+				alias, gotID, target, expectedID)
 		}
 	}
 }

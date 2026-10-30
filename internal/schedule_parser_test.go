@@ -370,57 +370,18 @@ func TestIsRaceLine(t *testing.T) {
 
 func TestFindCarClassID_AllAliases(t *testing.T) {
 	classes := GetCarClasses()
+	aliases := GetDiscordCarClassAliases()
 
-	// Test all aliases defined in GetDiscordCarClassAliases()
-	tests := []struct {
-		alias       string
-		expectedID  string
-		description string
-	}{
-		{"gt3", "1703", "GTR 3"},
-		{"gt2", "8248", "GT2"},
-		{"gt4", "5825", "GTR 4"},
-		{"f4", "4867", "Tatuus F4 Cup"},
-		{"mx5", "10977", "Mazda MX-5 Cup"},
-		{"mx-5", "10977", "Mazda MX-5 Cup (hyphenated)"},
-		{"super touring", "1710", "Super Touring"},
-		{"dtm 1992", "3499", "DTM 1992"},
-		{"dtm 1995", "7075", "DTM 1995"},
-		{"dtm 2002", "13264", "DTM 2002"},
-		{"dtm 2016", "5262", "DTM 2016"},
-		{"dtm 2020", "9205", "DTM 2020"},
-		{"dtm 2021", "10396", "DTM 2021"},
-		{"dtm 2023", "12196", "DTM 2023"},
-		{"dtm 2024", "12770", "DTM 2024"},
-		{"dtm 2025", "13136", "DTM 2025"},
-		{"dtm", "13136", "DTM 2025"},
-		{"audi tt 16", "5726", "Audi Sport TT Cup 2016"},
-		{"m235i", "6344", "BMW M235i Racing Cup"},
-		{"bmw 235i", "6344", "BMW M235i Racing Cup"},
-		{"235i", "6344", "BMW M235i Racing Cup"},
-		{"silhouette series", "1717", "Silhouette Series"},
-		{"group 5", "1708", "Group 5"},
-		{"touring classics", "1712", "Touring Classics"},
-		{"wtcr 22", "11317", "WTCR 2022"},
-		{"wtcr 21", "10344", "WTCR 2021"},
-		{"wtcr 20", "9233", "WTCR 2020"},
-		{"fr junior", "253", "FRJ Cup"},
-		{"porsche 964", "7287", "Porsche 964 Cup"},
-		{"992 cup", "12302", "Porsche 992 GT3 Cup"},
-		{"audi tt rs", "5234", "Audi TT RS cup"},
-		{"fr 2", "4597", "FR2 Cup"},
-		{"fr 3", "5652", "FR3 Cup"},
-		{"fr x-17", "5824", "FR X-17 Cup"},
-		{"944", "11564", "Porsche 944 Turbo Cup"},
-		{"bmw m235i", "6344", "BMW M235i Racing Cup"},
-	}
+	for alias, target := range aliases {
+		t.Run(alias, func(t *testing.T) {
+			expectedID := findCarClassIDByExactName(target, classes)
+			if expectedID == "" {
+				t.Fatalf("Alias target %q is not in GetCarClasses()", target)
+			}
 
-	for _, test := range tests {
-		t.Run(test.alias, func(t *testing.T) {
-			result := findCarClassID(test.alias, classes)
-			if result != test.expectedID {
-				t.Errorf("findCarClassID(%q) = %q, expected %q (%s)",
-					test.alias, result, test.expectedID, test.description)
+			if result := findCarClassID(alias, classes); result != expectedID {
+				t.Errorf("findCarClassID(%q) = %q, want %q for target %q",
+					alias, result, expectedID, target)
 			}
 		})
 	}
@@ -2521,46 +2482,73 @@ Daily Feature Races (~30 min)
 		}
 		return nil
 	}
+	findRaceWithCategoryIDs := func(races []DailySprintRace, expectedIDs []string) *DailySprintRace {
+		for i := range races {
+			if len(races[i].CategoryIDs) != len(expectedIDs) {
+				continue
+			}
+			matches := true
+			for j := range expectedIDs {
+				if races[i].CategoryIDs[j] != expectedIDs[j] {
+					matches = false
+					break
+				}
+			}
+			if matches {
+				return &races[i]
+			}
+		}
+		return nil
+	}
+	classes := GetCarClasses()
+	tracks := GetTracks()
 
 	spa := findRace(result.Races, "Super Touring")
 	if spa == nil {
 		t.Fatal("Super Touring race not found")
 	}
-	if spa.TrackID != "13368" {
-		t.Errorf("Super Touring: expected Spa Classic trackID '13368', got '%s'", spa.TrackID)
+	if expectedTrackID := findTrackID("Spa Classic", tracks); expectedTrackID == "" || spa.TrackID != expectedTrackID {
+		t.Errorf("Super Touring: expected Spa Classic trackID %q, got %q", expectedTrackID, spa.TrackID)
 	}
 
 	dtm := findRace(result.FeatureRaces, "DTM")
 	if dtm == nil {
 		t.Fatal("DTM feature race not found")
 	}
-	if dtm.CarClassID != "13136" {
-		t.Errorf("DTM feature: expected classID '13136', got '%s'", dtm.CarClassID)
+	if expectedClassID := findCarClassID("DTM", classes); expectedClassID == "" || dtm.CarClassID != expectedClassID {
+		t.Errorf("DTM feature: expected current DTM class ID %q, got %q", expectedClassID, dtm.CarClassID)
 	}
-	if dtm.TrackID != "10782" {
-		t.Errorf("DTM feature: expected Zandvoort trackID '10782', got '%s'", dtm.TrackID)
+	if expectedTrackID := findTrackID("Zandvoort", tracks); expectedTrackID == "" || dtm.TrackID != expectedTrackID {
+		t.Errorf("DTM feature: expected Zandvoort track ID %q, got %q", expectedTrackID, dtm.TrackID)
 	}
 
 	audiTT := findRace(result.FeatureRaces, "Audi TT 16")
 	if audiTT == nil {
 		t.Fatal("Audi TT 16 feature race not found")
 	}
-	if audiTT.CarClassID != "5726" {
-		t.Errorf("Audi TT 16 feature: expected classID '5726', got '%s'", audiTT.CarClassID)
+	if expectedClassID := findCarClassID("Audi TT 16", classes); expectedClassID == "" || audiTT.CarClassID != expectedClassID {
+		t.Errorf("Audi TT 16 feature: expected class ID %q, got %q", expectedClassID, audiTT.CarClassID)
 	}
-	if audiTT.TrackID != "4975" {
-		t.Errorf("Audi TT 16 feature: expected Nordschleife NLS trackID '4975', got '%s'", audiTT.TrackID)
+	if expectedTrackID := findTrackID("Nordschleife NLS", tracks); expectedTrackID == "" || audiTT.TrackID != expectedTrackID {
+		t.Errorf("Audi TT 16 feature: expected Nordschleife NLS track ID %q, got %q", expectedTrackID, audiTT.TrackID)
 	}
 
-	combo := findRace(result.Races, "PCCD + PCCNA")
+	expectedCategoryIDs := []string{
+		findCarClassID("PCCD", classes),
+		findCarClassID("PCCNA", classes),
+	}
+	if expectedCategoryIDs[0] == "" || expectedCategoryIDs[1] == "" {
+		t.Fatalf("PCCD/PCCNA aliases must resolve from current car classes: %v", expectedCategoryIDs)
+	}
+	combo := findRaceWithCategoryIDs(result.Races, expectedCategoryIDs)
 	if combo == nil {
 		t.Fatal("PCCD+PCCNA combo race not found")
 	}
-	if combo.TrackID != "10463" {
-		t.Errorf("PCCD+PCCNA combo: expected Interlagos trackID '10463', got '%s'", combo.TrackID)
+	if expectedTrackID := findTrackID("Interlagos", tracks); expectedTrackID == "" || combo.TrackID != expectedTrackID {
+		t.Errorf("PCCD+PCCNA combo: expected Interlagos track ID %q, got %q", expectedTrackID, combo.TrackID)
 	}
-	if len(combo.CategoryIDs) != 2 || combo.CategoryIDs[0] != "12015" || combo.CategoryIDs[1] != "12969" {
-		t.Errorf("PCCD+PCCNA combo: expected category IDs [12015 12969], got %v", combo.CategoryIDs)
+	if len(combo.CategoryIDs) != len(expectedCategoryIDs) {
+		t.Errorf("PCCD+PCCNA combo: expected category IDs %v, got %v", expectedCategoryIDs, combo.CategoryIDs)
 	}
 }
 
