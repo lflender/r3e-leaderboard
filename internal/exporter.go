@@ -111,7 +111,7 @@ func ShardKeyForName(lowerName string) string {
 // Clients can load this once, then fetch per-letter shards for results.
 type DriverIdentity struct {
 	Name    string `json:"name"`
-	PathID  string `json:"path_id"` // numeric user ID from driver.path URL
+	PathID  string `json:"path_id"` // driver identifier from driver.path URL
 	Avatar  string `json:"avatar"`
 	Country string `json:"country"`
 	Team    string `json:"team"`

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // =============================================================================
@@ -85,6 +88,88 @@ func TestAPIResponse_Unmarshal(t *testing.T) {
 		}
 	} else {
 		t.Error("Driver not found or not a map")
+	}
+}
+
+func TestAPIClient_FetchProfileAvatar(t *testing.T) {
+	const avatarPath = "user-avatars-prod/7681081/6d3dd685d25b451381f0d064e2d396aa.webp"
+	const storageURL = "https://fra1.digitaloceanspaces.com/" + avatarPath
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != userProfileAPIEndpoint {
+			t.Errorf("Request path = %q, want %q", r.URL.Path, userProfileAPIEndpoint)
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("Request method = %q, want POST", r.Method)
+		}
+		if r.Header.Get("xr") != leaderboardRequestXR {
+			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), leaderboardRequestXR)
+		}
+
+		var request struct {
+			UserID   int    `json:"userId"`
+			UserName string `json:"userName"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("Decode request: %v", err)
+		}
+		if request.UserID != 7681081 || request.UserName != "" {
+			t.Errorf("Request = %+v, want userId 7681081", request)
+		}
+
+		// Put the avatar after the website's 128-byte XOR-protected prefix.
+		responseBody := append([]byte{8, 1, 18, 124}, bytes.Repeat([]byte{'x'}, 124)...)
+		responseBody = append(responseBody, 58, byte(len(storageURL)))
+		responseBody = append(responseBody, []byte(storageURL)...)
+		for i := 0; i < len(responseBody) && i < profileResponseXORLimit; i++ {
+			responseBody[i] ^= byte(51 + i*5)
+		}
+		encoder, err := zstd.NewWriter(nil)
+		if err != nil {
+			t.Errorf("Create zstd encoder: %v", err)
+			return
+		}
+		responseBody = encoder.EncodeAll(responseBody, nil)
+		encoder.Close()
+		w.Header().Set("Content-Type", "application/javascript-binast")
+		w.Header().Set("Content-Encoding", "zstd")
+		_, _ = w.Write(responseBody)
+	}))
+	defer server.Close()
+
+	client := &APIClient{client: server.Client(), baseURL: server.URL}
+	avatar, err := client.FetchProfileAvatar(context.Background(), "7681081")
+	if err != nil {
+		t.Fatalf("FetchProfileAvatar returned error: %v", err)
+	}
+
+	expected := server.URL + "/cdn/" + avatarPath
+	if avatar != expected {
+		t.Errorf("FetchProfileAvatar = %q, want %q", avatar, expected)
+	}
+}
+
+func TestAPIClient_FetchProfileAvatar_JSONResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"avatarUrl":"https://example.com/avatar.webp"}`))
+	}))
+	defer server.Close()
+
+	client := &APIClient{client: server.Client(), baseURL: server.URL}
+	avatar, err := client.FetchProfileAvatar(context.Background(), "8246810")
+	if err != nil {
+		t.Fatalf("FetchProfileAvatar returned error: %v", err)
+	}
+	if avatar != "https://example.com/avatar.webp" {
+		t.Errorf("FetchProfileAvatar = %q, want JSON avatar URL", avatar)
+	}
+}
+
+func TestNormalizeProfileAvatarURLRejectsCorruptedPath(t *testing.T) {
+	corruptedURL := "https://game.raceroomracing.com/cdn/apex-production/DefaultAvatar:9%89%DC%D8%A4%A6"
+	if _, err := normalizeProfileAvatarURL(corruptedURL, raceRoomBaseURL); err == nil {
+		t.Fatal("normalizeProfileAvatarURL accepted a path containing corrupted UTF-8 bytes")
 	}
 }
 

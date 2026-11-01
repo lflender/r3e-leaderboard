@@ -3,6 +3,7 @@ package internal
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,16 +13,22 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 const (
-	raceRoomBaseURL        = "https://game.raceroomracing.com"
-	leaderboardAPIEndpoint = "/iapi/3c8b63448577c078752f8a21f87e4913"
-	leaderboardRequestXR   = "3dadea97"
-	leaderboardPageSize    = 100
-	leaderboardMaxPages    = 1500
+	raceRoomBaseURL         = "https://game.raceroomracing.com"
+	leaderboardAPIEndpoint  = "/iapi/3c8b63448577c078752f8a21f87e4913"
+	leaderboardRequestXR    = "3dadea97"
+	leaderboardPageSize     = 100
+	leaderboardMaxPages     = 1500
+	userProfileAPIEndpoint  = "/iapi/ba0d58c59333441cf7f51bec291f2f00"
+	profileResponseXORLimit = 128
 )
 
 type leaderboardProtocol struct {
@@ -123,6 +130,188 @@ func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID
 	}
 
 	return nil, 0, fmt.Errorf("leaderboard exceeded pagination safety limit of %d pages", leaderboardMaxPages)
+}
+
+// FetchProfileAvatar returns the avatar URL from a RaceRoom driver profile.
+// identifier may be either a legacy numeric user ID or a current profile slug.
+func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string) (string, error) {
+	if !profileSlugRegex.MatchString(identifier) {
+		return "", fmt.Errorf("invalid RaceRoom profile identifier %q", identifier)
+	}
+
+	requestBody := struct {
+		UserID   uint64 `json:"userId"`
+		UserName string `json:"userName"`
+	}{}
+	if isNumericIdentifier(identifier) {
+		userID, err := strconv.ParseUint(identifier, 10, 64)
+		if err != nil {
+			return "", fmt.Errorf("invalid numeric RaceRoom profile identifier %q: %w", identifier, err)
+		}
+		requestBody.UserID = userID
+	} else {
+		requestBody.UserName = identifier
+	}
+
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return "", fmt.Errorf("encode profile request: %w", err)
+	}
+
+	apiURL := strings.TrimRight(api.baseURL, "/") + userProfileAPIEndpoint
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("create profile request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("xr", leaderboardRequestXR)
+
+	resp, err := api.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch profile %q: %w", identifier, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("profile API returned status code %d for %q", resp.StatusCode, identifier)
+	}
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read profile response for %q: %w", identifier, err)
+	}
+	responseBody, err = decompressProfileResponse(responseBody, resp.Header.Get("Content-Encoding"))
+	if err != nil {
+		return "", fmt.Errorf("decompress profile response for %q: %w", identifier, err)
+	}
+
+	contentType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		return "", fmt.Errorf("parse profile response content type: %w", err)
+	}
+
+	var avatarURL string
+	if contentType == "application/javascript-binast" {
+		for i := 0; i < len(responseBody) && i < profileResponseXORLimit; i++ {
+			responseBody[i] ^= byte(51 + i*5)
+		}
+		avatarURL, err = decodeProfileAvatar(responseBody)
+	} else {
+		var profile struct {
+			AvatarURL string `json:"avatarUrl"`
+		}
+		if err = json.Unmarshal(responseBody, &profile); err == nil {
+			avatarURL = profile.AvatarURL
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("decode profile avatar for %q: %w", identifier, err)
+	}
+
+	return normalizeProfileAvatarURL(avatarURL, api.baseURL)
+}
+
+func decompressProfileResponse(data []byte, contentEncoding string) ([]byte, error) {
+	encodings := strings.Split(contentEncoding, ",")
+	for i := len(encodings) - 1; i >= 0; i-- {
+		encoding := strings.TrimSpace(encodings[i])
+		if encoding == "" || strings.EqualFold(encoding, "identity") {
+			continue
+		}
+		if !strings.EqualFold(encoding, "zstd") {
+			return nil, fmt.Errorf("unsupported content encoding %q", encoding)
+		}
+
+		decoder, err := zstd.NewReader(nil)
+		if err != nil {
+			return nil, fmt.Errorf("create zstd decoder: %w", err)
+		}
+		decoded, err := decoder.DecodeAll(data, nil)
+		decoder.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decode zstd response: %w", err)
+		}
+		data = decoded
+	}
+	return data, nil
+}
+
+func decodeProfileAvatar(data []byte) (string, error) {
+	for len(data) > 0 {
+		tag, size := binary.Uvarint(data)
+		if size <= 0 {
+			return "", fmt.Errorf("invalid profile response field tag")
+		}
+		data = data[size:]
+
+		fieldNumber := tag >> 3
+		wireType := tag & 7
+		if fieldNumber == 0 {
+			return "", fmt.Errorf("invalid profile response field number")
+		}
+
+		switch wireType {
+		case 0:
+			_, size = binary.Uvarint(data)
+			if size <= 0 {
+				return "", fmt.Errorf("invalid varint in profile response")
+			}
+			data = data[size:]
+		case 1:
+			if len(data) < 8 {
+				return "", fmt.Errorf("truncated fixed64 in profile response")
+			}
+			data = data[8:]
+		case 2:
+			length, lengthSize := binary.Uvarint(data)
+			if lengthSize <= 0 {
+				return "", fmt.Errorf("invalid length in profile response")
+			}
+			data = data[lengthSize:]
+			if length > uint64(len(data)) {
+				return "", fmt.Errorf("truncated length-delimited profile response field")
+			}
+			value := data[:int(length)]
+			data = data[int(length):]
+			if fieldNumber == 7 {
+				return string(value), nil
+			}
+		case 5:
+			if len(data) < 4 {
+				return "", fmt.Errorf("truncated fixed32 in profile response")
+			}
+			data = data[4:]
+		default:
+			return "", fmt.Errorf("unsupported profile response wire type %d", wireType)
+		}
+	}
+	return "", nil
+}
+
+func normalizeProfileAvatarURL(avatarURL, baseURL string) (string, error) {
+	if avatarURL == "" {
+		return "", nil
+	}
+
+	parsed, err := url.Parse(avatarURL)
+	if err != nil {
+		return "", fmt.Errorf("parse avatar URL: %w", err)
+	}
+	if !utf8.ValidString(parsed.Path) {
+		return "", fmt.Errorf("avatar URL path is not valid UTF-8")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "digitaloceanspaces.com" ||
+		strings.HasSuffix(host, ".digitaloceanspaces.com") ||
+		strings.Contains(host, "your-objectstorage") {
+		objectPath := strings.TrimLeft(parsed.EscapedPath(), "/")
+		if objectPath == "" {
+			return "", fmt.Errorf("avatar storage URL has no object path")
+		}
+		return strings.TrimRight(baseURL, "/") + "/cdn/" + objectPath, nil
+	}
+	return avatarURL, nil
 }
 
 func (api *APIClient) fetchLeaderboardPage(ctx context.Context, trackID, classID string, start int) ([]map[string]interface{}, error) {
