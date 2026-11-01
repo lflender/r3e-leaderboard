@@ -148,6 +148,45 @@ func TestScheduler_PastTimeSchedulesTomorrow(t *testing.T) {
 		scheduler.refreshHour)
 }
 
+func TestNextAutomaticRefreshTimeRunsEverySixHours(t *testing.T) {
+	location := time.FixedZone("test", 0)
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{
+			name: "before first run",
+			now:  time.Date(2026, time.November, 1, 1, 0, 0, 0, location),
+			want: time.Date(2026, time.November, 1, 2, 0, 0, 0, location),
+		},
+		{
+			name: "after first run",
+			now:  time.Date(2026, time.November, 1, 3, 0, 0, 0, location),
+			want: time.Date(2026, time.November, 1, 8, 0, 0, 0, location),
+		},
+		{
+			name: "after fourth run",
+			now:  time.Date(2026, time.November, 1, 23, 0, 0, 0, location),
+			want: time.Date(2026, time.November, 2, 2, 0, 0, 0, location),
+		},
+		{
+			name: "exactly at run time",
+			now:  time.Date(2026, time.November, 1, 14, 0, 0, 0, location),
+			want: time.Date(2026, time.November, 1, 20, 0, 0, 0, location),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := nextAutomaticRefreshTime(test.now, 2, 0)
+			if !got.Equal(test.want) {
+				t.Errorf("nextAutomaticRefreshTime() = %s, want %s", got, test.want)
+			}
+		})
+	}
+}
+
 // =============================================================================
 // SCHEDULER CALLBACK TESTS
 // =============================================================================

@@ -30,8 +30,9 @@ type DiscordConfig struct {
 
 // DataConfig holds data fetching configuration
 type DataConfig struct {
-	MultiplayerPositionLimit int `json:"multiplayer_position_limit"` // Maximum number of multiplayer positions to track
-	APIThrottleMs            int `json:"api_throttle_ms"`            // Delay between API calls in milliseconds (default 20)
+	MultiplayerPositionLimit  int `json:"multiplayer_position_limit"`   // Maximum number of multiplayer positions to track
+	APIThrottleMs             int `json:"api_throttle_ms"`              // Delay between API calls in milliseconds (default 20)
+	AvatarCacheFreshnessHours int `json:"avatar_cache_freshness_hours"` // Hours before cached avatar URLs are refreshed (default 24)
 }
 
 // GetDefaultConfig returns default configuration
@@ -56,8 +57,9 @@ func GetDefaultConfig() Config {
 			Enabled:          discordToken != "",    // Enable only if token is set
 		},
 		Data: DataConfig{
-			MultiplayerPositionLimit: 5000, // Track top 5000 multiplayer positions
-			APIThrottleMs:            20,   // 20ms between API calls
+			MultiplayerPositionLimit:  5000, // Track top 5000 multiplayer positions
+			APIThrottleMs:             20,   // 20ms between API calls
+			AvatarCacheFreshnessHours: 24,   // Refresh avatar URLs every 24 hours
 		},
 	}
 }

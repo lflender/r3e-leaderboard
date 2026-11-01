@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const automaticRefreshInterval = 6 * time.Hour
+
 // Scheduler handles automatic data refresh at scheduled times
 type Scheduler struct {
 	refreshHour   int // Hour of day (0-23) to refresh
@@ -46,14 +48,8 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 	}()
 
 	for {
-		// Calculate time until next refresh time
 		now := time.Now()
-		nextRefresh := time.Date(now.Year(), now.Month(), now.Day(), s.refreshHour, s.refreshMinute, 0, 0, now.Location())
-
-		// If it's already past refresh time today, schedule for tomorrow
-		if now.After(nextRefresh) {
-			nextRefresh = nextRefresh.Add(24 * time.Hour)
-		}
+		nextRefresh := nextAutomaticRefreshTime(now, s.refreshHour, s.refreshMinute)
 
 		timeUntilRefresh := time.Until(nextRefresh)
 		log.Printf("📅 Next automatic refresh scheduled in %v (at %s)", timeUntilRefresh.Round(time.Minute), nextRefresh.Format("2006-01-02 15:04"))
@@ -64,7 +60,7 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 		// Wait until refresh time or stop signal
 		select {
 		case <-timer.C:
-			log.Printf("🕓 Automatic refresh triggered at %02d:%02d", s.refreshHour, s.refreshMinute)
+			log.Printf("🕓 Automatic cache refresh triggered at %s", time.Now().Format("15:04"))
 			refreshCallback()
 		case <-s.stopChan:
 			timer.Stop()
@@ -72,4 +68,23 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 			return
 		}
 	}
+}
+
+func nextAutomaticRefreshTime(now time.Time, refreshHour, refreshMinute int) time.Time {
+	nextRefresh := time.Date(
+		now.Year(),
+		now.Month(),
+		now.Day(),
+		refreshHour,
+		refreshMinute,
+		0,
+		0,
+		now.Location(),
+	)
+	if !nextRefresh.After(now) {
+		elapsed := now.Sub(nextRefresh)
+		intervalsUntilRefresh := elapsed/automaticRefreshInterval + 1
+		nextRefresh = nextRefresh.Add(intervalsUntilRefresh * automaticRefreshInterval)
+	}
+	return nextRefresh
 }

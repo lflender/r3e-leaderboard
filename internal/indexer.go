@@ -802,6 +802,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		FailedFetchCount:         existingStatus.FailedFetchCount,
 		FailedFetches:            existingStatus.FailedFetches,
 		RetriedFetchCount:        existingStatus.RetriedFetchCount,
+		LastAvatarRefresh:        existingStatus.LastAvatarRefresh,
 		DailySprintRacesCount:    existingStatus.DailySprintRacesCount,
 		LastDailyRaceRefresh:     dailyRaceTS,
 	}

@@ -10,7 +10,7 @@ Disclaimer: all code was written by AI.
 - 🔄 Progressive data fetching with full pagination
 - 🔍 Indexed search data exported to JSON (< 1ms lookup capability)
 - 💾 All data exported to JSON files for front-end consumption
-- 📅 Automatic nightly refresh
+- 📅 Automatic full cache refresh every 6 hours (4 times daily)
 - 🗂️ Smart cache management (24h validity)
 
 ## Data Coverage:
@@ -215,7 +215,7 @@ const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
 5. Updates JSON files as new data arrives
 
 ### Automatic Refresh
-- Runs daily at 4:00 AM (configurable)
+- Runs every 6 hours, starting at `refresh_hour`/`refresh_minute` (default: 02:00, 08:00, 14:00, 20:00)
 - Performs a full-force refresh of ALL track/class combinations (ignores cache age)
 - Writes fresh data to a temporary cache and promotes atomically at the end (prevents partial/dirty states)
 - Rebuilds the complete searchable index every `indexing_minutes` during the refresh window (default 30)
@@ -405,9 +405,18 @@ Edit `internal/config.go` or create `config.json` to customize:
   "schedule": {
     "refresh_hour": 4,
     "indexing_minutes": 30
+  },
+  "data": {
+    "avatar_cache_freshness_hours": 24
   }
 }
 ```
+
+Avatar profile URLs are refreshed in the background when their last full refresh
+is older than `avatar_cache_freshness_hours` (default: 24 hours). The last
+completed refresh time is stored in `cache/status.json` as `last_avatar_refresh`.
+Missing or corrupted avatar URLs are still eligible for fetching between full
+refreshes.
 
 ## 🔧 Troubleshooting
 
@@ -448,7 +457,7 @@ echo "1778" >> cache/refresh_now       # All classes for track 1778
 The application checks for this file every 60 seconds. When detected:
 - Starts immediate refresh (full or targeted based on file contents)
 - Deletes the trigger file
-- Performs the refresh using the same atomic cache promotion as nightly refresh
+- Performs the refresh using the same atomic cache promotion as scheduled full refreshes
 - For track-class couples (format: `trackID-classID`), only refreshes that specific combination
 - For track IDs alone, refreshes all classes for that track
 
