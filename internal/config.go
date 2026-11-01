@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const defaultFullRefreshIntervalHours = 6
+
 // Config holds application configuration
 type Config struct {
 	Schedule ScheduleConfig `json:"schedule"`
@@ -16,6 +18,7 @@ type Config struct {
 type ScheduleConfig struct {
 	RefreshHour                  int `json:"refresh_hour"`
 	RefreshMinute                int `json:"refresh_minute"`
+	RefreshIntervalHours         int `json:"refresh_interval_hours"`
 	IndexingMinutes              int `json:"indexing_minutes"`
 	DailyRaceRefreshIntervalMins int `json:"daily_race_refresh_interval_mins"` // How often to refresh Daily Race combinations (minutes)
 }
@@ -30,8 +33,9 @@ type DiscordConfig struct {
 
 // DataConfig holds data fetching configuration
 type DataConfig struct {
-	MultiplayerPositionLimit int `json:"multiplayer_position_limit"` // Maximum number of multiplayer positions to track
-	APIThrottleMs            int `json:"api_throttle_ms"`            // Delay between API calls in milliseconds (default 20)
+	MultiplayerPositionLimit  int `json:"multiplayer_position_limit"`   // Maximum number of multiplayer positions to track
+	APIThrottleMs             int `json:"api_throttle_ms"`              // Delay between API calls in milliseconds (default 20)
+	AvatarCacheFreshnessHours int `json:"avatar_cache_freshness_hours"` // Hours before cached avatar URLs are refreshed (default 24)
 }
 
 // GetDefaultConfig returns default configuration
@@ -44,8 +48,9 @@ func GetDefaultConfig() Config {
 
 	return Config{
 		Schedule: ScheduleConfig{
-			RefreshHour:                  2,  // 2 AM
-			RefreshMinute:                0,  // At the top of the hour
+			RefreshHour:                  2, // 2 AM
+			RefreshMinute:                0, // At the top of the hour
+			RefreshIntervalHours:         6,
 			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},
@@ -56,8 +61,9 @@ func GetDefaultConfig() Config {
 			Enabled:          discordToken != "",    // Enable only if token is set
 		},
 		Data: DataConfig{
-			MultiplayerPositionLimit: 5000, // Track top 5000 multiplayer positions
-			APIThrottleMs:            20,   // 20ms between API calls
+			MultiplayerPositionLimit:  5000, // Track top 5000 multiplayer positions
+			APIThrottleMs:             20,   // 20ms between API calls
+			AvatarCacheFreshnessHours: 24,   // Refresh avatar URLs every 24 hours
 		},
 	}
 }

@@ -2149,6 +2149,7 @@ func TestExportStatusData_Overwrite(t *testing.T) {
 	if err := ExportStatusData(StatusData{TotalDrivers: 1}); err != nil {
 		t.Fatalf("first ExportStatusData failed: %v", err)
 	}
+
 	// Overwrite
 	if err := ExportStatusData(StatusData{TotalDrivers: 2}); err != nil {
 		t.Fatalf("second ExportStatusData failed: %v", err)
@@ -2157,5 +2158,39 @@ func TestExportStatusData_Overwrite(t *testing.T) {
 	readBack := ReadStatusData()
 	if readBack.TotalDrivers != 2 {
 		t.Errorf("TotalDrivers = %d after overwrite, expected 2", readBack.TotalDrivers)
+	}
+}
+
+func TestExportStatusData_PreservesLastAvatarRefresh(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	lastAvatarRefresh := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
+	if err := ExportStatusData(StatusData{LastAvatarRefresh: lastAvatarRefresh}); err != nil {
+		t.Fatalf("Export initial status: %v", err)
+	}
+	if err := ExportStatusData(StatusData{TotalDrivers: 10}); err != nil {
+		t.Fatalf("Export status without avatar timestamp: %v", err)
+	}
+
+	status := ReadStatusData()
+	if !status.LastAvatarRefresh.Equal(lastAvatarRefresh) {
+		t.Errorf("LastAvatarRefresh = %v, want %v", status.LastAvatarRefresh, lastAvatarRefresh)
+	}
+	if status.TotalDrivers != 10 {
+		t.Errorf("TotalDrivers = %d, want 10", status.TotalDrivers)
+	}
+}
+
+func TestUpdateLastAvatarRefresh(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	lastAvatarRefresh := time.Date(2026, time.November, 1, 12, 0, 0, 0, time.UTC)
+	if err := UpdateLastAvatarRefresh(lastAvatarRefresh); err != nil {
+		t.Fatalf("UpdateLastAvatarRefresh returned error: %v", err)
+	}
+	if got := ReadStatusData().LastAvatarRefresh; !got.Equal(lastAvatarRefresh) {
+		t.Errorf("LastAvatarRefresh = %v, want %v", got, lastAvatarRefresh)
 	}
 }

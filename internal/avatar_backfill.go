@@ -25,6 +25,7 @@ type avatarBackfillJob struct {
 	pathID  string
 	nameKey string
 	letter  string
+	refresh bool
 }
 
 type avatarUpdate struct {
@@ -33,9 +34,10 @@ type avatarUpdate struct {
 }
 
 type avatarBackfillManager struct {
-	mu      sync.Mutex
-	started bool
-	wake    chan struct{}
+	mu        sync.Mutex
+	started   bool
+	wake      chan struct{}
+	freshness time.Duration
 }
 
 var driverAvatarBackfill = avatarBackfillManager{wake: make(chan struct{}, 1)}
@@ -43,13 +45,14 @@ var driverAvatarBackfill = avatarBackfillManager{wake: make(chan struct{}, 1)}
 // StartDriverAvatarBackfill starts the non-blocking profile URL backfill.
 // Successful URLs are written to the metadata shards, so unfinished work is
 // naturally rediscovered after a restart.
-func StartDriverAvatarBackfill(ctx context.Context) {
+func StartDriverAvatarBackfill(ctx context.Context, freshness time.Duration) {
 	driverAvatarBackfill.mu.Lock()
 	if driverAvatarBackfill.started {
 		driverAvatarBackfill.mu.Unlock()
 		driverAvatarBackfill.schedule()
 		return
 	}
+	driverAvatarBackfill.freshness = freshness
 	driverAvatarBackfill.started = true
 	driverAvatarBackfill.mu.Unlock()
 
@@ -81,11 +84,22 @@ func (manager *avatarBackfillManager) run(ctx context.Context) {
 	defer client.Close()
 
 	attempted := make(map[string]struct{})
+	fullRefreshInProgress := false
 	ticker := time.NewTicker(avatarBackfillScanInterval)
 	defer ticker.Stop()
 
 	for {
-		jobs, err := findMissingDriverAvatarJobs()
+		now := time.Now()
+		lastRefresh := ReadStatusData().LastAvatarRefresh
+		refreshAll := avatarRefreshDue(lastRefresh, now, manager.freshness)
+		if refreshAll && !fullRefreshInProgress {
+			clear(attempted)
+			fullRefreshInProgress = true
+		} else if !refreshAll {
+			fullRefreshInProgress = false
+		}
+
+		jobs, err := findDriverAvatarJobs(refreshAll)
 		if err != nil {
 			log.Printf("⚠️ Avatar URL backfill could not scan metadata: %v", err)
 		} else {
@@ -98,11 +112,26 @@ func (manager *avatarBackfillManager) run(ctx context.Context) {
 			jobs = pending
 		}
 		if err == nil && len(jobs) > 0 {
-			log.Printf("🖼️ Avatar URL backfill queued %d driver profiles; only profile metadata URLs are requested, not image files. ETA will be reported after the first %d profiles.",
-				len(jobs), avatarBackfillLogInterval)
+			refreshType := "missing avatar URLs"
+			if refreshAll {
+				refreshType = "profiles for a full freshness refresh"
+			}
+			log.Printf("🖼️ Avatar URL backfill queued %d %s; only profile metadata URLs are requested, not image files. ETA will be reported after the first %d profiles.",
+				len(jobs), refreshType, avatarBackfillLogInterval)
 			runAvatarBackfillJobs(ctx, jobs, client, apiThrottle, attempted, saveDriverAvatarUpdates)
+			if refreshAll && allAvatarJobsAttempted(jobs, attempted) {
+				if err := UpdateLastAvatarRefresh(time.Now()); err != nil {
+					log.Printf("⚠️ Failed to persist avatar refresh timestamp: %v", err)
+				}
+			}
 		} else if err == nil {
-			log.Println("🖼️ Avatar URL backfill scan complete: no unattempted missing avatar URLs")
+			if refreshAll && allAvatarJobsAttempted(jobs, attempted) {
+				if err := UpdateLastAvatarRefresh(time.Now()); err != nil {
+					log.Printf("⚠️ Failed to persist avatar refresh timestamp: %v", err)
+				}
+			} else {
+				log.Println("🖼️ Avatar URL backfill scan complete: no missing avatar URLs need fetching")
+			}
 		}
 
 		select {
@@ -116,6 +145,10 @@ func (manager *avatarBackfillManager) run(ctx context.Context) {
 }
 
 func findMissingDriverAvatarJobs() ([]avatarBackfillJob, error) {
+	return findDriverAvatarJobs(false)
+}
+
+func findDriverAvatarJobs(includeFresh bool) ([]avatarBackfillJob, error) {
 	names, err := LoadShardedNamesIndex()
 	if err != nil {
 		return nil, fmt.Errorf("load driver metadata: %w", err)
@@ -125,7 +158,9 @@ func findMissingDriverAvatarJobs() ([]avatarBackfillJob, error) {
 	seenPathIDs := make(map[string]struct{})
 	for nameKey, identities := range names {
 		for _, identity := range identities {
-			if isStoredAvatarURLValid(identity.Avatar) || identity.PathID == "" || !profileSlugRegex.MatchString(identity.PathID) {
+			if (!includeFresh && isStoredAvatarURLValid(identity.Avatar)) ||
+				identity.PathID == "" ||
+				!profileSlugRegex.MatchString(identity.PathID) {
 				continue
 			}
 			if _, exists := seenPathIDs[identity.PathID]; exists {
@@ -136,6 +171,7 @@ func findMissingDriverAvatarJobs() ([]avatarBackfillJob, error) {
 				pathID:  identity.PathID,
 				nameKey: nameKey,
 				letter:  ShardKeyForName(nameKey),
+				refresh: includeFresh,
 			})
 		}
 	}
@@ -149,6 +185,19 @@ func findMissingDriverAvatarJobs() ([]avatarBackfillJob, error) {
 		return jobs[i].letter < jobs[j].letter
 	})
 	return jobs, nil
+}
+
+func avatarRefreshDue(lastRefresh, now time.Time, freshness time.Duration) bool {
+	return lastRefresh.IsZero() || freshness <= 0 || !now.Before(lastRefresh.Add(freshness))
+}
+
+func allAvatarJobsAttempted(jobs []avatarBackfillJob, attempted map[string]struct{}) bool {
+	for _, job := range jobs {
+		if _, exists := attempted[job.pathID]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func runAvatarBackfillJobs(
@@ -271,15 +320,15 @@ func saveDriverAvatarUpdates(updates []avatarUpdate) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
 
-	updatesByLetter := make(map[string]map[string]map[string]string)
+	updatesByLetter := make(map[string]map[string]map[string]avatarUpdate)
 	for _, update := range updates {
 		if updatesByLetter[update.letter] == nil {
-			updatesByLetter[update.letter] = make(map[string]map[string]string)
+			updatesByLetter[update.letter] = make(map[string]map[string]avatarUpdate)
 		}
 		if updatesByLetter[update.letter][update.nameKey] == nil {
-			updatesByLetter[update.letter][update.nameKey] = make(map[string]string)
+			updatesByLetter[update.letter][update.nameKey] = make(map[string]avatarUpdate)
 		}
-		updatesByLetter[update.letter][update.nameKey][update.pathID] = update.avatarURL
+		updatesByLetter[update.letter][update.nameKey][update.pathID] = update
 	}
 
 	var failures []string
@@ -298,8 +347,10 @@ func saveDriverAvatarUpdates(updates []avatarUpdate) error {
 				continue
 			}
 			for i := range identities {
-				if avatarURL, exists := driverUpdates[identities[i].PathID]; exists && !isStoredAvatarURLValid(identities[i].Avatar) {
-					identities[i].Avatar = avatarURL
+				if update, exists := driverUpdates[identities[i].PathID]; exists &&
+					(update.refresh || !isStoredAvatarURLValid(identities[i].Avatar)) &&
+					identities[i].Avatar != update.avatarURL {
+					identities[i].Avatar = update.avatarURL
 					changed = true
 				}
 			}

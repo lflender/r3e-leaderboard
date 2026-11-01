@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -26,6 +27,8 @@ const (
 	ShardedShardsDir  = "cache/index/entries"
 	TeamsIndexFile    = "cache/index/teams.json.gz"
 )
+
+var statusDataMu sync.Mutex
 
 // FailedFetch represents a failed fetch attempt
 type FailedFetch struct {
@@ -53,6 +56,7 @@ type StatusData struct {
 	FailedFetchCount         int           `json:"failed_fetch_count"`
 	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
+	LastAvatarRefresh        time.Time     `json:"last_avatar_refresh"`
 	// Discord Daily Sprint Races data
 	DailySprintRacesCount int `json:"daily_sprint_races_count"`
 	// Teams index count
@@ -812,6 +816,17 @@ func readGzipJSON[T any](path string) (T, error) {
 // ExportStatusData exports the status information to a JSON file on disk
 // Uses atomic write (temp file + rename) with fallback to handle file locking
 func ExportStatusData(status StatusData) error {
+	statusDataMu.Lock()
+	defer statusDataMu.Unlock()
+
+	existingStatus := ReadStatusData()
+	if existingStatus.LastAvatarRefresh.After(status.LastAvatarRefresh) {
+		status.LastAvatarRefresh = existingStatus.LastAvatarRefresh
+	}
+	return writeStatusData(status)
+}
+
+func writeStatusData(status StatusData) error {
 	// Convert to JSON
 	jsonData, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
@@ -854,6 +869,19 @@ func ExportStatusData(status StatusData) error {
 	return nil
 }
 
+// UpdateLastAvatarRefresh records when all known avatar profiles were refreshed.
+func UpdateLastAvatarRefresh(timestamp time.Time) error {
+	statusDataMu.Lock()
+	defer statusDataMu.Unlock()
+
+	status := ReadStatusData()
+	if status.LastAvatarRefresh.After(timestamp) {
+		timestamp = status.LastAvatarRefresh
+	}
+	status.LastAvatarRefresh = timestamp
+	return writeStatusData(status)
+}
+
 // UpdateStatusWithIndexMetrics updates the status file with index statistics
 // This is exported so indexer.go can update status after building the index
 func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration, teamCount int) error {
@@ -892,6 +920,7 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		FailedFetchCount:      existingStatus.FailedFetchCount,
 		FailedFetches:         existingStatus.FailedFetches,
 		RetriedFetchCount:     existingStatus.RetriedFetchCount,
+		LastAvatarRefresh:     existingStatus.LastAvatarRefresh,
 		DailySprintRacesCount: existingStatus.DailySprintRacesCount,
 		LastDailyRaceRefresh:  existingStatus.LastDailyRaceRefresh,
 	}

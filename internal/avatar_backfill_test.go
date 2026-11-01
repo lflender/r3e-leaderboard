@@ -193,6 +193,40 @@ func TestFindMissingDriverAvatarJobs(t *testing.T) {
 	if jobs[1].pathID != "7681081" || jobs[1].letter != "l" {
 		t.Errorf("Missing-avatar job = %+v, want Ludo Flender", jobs[1])
 	}
+
+	allJobs, err := findDriverAvatarJobs(true)
+	if err != nil {
+		t.Fatalf("findDriverAvatarJobs(true) returned error: %v", err)
+	}
+	if len(allJobs) != 3 || allJobs[0].pathID != "8113325" ||
+		allJobs[1].pathID != "8246810" || allJobs[2].pathID != "7681081" {
+		t.Errorf("Full refresh jobs = %+v, want all three unique profiles in sorted order", allJobs)
+	}
+}
+
+func TestAvatarRefreshDue(t *testing.T) {
+	now := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
+	freshness := 24 * time.Hour
+
+	tests := []struct {
+		name        string
+		lastRefresh time.Time
+		freshness   time.Duration
+		want        bool
+	}{
+		{name: "never refreshed", want: true},
+		{name: "within freshness period", lastRefresh: now.Add(-freshness + time.Second), freshness: freshness},
+		{name: "freshness period elapsed", lastRefresh: now.Add(-freshness), freshness: freshness, want: true},
+		{name: "zero freshness", lastRefresh: now, freshness: 0, want: true},
+		{name: "negative freshness", lastRefresh: now, freshness: -time.Second, want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := avatarRefreshDue(test.lastRefresh, now, test.freshness); got != test.want {
+				t.Errorf("avatarRefreshDue() = %t, want %t", got, test.want)
+			}
+		})
+	}
 }
 
 func TestSaveDriverAvatarUpdates(t *testing.T) {
@@ -201,6 +235,7 @@ func TestSaveDriverAvatarUpdates(t *testing.T) {
 		"ludo flender": {
 			{Name: "Ludo Flender", PathID: "7681081"},
 			{Name: "Ludo Flender", PathID: "7681082", Avatar: "https://example.com/existing.webp"},
+			{Name: "Ludo Flender", PathID: "7681083", Avatar: "https://example.com/stale.webp"},
 		},
 	}
 	if _, err := writeGzipJSON(filepath.Join(ShardedIndexDir, "l.json.gz"), names); err != nil {
@@ -223,6 +258,14 @@ func TestSaveDriverAvatarUpdates(t *testing.T) {
 		avatarBackfillJob: avatarBackfillJob{pathID: "7681082", nameKey: "ludo flender", letter: "l"},
 		avatarURL:         "https://example.com/should-not-overwrite.webp",
 	}, {
+		avatarBackfillJob: avatarBackfillJob{
+			pathID:  "7681083",
+			nameKey: "ludo flender",
+			letter:  "l",
+			refresh: true,
+		},
+		avatarURL: "https://example.com/refreshed.webp",
+	}, {
 		avatarBackfillJob: avatarBackfillJob{pathID: "8113325", nameKey: "aaron halbert-boucle", letter: "a"},
 		avatarURL:         wantDefaultAvatarURL,
 	}})
@@ -240,6 +283,9 @@ func TestSaveDriverAvatarUpdates(t *testing.T) {
 	}
 	if identities[1].Avatar != "https://example.com/existing.webp" {
 		t.Errorf("Existing avatar was overwritten: %q", identities[1].Avatar)
+	}
+	if identities[2].Avatar != "https://example.com/refreshed.webp" {
+		t.Errorf("Stale avatar was not refreshed: %q", identities[2].Avatar)
 	}
 	savedNames, err = LoadLetterNames("a")
 	if err != nil {

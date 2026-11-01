@@ -220,21 +220,21 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 	}()
 }
 
-// StartScheduledRefresh starts the automatic nightly refresh using the same
+// StartScheduledRefresh starts automatic cache refreshes every six hours using the same
 // mechanisms as the startup load & fetch phase, but forces a full refresh
 // of all combinations (ignoring cache age and content) and runs periodic
 // indexing during the fetch phase.
-func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, indexingIntervalMinutes int) {
-	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute)
+func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, refreshIntervalHours, indexingIntervalMinutes int) {
+	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute, refreshIntervalHours)
 	o.scheduler.Start(func() {
 		o.runScheduledRefresh(indexingIntervalMinutes)
 	})
 }
 
 func (o *Orchestrator) runScheduledRefresh(indexingIntervalMinutes int) {
-	// If a fetch is already in progress, cancel it and start the daily refresh instead.
+	// If a fetch is already in progress, cancel it and start the scheduled refresh instead.
 	if o.fetchInProgress {
-		log.Println("⏹️ Cancelling in-progress fetch to start scheduled daily refresh")
+		log.Println("⏹️ Cancelling in-progress fetch to start scheduled cache refresh")
 		if o.fetchCancel != nil {
 			o.fetchCancel()
 		}
@@ -486,6 +486,7 @@ func (o *Orchestrator) exportStatus() {
 		FailedFetchCount:         existingStatus.FailedFetchCount,  // Preserved from loader
 		FailedFetches:            existingStatus.FailedFetches,     // Preserved from loader
 		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
+		LastAvatarRefresh:        existingStatus.LastAvatarRefresh,
 		// Discord data
 		DailySprintRacesCount: discordCount,
 		// Daily Race refresh tracking (use orchestrator's current value)

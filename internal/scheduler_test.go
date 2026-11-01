@@ -11,7 +11,7 @@ import (
 // =============================================================================
 
 func TestNewScheduler(t *testing.T) {
-	scheduler := NewScheduler(14, 30)
+	scheduler := NewScheduler(14, 30, defaultFullRefreshIntervalHours)
 
 	if scheduler == nil {
 		t.Fatal("NewScheduler returned nil")
@@ -23,6 +23,9 @@ func TestNewScheduler(t *testing.T) {
 
 	if scheduler.refreshMinute != 30 {
 		t.Errorf("refreshMinute = %d, expected 30", scheduler.refreshMinute)
+	}
+	if scheduler.refreshInterval != 6*time.Hour {
+		t.Errorf("refreshInterval = %s, expected 6h", scheduler.refreshInterval)
 	}
 
 	if scheduler.stopped {
@@ -47,7 +50,7 @@ func TestNewScheduler_EdgeCases(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.desc, func(t *testing.T) {
-			scheduler := NewScheduler(test.hour, test.minute)
+			scheduler := NewScheduler(test.hour, test.minute, defaultFullRefreshIntervalHours)
 			if scheduler.refreshHour != test.hour || scheduler.refreshMinute != test.minute {
 				t.Errorf("Expected %d:%02d, got %d:%02d",
 					test.hour, test.minute, scheduler.refreshHour, scheduler.refreshMinute)
@@ -61,7 +64,7 @@ func TestNewScheduler_EdgeCases(t *testing.T) {
 // =============================================================================
 
 func TestScheduler_StartAndStop(t *testing.T) {
-	scheduler := NewScheduler(3, 0) // 3:00 AM
+	scheduler := NewScheduler(3, 0, defaultFullRefreshIntervalHours) // 3:00 AM
 
 	callCount := 0
 	callback := func() {
@@ -85,7 +88,7 @@ func TestScheduler_StartAndStop(t *testing.T) {
 }
 
 func TestScheduler_StopMultipleTimes(t *testing.T) {
-	scheduler := NewScheduler(3, 0)
+	scheduler := NewScheduler(3, 0, defaultFullRefreshIntervalHours)
 
 	scheduler.Start(func() {})
 	time.Sleep(10 * time.Millisecond)
@@ -102,7 +105,7 @@ func TestScheduler_StopMultipleTimes(t *testing.T) {
 }
 
 func TestScheduler_StopWithoutStart(t *testing.T) {
-	scheduler := NewScheduler(3, 0)
+	scheduler := NewScheduler(3, 0, defaultFullRefreshIntervalHours)
 
 	// Stop without starting should not panic
 	scheduler.Stop()
@@ -122,7 +125,7 @@ func TestScheduler_CalculatesNextRefresh(t *testing.T) {
 	futureHour := (now.Hour() + 1) % 24
 	futureMinute := now.Minute()
 
-	scheduler := NewScheduler(futureHour, futureMinute)
+	scheduler := NewScheduler(futureHour, futureMinute, defaultFullRefreshIntervalHours)
 
 	// Calculate what the next refresh should be
 	expected := time.Date(now.Year(), now.Month(), now.Day(), futureHour, futureMinute, 0, 0, now.Location())
@@ -141,11 +144,61 @@ func TestScheduler_PastTimeSchedulesTomorrow(t *testing.T) {
 	// Use an hour that's definitely in the past (1 hour ago)
 	pastHour := (now.Hour() - 1 + 24) % 24
 
-	scheduler := NewScheduler(pastHour, 0)
+	scheduler := NewScheduler(pastHour, 0, defaultFullRefreshIntervalHours)
 
 	// The logic in runScheduler should detect this is past and add 24 hours
 	t.Logf("Scheduler set for %02d:00 (which is in the past), should schedule for tomorrow",
 		scheduler.refreshHour)
+}
+
+func TestNextAutomaticRefreshTimeUsesConfiguredInterval(t *testing.T) {
+	location := time.FixedZone("test", 0)
+	tests := []struct {
+		name     string
+		now      time.Time
+		interval time.Duration
+		want     time.Time
+	}{
+		{
+			name:     "before first run",
+			now:      time.Date(2026, time.November, 1, 1, 0, 0, 0, location),
+			interval: 6 * time.Hour,
+			want:     time.Date(2026, time.November, 1, 2, 0, 0, 0, location),
+		},
+		{
+			name:     "after first run",
+			now:      time.Date(2026, time.November, 1, 3, 0, 0, 0, location),
+			interval: 6 * time.Hour,
+			want:     time.Date(2026, time.November, 1, 8, 0, 0, 0, location),
+		},
+		{
+			name:     "after fourth run",
+			now:      time.Date(2026, time.November, 1, 23, 0, 0, 0, location),
+			interval: 6 * time.Hour,
+			want:     time.Date(2026, time.November, 2, 2, 0, 0, 0, location),
+		},
+		{
+			name:     "exactly at run time",
+			now:      time.Date(2026, time.November, 1, 14, 0, 0, 0, location),
+			interval: 6 * time.Hour,
+			want:     time.Date(2026, time.November, 1, 20, 0, 0, 0, location),
+		},
+		{
+			name:     "custom three hour interval",
+			now:      time.Date(2026, time.November, 1, 3, 0, 0, 0, location),
+			interval: 3 * time.Hour,
+			want:     time.Date(2026, time.November, 1, 5, 0, 0, 0, location),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := nextAutomaticRefreshTime(test.now, 2, 0, test.interval)
+			if !got.Equal(test.want) {
+				t.Errorf("nextAutomaticRefreshTime() = %s, want %s", got, test.want)
+			}
+		})
+	}
 }
 
 // =============================================================================
@@ -168,7 +221,7 @@ func TestScheduler_CallbackInvoked(t *testing.T) {
 	// We can't easily test actual time-based triggering without mocking time
 	// But we can verify the scheduler structure and callback setup
 
-	scheduler := NewScheduler(12, 0)
+	scheduler := NewScheduler(12, 0, defaultFullRefreshIntervalHours)
 	if scheduler.stopChan == nil {
 		t.Error("Scheduler should have a valid stop channel")
 	}
@@ -185,7 +238,7 @@ func TestScheduler_CallbackInvoked(t *testing.T) {
 // =============================================================================
 
 func TestScheduler_InitialState(t *testing.T) {
-	scheduler := NewScheduler(15, 45)
+	scheduler := NewScheduler(15, 45, defaultFullRefreshIntervalHours)
 
 	if scheduler.stopped {
 		t.Error("New scheduler should not start in stopped state")
@@ -201,7 +254,7 @@ func TestScheduler_InitialState(t *testing.T) {
 }
 
 func TestScheduler_ConcurrentAccess(t *testing.T) {
-	scheduler := NewScheduler(10, 30)
+	scheduler := NewScheduler(10, 30, defaultFullRefreshIntervalHours)
 	scheduler.Start(func() {})
 
 	// Multiple goroutines stopping at once should not panic

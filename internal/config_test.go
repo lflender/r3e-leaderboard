@@ -82,6 +82,7 @@ func TestConfig_TokenFileTrimmed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get current directory: %v", err)
 	}
+
 	defer os.Chdir(origDir)
 
 	// Change to temp directory
@@ -99,5 +100,19 @@ func TestConfig_TokenFileTrimmed(t *testing.T) {
 
 	if config.Discord.BotToken != "my_token_with_spaces" {
 		t.Errorf("BotToken not trimmed correctly, got %q", config.Discord.BotToken)
+	}
+}
+
+func TestConfig_AvatarCacheFreshnessDefaultsTo24Hours(t *testing.T) {
+	config := GetDefaultConfig()
+	if config.Data.AvatarCacheFreshnessHours != 24 {
+		t.Errorf("AvatarCacheFreshnessHours = %d, want 24", config.Data.AvatarCacheFreshnessHours)
+	}
+}
+
+func TestConfig_FullRefreshIntervalDefaultsToSixHours(t *testing.T) {
+	config := GetDefaultConfig()
+	if config.Schedule.RefreshIntervalHours != 6 {
+		t.Errorf("RefreshIntervalHours = %d, want 6", config.Schedule.RefreshIntervalHours)
 	}
 }

@@ -283,7 +283,7 @@ func TestCancelFetch_NilSafe(t *testing.T) {
 // TestCleanup verifies scheduler is stopped, context is cancelled, and tracks freed.
 func TestCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	scheduler := internal.NewScheduler(3, 0)
+	scheduler := internal.NewScheduler(3, 0, 6)
 	scheduler.Start(func() {})
 
 	o := &Orchestrator{
