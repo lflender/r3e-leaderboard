@@ -93,7 +93,12 @@ func main() {
 		appContext,
 		time.Duration(config.Data.AvatarCacheFreshnessHours)*time.Hour,
 	)
-	orchestrator.StartScheduledRefresh(config.Schedule.RefreshHour, config.Schedule.RefreshMinute, config.Schedule.IndexingMinutes)
+	orchestrator.StartScheduledRefresh(
+		config.Schedule.RefreshHour,
+		config.Schedule.RefreshMinute,
+		config.Schedule.RefreshIntervalHours,
+		config.Schedule.IndexingMinutes,
+	)
 	// Ultra-lightweight manual trigger via file sentinel
 	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60, config.Schedule.IndexingMinutes)
 	// Standalone Daily Race refresh loop (runs when system is idle)

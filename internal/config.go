@@ -5,6 +5,8 @@ import (
 	"strings"
 )
 
+const defaultFullRefreshIntervalHours = 6
+
 // Config holds application configuration
 type Config struct {
 	Schedule ScheduleConfig `json:"schedule"`
@@ -16,6 +18,7 @@ type Config struct {
 type ScheduleConfig struct {
 	RefreshHour                  int `json:"refresh_hour"`
 	RefreshMinute                int `json:"refresh_minute"`
+	RefreshIntervalHours         int `json:"refresh_interval_hours"`
 	IndexingMinutes              int `json:"indexing_minutes"`
 	DailyRaceRefreshIntervalMins int `json:"daily_race_refresh_interval_mins"` // How often to refresh Daily Race combinations (minutes)
 }
@@ -45,8 +48,9 @@ func GetDefaultConfig() Config {
 
 	return Config{
 		Schedule: ScheduleConfig{
-			RefreshHour:                  2,  // 2 AM
-			RefreshMinute:                0,  // At the top of the hour
+			RefreshHour:                  2, // 2 AM
+			RefreshMinute:                0, // At the top of the hour
+			RefreshIntervalHours:         6,
 			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
 		},

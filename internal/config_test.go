@@ -109,3 +109,10 @@ func TestConfig_AvatarCacheFreshnessDefaultsTo24Hours(t *testing.T) {
 		t.Errorf("AvatarCacheFreshnessHours = %d, want 24", config.Data.AvatarCacheFreshnessHours)
 	}
 }
+
+func TestConfig_FullRefreshIntervalDefaultsToSixHours(t *testing.T) {
+	config := GetDefaultConfig()
+	if config.Schedule.RefreshIntervalHours != 6 {
+		t.Errorf("RefreshIntervalHours = %d, want 6", config.Schedule.RefreshIntervalHours)
+	}
+}

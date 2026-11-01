@@ -404,6 +404,7 @@ Edit `internal/config.go` or create `config.json` to customize:
 {
   "schedule": {
     "refresh_hour": 4,
+    "refresh_interval_hours": 6,
     "indexing_minutes": 30
   },
   "data": {
@@ -411,6 +412,9 @@ Edit `internal/config.go` or create `config.json` to customize:
   }
 }
 ```
+
+The full cache refresh runs every `refresh_interval_hours` (default: 6),
+anchored at `refresh_hour` and `refresh_minute`.
 
 Avatar profile URLs are refreshed in the background when their last full refresh
 is older than `avatar_cache_freshness_hours` (default: 24 hours). The last
