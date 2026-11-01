@@ -370,8 +370,11 @@ func TestExtractPathID(t *testing.T) {
 		{"https://game.raceroom.com/users/info/8246810", "8246810"},
 		{"/users/info/12345/", "12345"},
 		{"/users/info/1/", "1"},
+		{"https://game.raceroomracing.com/users/h55d", "h55d"},
+		{"https://game.raceroomracing.com/users/driver_55/", "driver_55"},
 		{"https://game.raceroom.com/users/info/", ""},
 		{"https://game.raceroom.com/users/info/abc/", ""},
+		{"https://game.raceroomracing.com/users/", ""},
 		{"", ""},
 		{"no-numbers-here", ""},
 	}

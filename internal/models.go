@@ -1,25 +1,50 @@
 package internal
 
-import "regexp"
+import (
+	"net/url"
+	"regexp"
+	"strings"
+)
 
-// pathIDRegex matches the trailing numeric segment of a RaceRoom user path URL.
-var pathIDRegex = regexp.MustCompile(`/(\d+)/?$`)
+var profileSlugRegex = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
-// ExtractPathID extracts the numeric user ID from a RaceRoom driver path URL.
-// Example: "https://game.raceroom.com/users/info/8246810/" → "8246810"
-// Returns empty string if no numeric ID can be extracted.
+// ExtractPathID extracts the driver identifier from a RaceRoom profile URL.
+// It supports both legacy numeric paths and current username slugs.
 func ExtractPathID(path string) string {
-	m := pathIDRegex.FindStringSubmatch(path)
-	if len(m) < 2 {
+	parsed, err := url.Parse(path)
+	if err != nil {
 		return ""
 	}
-	return m[1]
+
+	segments := strings.Split(strings.Trim(parsed.Path, "/"), "/")
+	if len(segments) == 3 && segments[0] == "users" && segments[1] == "info" {
+		if isNumericIdentifier(segments[2]) {
+			return segments[2]
+		}
+		return ""
+	}
+	if len(segments) == 2 && segments[0] == "users" && segments[1] != "info" && profileSlugRegex.MatchString(segments[1]) {
+		return segments[1]
+	}
+	return ""
+}
+
+func isNumericIdentifier(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // DriverResult represents a found driver with their details
 type DriverResult struct {
 	Name         string `json:"name"`
-	PathID       string `json:"path_id"` // numeric user ID from driver.path URL
+	PathID       string `json:"path_id"` // driver identifier from driver.path URL
 	Avatar       string `json:"avatar"`
 	Position     int    `json:"position"`
 	LapTime      string `json:"laptime"`

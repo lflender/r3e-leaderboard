@@ -372,7 +372,11 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		float64(mBefore.Alloc-mAfter.Alloc)/(1024*1024))
 
 	// Export top combinations
-	return ExportTopCombinations(tracks, trackEntryCounts)
+	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
+		return err
+	}
+	ScheduleDriverAvatarBackfill()
+	return nil
 }
 
 // HasShardedIndex returns true when both letter-sharded metadata and at least
@@ -732,6 +736,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	nonEmptyCombos := len(comboSet)
 	comboSet = nil
 
+	// This index contains every driver, so profile lookups here would block
+	// incremental refreshes on one network request per driver.
 	// Export sharded index (names file + per-letter shards)
 	if _, err := ExportShardedIndex(index); err != nil {
 		index = nil
@@ -806,5 +812,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
 		float64(m.Alloc)/(1024*1024))
 
+	ScheduleDriverAvatarBackfill()
 	return nil
 }
