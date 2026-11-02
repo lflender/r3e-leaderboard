@@ -22,18 +22,17 @@ import (
 )
 
 const (
-	raceRoomBaseURL         = "https://game.raceroomracing.com"
-	leaderboardAPIEndpoint  = "/iapi/3c8b63448577c078752f8a21f87e4913"
-	leaderboardRequestXR    = "3dadea97"
-	leaderboardPageSize     = 100
-	leaderboardMaxPages     = 1500
-	userProfileAPIEndpoint  = "/iapi/ba0d58c59333441cf7f51bec291f2f00"
-	profileResponseXORLimit = 128
+	raceRoomBaseURL     = "https://game.raceroomracing.com"
+	responseXORLimit    = 128
+	leaderboardPageSize = 100
+	leaderboardMaxPages = 1500
 )
 
-type leaderboardProtocol struct {
-	endpoint string
-	xr       string
+type apiProtocol struct {
+	endpoint     string
+	xr           string
+	responseSeed int
+	responseStep int
 }
 
 // APIResult represents the data structure returned by the API
@@ -56,11 +55,12 @@ type APIResponse struct {
 
 // APIClient handles all API communications with RaceRoom
 type APIClient struct {
-	client    *http.Client
-	timeout   time.Duration
-	transport *http.Transport
-	baseURL   string
-	protocol  leaderboardProtocol
+	client          *http.Client
+	timeout         time.Duration
+	transport       *http.Transport
+	baseURL         string
+	protocol        apiProtocol
+	profileProtocol apiProtocol
 }
 
 // NewAPIClient creates a new API client with default settings
@@ -84,10 +84,6 @@ func NewAPIClient() *APIClient {
 		timeout:   120 * time.Second,
 		transport: transport,
 		baseURL:   raceRoomBaseURL,
-		protocol: leaderboardProtocol{
-			endpoint: leaderboardAPIEndpoint,
-			xr:       leaderboardRequestXR,
-		},
 	}
 }
 
@@ -135,6 +131,9 @@ func (api *APIClient) FetchLeaderboardData(ctx context.Context, trackID, classID
 // FetchProfileAvatar returns the avatar URL from a RaceRoom driver profile.
 // identifier may be either a legacy numeric user ID or a current profile slug.
 func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if !profileSlugRegex.MatchString(identifier) {
 		return "", fmt.Errorf("invalid RaceRoom profile identifier %q", identifier)
 	}
@@ -158,14 +157,44 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 		return "", fmt.Errorf("encode profile request: %w", err)
 	}
 
-	apiURL := strings.TrimRight(api.baseURL, "/") + userProfileAPIEndpoint
+	if api.profileProtocol.endpoint == "" {
+		protocol, err := api.discoverAPIProtocol(ctx, profileSchemaPattern, "profile")
+		if err != nil {
+			return "", fmt.Errorf("discover profile protocol: %w", err)
+		}
+		api.profileProtocol = protocol
+	}
+
+	avatarURL, err := api.fetchProfileAvatarWithProtocol(ctx, identifier, body, api.profileProtocol)
+	if err != nil && isStaleAPIProtocolError(err) {
+		discoveredProtocol, discoveryErr := api.discoverAPIProtocol(ctx, profileSchemaPattern, "profile")
+		if discoveryErr != nil {
+			return "", fmt.Errorf("%w; endpoint discovery failed: %v", err, discoveryErr)
+		}
+		if discoveredProtocol == api.profileProtocol {
+			return "", fmt.Errorf("%w; discovered protocol matches the stale protocol", err)
+		}
+		avatarURL, err = api.fetchProfileAvatarWithProtocol(ctx, identifier, body, discoveredProtocol)
+		if err != nil {
+			return "", fmt.Errorf("retry with discovered profile protocol: %w", err)
+		}
+		api.profileProtocol = discoveredProtocol
+	}
+	if err != nil {
+		return "", err
+	}
+	return normalizeProfileAvatarURL(avatarURL, api.baseURL)
+}
+
+func (api *APIClient) fetchProfileAvatarWithProtocol(ctx context.Context, identifier string, body []byte, protocol apiProtocol) (string, error) {
+	apiURL := strings.TrimRight(api.baseURL, "/") + protocol.endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("create profile request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("xr", leaderboardRequestXR)
+	req.Header.Set("xr", protocol.xr)
 
 	resp, err := api.client.Do(req)
 	if err != nil {
@@ -174,7 +203,11 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		return "", fmt.Errorf("profile API returned status code %d for %q", resp.StatusCode, identifier)
+		err := fmt.Errorf("profile API returned status code %d for %q", resp.StatusCode, identifier)
+		if resp.StatusCode == http.StatusNotFound {
+			return "", staleAPIProtocolError{err: err}
+		}
+		return "", err
 	}
 
 	responseBody, err := io.ReadAll(resp.Body)
@@ -185,17 +218,22 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 	if err != nil {
 		return "", fmt.Errorf("decompress profile response for %q: %w", identifier, err)
 	}
+	if len(responseBody) == 0 {
+		return "", staleAPIProtocolError{err: fmt.Errorf("profile API returned an empty response for %q", identifier)}
+	}
 
-	contentType, _, err := mime.ParseMediaType(resp.Header.Get("Content-Type"))
-	if err != nil {
-		return "", fmt.Errorf("parse profile response content type: %w", err)
+	contentType := ""
+	contentTypeHeader := resp.Header.Get("Content-Type")
+	if contentTypeHeader != "" {
+		contentType, _, err = mime.ParseMediaType(contentTypeHeader)
+		if err != nil {
+			return "", staleAPIProtocolError{err: fmt.Errorf("parse profile response content type: %w", err)}
+		}
 	}
 
 	var avatarURL string
 	if contentType == "application/javascript-binast" {
-		for i := 0; i < len(responseBody) && i < profileResponseXORLimit; i++ {
-			responseBody[i] ^= byte(51 + i*5)
-		}
+		xorAPIResponsePrefix(responseBody, protocol.responseSeed, protocol.responseStep)
 		avatarURL, err = decodeProfileAvatar(responseBody)
 	} else {
 		var profile struct {
@@ -203,13 +241,15 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 		}
 		if err = json.Unmarshal(responseBody, &profile); err == nil {
 			avatarURL = profile.AvatarURL
+		} else if contentType == "" {
+			return "", staleAPIProtocolError{err: fmt.Errorf("decode profile response without content type: %w", err)}
 		}
 	}
 	if err != nil {
-		return "", fmt.Errorf("decode profile avatar for %q: %w", identifier, err)
+		return "", staleAPIProtocolError{err: fmt.Errorf("decode profile avatar for %q: %w", identifier, err)}
 	}
 
-	return normalizeProfileAvatarURL(avatarURL, api.baseURL)
+	return avatarURL, nil
 }
 
 func decompressProfileResponse(data []byte, contentEncoding string) ([]byte, error) {
@@ -315,8 +355,19 @@ func normalizeProfileAvatarURL(avatarURL, baseURL string) (string, error) {
 }
 
 func (api *APIClient) fetchLeaderboardPage(ctx context.Context, trackID, classID string, start int) ([]map[string]interface{}, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if api.protocol.endpoint == "" {
+		protocol, err := api.discoverLeaderboardProtocol(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("discover leaderboard protocol: %w", err)
+		}
+		api.protocol = protocol
+	}
+
 	results, err := api.fetchLeaderboardPageWithProtocol(ctx, trackID, classID, start, api.protocol)
-	if err == nil || !isLeaderboardProtocolError(err) {
+	if err == nil || !isStaleAPIProtocolError(err) {
 		return results, err
 	}
 
@@ -336,7 +387,7 @@ func (api *APIClient) fetchLeaderboardPage(ctx context.Context, trackID, classID
 	return results, nil
 }
 
-func (api *APIClient) fetchLeaderboardPageWithProtocol(ctx context.Context, trackID, classID string, start int, protocol leaderboardProtocol) ([]map[string]interface{}, error) {
+func (api *APIClient) fetchLeaderboardPageWithProtocol(ctx context.Context, trackID, classID string, start int, protocol apiProtocol) ([]map[string]interface{}, error) {
 	requestBody := struct {
 		CompetitionID int `json:"competitionId"`
 		Filters       struct {
@@ -381,7 +432,7 @@ func (api *APIClient) fetchLeaderboardPageWithProtocol(ctx context.Context, trac
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		err := fmt.Errorf("API returned status code %d", resp.StatusCode)
 		if resp.StatusCode == http.StatusNotFound {
-			return nil, staleLeaderboardProtocolError{err: err}
+			return nil, staleAPIProtocolError{err: err}
 		}
 		return nil, err
 	}
@@ -395,83 +446,103 @@ func (api *APIClient) fetchLeaderboardPageWithProtocol(ctx context.Context, trac
 		if err == nil && contentType == "application/javascript-binast" {
 			return []map[string]interface{}{}, nil
 		}
-		return nil, staleLeaderboardProtocolError{err: fmt.Errorf("API returned an empty leaderboard response")}
+		return nil, staleAPIProtocolError{err: fmt.Errorf("API returned an empty leaderboard response")}
 	}
 
-	results, err := decodeLeaderboardResponse(responseBody, classID)
+	results, err := decodeLeaderboardResponse(responseBody, classID, protocol.responseSeed, protocol.responseStep)
 	if err != nil {
-		return nil, staleLeaderboardProtocolError{err: err}
+		return nil, staleAPIProtocolError{err: err}
 	}
 	return results, nil
 }
 
-type staleLeaderboardProtocolError struct {
+type staleAPIProtocolError struct {
 	err error
 }
 
-func (err staleLeaderboardProtocolError) Error() string {
+func (err staleAPIProtocolError) Error() string {
 	return err.err.Error()
 }
 
-func (err staleLeaderboardProtocolError) Unwrap() error {
+func (err staleAPIProtocolError) Unwrap() error {
 	return err.err
 }
 
-func isLeaderboardProtocolError(err error) bool {
-	var protocolErr staleLeaderboardProtocolError
+func isStaleAPIProtocolError(err error) bool {
+	var protocolErr staleAPIProtocolError
 	return errors.As(err, &protocolErr)
 }
 
 var (
 	leaderboardScriptPattern = regexp.MustCompile(`<script[^>]+src=["']([^"']+\.js)["']`)
 	leaderboardSchemaPattern = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)=\$\(\(\)=>\[\[1,\x60results\x60,[A-Za-z_$][A-Za-z0-9_$]*,1\],\[2,\x60responseStatus\x60,[A-Za-z_$][A-Za-z0-9_$]*\]\]\)`)
+	profileSchemaPattern     = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)=\$\(\(\)=>\[\[1,\x60userId\x60,5\],\[2,\x60userName\x60,9\].*?\x60avatarUrl\x60,9\].*?\x60responseStatus\x60`)
 	leaderboardXRPattern     = regexp.MustCompile(`xr:\x60([A-Za-z0-9_-]+)\x60`)
+	responseXORPattern       = regexp.MustCompile(`\^=([0-9]+)\+[A-Za-z_$][A-Za-z0-9_$]*\*([0-9]+)&255`)
 )
 
-func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (leaderboardProtocol, error) {
+func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (apiProtocol, error) {
+	return api.discoverAPIProtocol(ctx, leaderboardSchemaPattern, "leaderboard")
+}
+
+func (api *APIClient) discoverAPIProtocol(ctx context.Context, schemaPattern *regexp.Regexp, apiName string) (apiProtocol, error) {
 	pageURL := strings.TrimRight(api.baseURL, "/") + "/leaderboard/"
 	page, err := api.getDiscoveryResource(ctx, pageURL)
 	if err != nil {
-		return leaderboardProtocol{}, fmt.Errorf("fetch leaderboard page: %w", err)
+		return apiProtocol{}, fmt.Errorf("fetch leaderboard page: %w", err)
 	}
 	scriptPath := leaderboardScriptPattern.FindSubmatch(page)
 	if len(scriptPath) != 2 {
-		return leaderboardProtocol{}, fmt.Errorf("leaderboard page did not include a JavaScript client bundle")
+		return apiProtocol{}, fmt.Errorf("leaderboard page did not include a JavaScript client bundle")
 	}
 
 	pageParsedURL, err := url.Parse(pageURL)
 	if err != nil {
-		return leaderboardProtocol{}, fmt.Errorf("parse leaderboard page URL: %w", err)
+		return apiProtocol{}, fmt.Errorf("parse leaderboard page URL: %w", err)
 	}
 	scriptURL := pageParsedURL.ResolveReference(&url.URL{Path: string(scriptPath[1])})
 	if scriptURL.Host != pageParsedURL.Host {
-		return leaderboardProtocol{}, fmt.Errorf("leaderboard client bundle points to unexpected host %q", scriptURL.Host)
+		return apiProtocol{}, fmt.Errorf("leaderboard client bundle points to unexpected host %q", scriptURL.Host)
 	}
 	bundle, err := api.getDiscoveryResource(ctx, scriptURL.String())
 	if err != nil {
-		return leaderboardProtocol{}, fmt.Errorf("fetch leaderboard client bundle: %w", err)
+		return apiProtocol{}, fmt.Errorf("fetch API client bundle: %w", err)
 	}
 
-	schema := leaderboardSchemaPattern.FindSubmatch(bundle)
+	schema := schemaPattern.FindSubmatch(bundle)
 	if len(schema) != 2 {
-		return leaderboardProtocol{}, fmt.Errorf("leaderboard client bundle has no recognizable results schema")
+		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable " + apiName + " schema")
 	}
 	endpointPattern := regexp.MustCompile(
-		`[A-Za-z_$][A-Za-z0-9_$]*=e=>cg\(\x60/iapi/([a-f0-9]+)\x60,e,void 0,void 0,` +
+		`[A-Za-z_$][A-Za-z0-9_$]*=e=>[A-Za-z_$][A-Za-z0-9_$]*\(\x60/iapi/([a-f0-9]+)\x60,e,void 0,void 0,` +
 			regexp.QuoteMeta(string(schema[1])) + `\.decode\)`,
 	)
 	endpoint := endpointPattern.FindSubmatch(bundle)
 	if len(endpoint) != 2 {
-		return leaderboardProtocol{}, fmt.Errorf("leaderboard client bundle has no matching results endpoint")
+		return apiProtocol{}, fmt.Errorf("API client bundle has no matching " + apiName + " endpoint")
 	}
 	xr := leaderboardXRPattern.FindSubmatch(bundle)
 	if len(xr) != 2 {
-		return leaderboardProtocol{}, fmt.Errorf("leaderboard client bundle has no recognizable xr header")
+		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable xr header")
+	}
+	responseXOR := responseXORPattern.FindSubmatch(bundle)
+	if len(responseXOR) != 3 {
+		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable response encoding")
+	}
+	seed, err := strconv.Atoi(string(responseXOR[1]))
+	if err != nil {
+		return apiProtocol{}, fmt.Errorf("parse API response encoding seed: %w", err)
+	}
+	step, err := strconv.Atoi(string(responseXOR[2]))
+	if err != nil {
+		return apiProtocol{}, fmt.Errorf("parse API response encoding step: %w", err)
 	}
 
-	return leaderboardProtocol{
-		endpoint: "/iapi/" + string(endpoint[1]),
-		xr:       string(xr[1]),
+	return apiProtocol{
+		endpoint:     "/iapi/" + string(endpoint[1]),
+		xr:           string(xr[1]),
+		responseSeed: seed,
+		responseStep: step,
 	}, nil
 }
 

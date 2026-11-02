@@ -19,8 +19,8 @@ func TestRunAvatarBackfillJobsFetchesAndSavesURLs(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
-		if r.URL.Path != userProfileAPIEndpoint {
-			t.Errorf("Request path = %q, want %q", r.URL.Path, userProfileAPIEndpoint)
+		if r.URL.Path != testProfileEndpoint {
+			t.Errorf("Request path = %q, want %q", r.URL.Path, testProfileEndpoint)
 		}
 		var request struct {
 			UserID uint64 `json:"userId"`
@@ -333,6 +333,7 @@ func newAvatarBackfillTestClient(server *httptest.Server) *APIClient {
 	client := NewAPIClient()
 	client.baseURL = server.URL
 	client.client = server.Client()
+	client.profileProtocol = testAPIProtocol(testProfileEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep)
 	return client
 }
 

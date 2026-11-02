@@ -6,7 +6,7 @@ import (
 )
 
 func TestDecodeLeaderboardResponse(t *testing.T) {
-	results, err := decodeLeaderboardResponse(encodeTestLeaderboardResponse(0, 1), "1703")
+	results, err := decodeLeaderboardResponse(encodeTestLeaderboardResponse(0, 1), "1703", testResponseXORSeed, testResponseXORStep)
 	if err != nil {
 		t.Fatalf("decodeLeaderboardResponse returned error: %v", err)
 	}
@@ -43,21 +43,23 @@ func TestDecodeLeaderboardResponse(t *testing.T) {
 }
 
 func TestDecodeLeaderboardResponse_MalformedPayload(t *testing.T) {
-	if _, err := decodeLeaderboardResponse([]byte{0x00}, "1703"); err == nil {
+	if _, err := decodeLeaderboardResponse([]byte{0x00}, "1703", testResponseXORSeed, testResponseXORStep); err == nil {
 		t.Fatal("Expected malformed response to return an error")
 	}
 }
 
 func encodeTestLeaderboardResponse(start, count int) []byte {
+	return encodeTestLeaderboardResponseWithXOR(start, count, testResponseXORSeed, testResponseXORStep)
+}
+
+func encodeTestLeaderboardResponseWithXOR(start, count, seed, step int) []byte {
 	var response []byte
 	for index := start; index < start+count; index++ {
 		response = appendTestProtoBytes(response, 1, encodeTestLeaderboardResult(index))
 	}
 	response = appendTestProtoVarint(response, 2, 1)
 
-	for i := 0; i < len(response) && i < 128; i++ {
-		response[i] ^= byte(51 + i*5)
-	}
+	xorAPIResponsePrefix(response, seed, step)
 	return response
 }
 

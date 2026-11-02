@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+const (
+	testLeaderboardEndpoint   = "/iapi/test-leaderboard"
+	testProfileEndpoint       = "/iapi/test-profile"
+	testRequestXR             = "test-xr"
+	testResponseXORSeed       = 51
+	testResponseXORStep       = 5
+	testPreviousLeaderboardID = "/iapi/3c8b63448577c078752f8a21f87e4913"
+	testPreviousRequestXR     = "3dadea97"
+	testPreviousResponseSeed  = 51
+	testPreviousResponseStep  = 5
+)
+
+func testAPIProtocol(endpoint, xr string, responseSeed, responseStep int) apiProtocol {
+	return apiProtocol{
+		endpoint: endpoint, xr: xr,
+		responseSeed: responseSeed, responseStep: responseStep,
+	}
+}
+
 // TestFixtures provides common test data for all tests
 type TestFixtures struct {
 	SampleDiscordMessage   string
