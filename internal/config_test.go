@@ -110,6 +110,13 @@ func TestConfig_AvatarCacheFreshnessDefaultsTo24Hours(t *testing.T) {
 	}
 }
 
+func TestConfig_MultiplayerPositionLimitDefaultsToUnlimited(t *testing.T) {
+	config := GetDefaultConfig()
+	if config.Data.MultiplayerPositionLimit != unlimitedMultiplayerPositionLimit {
+		t.Errorf("MultiplayerPositionLimit = %d, want %d", config.Data.MultiplayerPositionLimit, unlimitedMultiplayerPositionLimit)
+	}
+}
+
 func TestConfig_FullRefreshIntervalDefaultsToSixHours(t *testing.T) {
 	config := GetDefaultConfig()
 	if config.Schedule.RefreshIntervalHours != 6 {

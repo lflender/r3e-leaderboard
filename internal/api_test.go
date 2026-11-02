@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -96,14 +97,14 @@ func TestAPIClient_FetchProfileAvatar(t *testing.T) {
 	const storageURL = "https://fra1.digitaloceanspaces.com/" + avatarPath
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != userProfileAPIEndpoint {
-			t.Errorf("Request path = %q, want %q", r.URL.Path, userProfileAPIEndpoint)
+		if r.URL.Path != testProfileEndpoint {
+			t.Errorf("Request path = %q, want %q", r.URL.Path, testProfileEndpoint)
 		}
 		if r.Method != http.MethodPost {
 			t.Errorf("Request method = %q, want POST", r.Method)
 		}
-		if r.Header.Get("xr") != leaderboardRequestXR {
-			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), leaderboardRequestXR)
+		if r.Header.Get("xr") != testRequestXR {
+			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), testRequestXR)
 		}
 
 		var request struct {
@@ -121,9 +122,7 @@ func TestAPIClient_FetchProfileAvatar(t *testing.T) {
 		responseBody := append([]byte{8, 1, 18, 124}, bytes.Repeat([]byte{'x'}, 124)...)
 		responseBody = append(responseBody, 58, byte(len(storageURL)))
 		responseBody = append(responseBody, []byte(storageURL)...)
-		for i := 0; i < len(responseBody) && i < profileResponseXORLimit; i++ {
-			responseBody[i] ^= byte(51 + i*5)
-		}
+		xorAPIResponsePrefix(responseBody, testResponseXORSeed, testResponseXORStep)
 		encoder, err := zstd.NewWriter(nil)
 		if err != nil {
 			t.Errorf("Create zstd encoder: %v", err)
@@ -137,7 +136,11 @@ func TestAPIClient_FetchProfileAvatar(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &APIClient{client: server.Client(), baseURL: server.URL}
+	client := &APIClient{
+		client:          server.Client(),
+		baseURL:         server.URL,
+		profileProtocol: testAPIProtocol(testProfileEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep),
+	}
 	avatar, err := client.FetchProfileAvatar(context.Background(), "7681081")
 	if err != nil {
 		t.Fatalf("FetchProfileAvatar returned error: %v", err)
@@ -156,13 +159,89 @@ func TestAPIClient_FetchProfileAvatar_JSONResponse(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client := &APIClient{client: server.Client(), baseURL: server.URL}
+	client := &APIClient{
+		client:          server.Client(),
+		baseURL:         server.URL,
+		profileProtocol: testAPIProtocol(testProfileEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep),
+	}
 	avatar, err := client.FetchProfileAvatar(context.Background(), "8246810")
 	if err != nil {
 		t.Fatalf("FetchProfileAvatar returned error: %v", err)
 	}
 	if avatar != "https://example.com/avatar.webp" {
 		t.Errorf("FetchProfileAvatar = %q, want JSON avatar URL", avatar)
+	}
+}
+
+func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
+	const discoveredEndpoint = "/iapi/35f91b2039c4f232fd422df64e52be7a"
+	const discoveredXR = "93e52559"
+	var discoveryRequests int
+	var profileRequests int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/leaderboard/":
+			discoveryRequests++
+			_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
+		case "/assets/client.js":
+			bundle := "Zf=$(()=>[[1,`userId`,5],[2,`userName`,9],[3,`displayName`,9],[7,`avatarUrl`,9],[18,`responseStatus`,Km]])," +
+				"$g=e=>lg(`/iapi/35f91b2039c4f232fd422df64e52be7a`,e,void 0,void 0,Zf.decode)," +
+				"xr:`93e52559`,n[e]^=57+e*19&255"
+			_, _ = w.Write([]byte(bundle))
+		case discoveredEndpoint:
+			profileRequests++
+			if got := r.Header.Get("xr"); got != discoveredXR {
+				t.Errorf("xr header = %q, want %q", got, discoveredXR)
+			}
+			var request struct {
+				UserID uint64 `json:"userId"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Errorf("Decode profile request: %v", err)
+			}
+			if request.UserID != 9587602 {
+				t.Errorf("Profile user ID = %d, want 9587602", request.UserID)
+			}
+			const avatarURL = "https://example.com/avatar.webp"
+			responseBody := append([]byte{8, 1, 58, byte(len(avatarURL))}, []byte(avatarURL)...)
+			xorAPIResponsePrefix(responseBody, 57, 19)
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(responseBody)
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	avatar, err := client.FetchProfileAvatar(context.Background(), "9587602")
+	if err != nil {
+		t.Fatalf("FetchProfileAvatar returned error: %v", err)
+	}
+	if avatar != "https://example.com/avatar.webp" {
+		t.Errorf("FetchProfileAvatar = %q, want discovered avatar URL", avatar)
+	}
+	if discoveryRequests != 1 {
+		t.Errorf("Discovery requests = %d, want 1", discoveryRequests)
+	}
+	if client.profileProtocol.endpoint != discoveredEndpoint || client.profileProtocol.xr != discoveredXR {
+		t.Errorf("Cached profile protocol = %+v, want endpoint %q and xr %q",
+			client.profileProtocol, discoveredEndpoint, discoveredXR)
+	}
+	if client.profileProtocol.responseSeed != 57 || client.profileProtocol.responseStep != 19 {
+		t.Errorf("Cached profile response encoding = %d + i*%d, want 57 + i*19",
+			client.profileProtocol.responseSeed, client.profileProtocol.responseStep)
+	}
+	if _, err := client.FetchProfileAvatar(context.Background(), "9587602"); err != nil {
+		t.Fatalf("cached profile request returned error: %v", err)
+	}
+	if discoveryRequests != 1 || profileRequests != 2 {
+		t.Errorf("Discovery/profile requests = %d/%d, want 1/2", discoveryRequests, profileRequests)
 	}
 }
 
@@ -211,14 +290,14 @@ func TestAPIResult_Unmarshal(t *testing.T) {
 
 func TestAPIClient_FetchLeaderboardData_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != leaderboardAPIEndpoint {
-			t.Errorf("Request path = %q, want %q", r.URL.Path, leaderboardAPIEndpoint)
+		if r.URL.Path != testLeaderboardEndpoint {
+			t.Errorf("Request path = %q, want %q", r.URL.Path, testLeaderboardEndpoint)
 		}
 		if r.Method != http.MethodPost {
 			t.Errorf("Request method = %q, want POST", r.Method)
 		}
-		if r.Header.Get("xr") != leaderboardRequestXR {
-			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), leaderboardRequestXR)
+		if r.Header.Get("xr") != testRequestXR {
+			t.Errorf("xr header = %q, want %q", r.Header.Get("xr"), testRequestXR)
 		}
 
 		var request struct {
@@ -256,13 +335,14 @@ func TestAPIClient_FetchLeaderboardData_Success(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "application/javascript-binast")
-		_, _ = w.Write(encodeTestLeaderboardResponse(request.Start, count))
+		_, _ = w.Write(encodeTestLeaderboardResponseWithXOR(request.Start, count, testResponseXORSeed, testResponseXORStep))
 	}))
 	defer server.Close()
 
 	client := NewAPIClient()
 	defer client.Close()
 	client.baseURL = server.URL
+	client.protocol = testAPIProtocol(testLeaderboardEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep)
 
 	results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
 	if err != nil {
@@ -280,61 +360,105 @@ func TestAPIClient_FetchLeaderboardData_Success(t *testing.T) {
 }
 
 func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
-	const discoveredEndpoint = "/iapi/0123456789abcdef0123456789abcdef"
-	const discoveredXR = "updated-xr"
-	var discoveryRequests int
+	tests := []struct {
+		name          string
+		endpoint      string
+		xr            string
+		helper        string
+		xorSeed       int
+		xorStep       int
+		cached        apiProtocol
+		staleEndpoint string
+	}{
+		{
+			name:     "previous bundle format",
+			endpoint: testPreviousLeaderboardID,
+			xr:       testPreviousRequestXR,
+			helper:   "cg",
+			xorSeed:  testPreviousResponseSeed,
+			xorStep:  testPreviousResponseStep,
+		},
+		{
+			name:     "current bundle format",
+			endpoint: "/iapi/4d6dc32acf4d75c9173f7641bf7951e3",
+			xr:       "93e52559",
+			helper:   "lg",
+			xorSeed:  57,
+			xorStep:  19,
+		},
+		{
+			name:          "changed protocol after startup",
+			endpoint:      "/iapi/4d6dc32acf4d75c9173f7641bf7951e3",
+			xr:            "93e52559",
+			helper:        "lg",
+			xorSeed:       57,
+			xorStep:       19,
+			cached:        testAPIProtocol(testPreviousLeaderboardID, testPreviousRequestXR, testPreviousResponseSeed, testPreviousResponseStep),
+			staleEndpoint: testPreviousLeaderboardID,
+		},
+	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case leaderboardAPIEndpoint:
-			http.NotFound(w, r)
-		case "/leaderboard/":
-			discoveryRequests++
-			_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
-		case "/assets/client.js":
-			bundle := "wf=$(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
-				"Eg=e=>cg(`/iapi/0123456789abcdef0123456789abcdef`,e,void 0,void 0,wf.decode)," +
-				"xr:`updated-xr`"
-			_, _ = w.Write([]byte(bundle))
-		case discoveredEndpoint:
-			if got := r.Header.Get("xr"); got != discoveredXR {
-				t.Errorf("xr header = %q, want %q", got, discoveredXR)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			discoveryRequests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case test.staleEndpoint:
+					http.NotFound(w, r)
+				case "/leaderboard/":
+					discoveryRequests++
+					_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
+				case "/assets/client.js":
+					bundle := "wf=$(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
+						"Eg=e=>" + test.helper + "(`/iapi/" + strings.TrimPrefix(test.endpoint, "/iapi/") +
+						"`,e,void 0,void 0,wf.decode)," +
+						"xr:`" + test.xr + "`,n[e]^=" + strconv.Itoa(test.xorSeed) + "+e*" +
+						strconv.Itoa(test.xorStep) + "&255"
+					_, _ = w.Write([]byte(bundle))
+				case test.endpoint:
+					if got := r.Header.Get("xr"); got != test.xr {
+						t.Errorf("xr header = %q, want %q", got, test.xr)
+					}
+					w.Header().Set("Content-Type", "application/javascript-binast")
+					_, _ = w.Write(encodeTestLeaderboardResponseWithXOR(0, 1, test.xorSeed, test.xorStep))
+				default:
+					t.Errorf("Unexpected request path %q", r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			client := NewAPIClient()
+			defer client.Close()
+			client.baseURL = server.URL
+			client.protocol = test.cached
+
+			results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
+			if err != nil {
+				t.Fatalf("FetchLeaderboardData returned error: %v", err)
 			}
-			w.Header().Set("Content-Type", "application/javascript-binast")
-			_, _ = w.Write(encodeTestLeaderboardResponse(0, 1))
-		default:
-			t.Errorf("Unexpected request path %q", r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := NewAPIClient()
-	defer client.Close()
-	client.baseURL = server.URL
-
-	results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
-	if err != nil {
-		t.Fatalf("FetchLeaderboardData returned error: %v", err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("FetchLeaderboardData returned %d results, want 1", len(results))
-	}
-	if discoveryRequests != 1 {
-		t.Errorf("Discovery requests = %d, want 1", discoveryRequests)
-	}
-	if client.protocol.endpoint != discoveredEndpoint || client.protocol.xr != discoveredXR {
-		t.Errorf("Cached protocol = %+v, want endpoint %q and xr %q",
-			client.protocol, discoveredEndpoint, discoveredXR)
+			if len(results) != 1 {
+				t.Fatalf("FetchLeaderboardData returned %d results, want 1", len(results))
+			}
+			if discoveryRequests != 1 {
+				t.Errorf("Discovery page requests = %d, want 1", discoveryRequests)
+			}
+			if client.protocol.endpoint != test.endpoint || client.protocol.xr != test.xr {
+				t.Errorf("Cached protocol = %+v, want endpoint %q and xr %q",
+					client.protocol, test.endpoint, test.xr)
+			}
+			if client.protocol.responseSeed != test.xorSeed || client.protocol.responseStep != test.xorStep {
+				t.Errorf("Cached response encoding = %d + i*%d, want %d + i*%d",
+					client.protocol.responseSeed, client.protocol.responseStep, test.xorSeed, test.xorStep)
+			}
+		})
 	}
 }
 
-func TestAPIClient_FetchLeaderboardData_DoesNotDiscoverDuringMaintenance(t *testing.T) {
+func TestAPIClient_FetchLeaderboardData_ReportsMaintenanceDuringDiscovery(t *testing.T) {
 	var discoveryRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case leaderboardAPIEndpoint:
-			http.NotFound(w, r)
 		case "/leaderboard/":
 			discoveryRequests++
 			http.Error(w, "maintenance", http.StatusServiceUnavailable)
@@ -353,10 +477,7 @@ func TestAPIClient_FetchLeaderboardData_DoesNotDiscoverDuringMaintenance(t *test
 	if err == nil {
 		t.Fatal("Expected endpoint discovery to fail while RaceRoom is in maintenance")
 	}
-	if !strings.Contains(err.Error(), "API returned status code 404") {
-		t.Errorf("Error %q does not report the stale endpoint response", err)
-	}
-	if !strings.Contains(err.Error(), "discovery failed") || !strings.Contains(err.Error(), "503") {
+	if !strings.Contains(err.Error(), "discover leaderboard protocol") || !strings.Contains(err.Error(), "503") {
 		t.Errorf("Error %q does not report the maintenance response", err)
 	}
 	if discoveryRequests != 1 {
@@ -365,25 +486,20 @@ func TestAPIClient_FetchLeaderboardData_DoesNotDiscoverDuringMaintenance(t *test
 }
 
 func TestAPIClient_FetchLeaderboardData_EmptyLeaderboard(t *testing.T) {
-	var discoveryRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case leaderboardAPIEndpoint:
-			w.Header().Set("Content-Type", "application/javascript-binast")
-		case "/leaderboard/":
-			discoveryRequests++
-			t.Error("Did not expect discovery for a valid empty leaderboard response")
-			http.Error(w, "unexpected discovery", http.StatusInternalServerError)
-		default:
+		if r.URL.Path != testLeaderboardEndpoint {
 			t.Errorf("Unexpected request path %q", r.URL.Path)
 			http.NotFound(w, r)
+			return
 		}
+		w.Header().Set("Content-Type", "application/javascript-binast")
 	}))
 	defer server.Close()
 
 	client := NewAPIClient()
 	defer client.Close()
 	client.baseURL = server.URL
+	client.protocol = testAPIProtocol(testLeaderboardEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep)
 
 	results, _, err := client.FetchLeaderboardData(context.Background(), "13352", "255")
 	if err != nil {
@@ -394,9 +510,6 @@ func TestAPIClient_FetchLeaderboardData_EmptyLeaderboard(t *testing.T) {
 	}
 	if len(results) != 0 {
 		t.Errorf("FetchLeaderboardData returned %d results, want 0", len(results))
-	}
-	if discoveryRequests != 0 {
-		t.Errorf("Discovery requests = %d, want 0", discoveryRequests)
 	}
 }
 
@@ -415,8 +528,8 @@ func TestAPIClient_FetchLeaderboardData_ContextCancellation(t *testing.T) {
 		t.Error("Expected error for cancelled context")
 	}
 
-	if err != context.Canceled {
-		t.Logf("Got error (expected for cancelled context): %v", err)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Error = %v, want context canceled", err)
 	}
 }
 
@@ -451,8 +564,11 @@ func TestAPIURL_Format(t *testing.T) {
 	if raceRoomBaseURL != "https://game.raceroomracing.com" {
 		t.Errorf("RaceRoom base URL = %q, unexpected", raceRoomBaseURL)
 	}
-	if leaderboardAPIEndpoint == "" || leaderboardRequestXR == "" {
-		t.Error("Default leaderboard protocol values must be configured")
+	client := NewAPIClient()
+	defer client.Close()
+	if client.protocol.endpoint != "" || client.profileProtocol.endpoint != "" {
+		t.Errorf("New API client should discover protocols before use, got leaderboard=%+v profile=%+v",
+			client.protocol, client.profileProtocol)
 	}
 	if leaderboardPageSize != 100 {
 		t.Errorf("Leaderboard page size = %d, want 100", leaderboardPageSize)

@@ -21,6 +21,7 @@ const MultiplayerPositionsInactiveFile = "cache/mp_pos/mp_pos_inactive.json.gz"
 const multiplayerPositionsLegacyFile = "cache/mp_pos.json"
 const multiplayerPositionsLegacyGzFile = "cache/mp_pos.json.gz"
 const multiplayerRatingsURL = "https://game.raceroom.com/multiplayer-rating/ratings.json"
+const unlimitedMultiplayerPositionLimit = -1
 
 // MultiplayerPosition represents a driver's multiplayer position.
 type MultiplayerPosition struct {
@@ -66,15 +67,15 @@ func EnsureMultiplayerPositionsCache(ctx context.Context) error {
 		}
 	}
 
-	return RefreshMultiplayerPositions(ctx, 3000)
+	return RefreshMultiplayerPositions(ctx, unlimitedMultiplayerPositionLimit)
 }
 
 // RefreshMultiplayerPositions fetches multiplayer ratings JSON and writes mp_pos cache.
 // Active drivers (with a ranked position) are written to mp_pos.json.gz.
 // Inactive drivers (without a ranked position) are written to mp_pos_inactive.json.gz.
 func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
-	if limit < 1 {
-		return fmt.Errorf("limit must be at least 1")
+	if limit != unlimitedMultiplayerPositionLimit && limit < 1 {
+		return fmt.Errorf("limit must be at least 1 or -1 for no limit")
 	}
 
 	log.Printf("🔍 Fetching multiplayer positions from %s (limit: %d)", multiplayerRatingsURL, limit)
@@ -115,16 +116,21 @@ func RefreshMultiplayerPositions(ctx context.Context, limit int) error {
 }
 
 // processRatingsEntries processes raw ratings entries into separate active and inactive slices.
-// Active drivers (with Position 1..limit) are sorted by position.
+// Active drivers are sorted by position and limited unless limit is -1.
 // Inactive drivers (without Position) get position = lastActivePosition+1 at the point
-// they appear in the list, and are only collected while lastActivePosition < limit.
+// they appear in the list, and are only collected while lastActivePosition < limit
+// unless limit is -1.
 func processRatingsEntries(entries []ratingsEntry, limit int) (active []MultiplayerPosition, inactive []MultiplayerPosition) {
-	active = make([]MultiplayerPosition, 0, limit)
-	inactive = make([]MultiplayerPosition, 0)
+	activeCapacity := len(entries)
+	if limit > 0 && limit < activeCapacity {
+		activeCapacity = limit
+	}
+	active = make([]MultiplayerPosition, 0, activeCapacity)
+	inactive = make([]MultiplayerPosition, 0, len(entries))
 	lastActivePosition := 0
 
 	for _, e := range entries {
-		if e.Position != nil && *e.Position >= 1 && *e.Position <= limit {
+		if e.Position != nil && *e.Position >= 1 && (limit == unlimitedMultiplayerPositionLimit || *e.Position <= limit) {
 			active = append(active, MultiplayerPosition{
 				Position: *e.Position,
 				Name:     e.Fullname,
@@ -133,7 +139,7 @@ func processRatingsEntries(entries []ratingsEntry, limit int) (active []Multipla
 			if *e.Position > lastActivePosition {
 				lastActivePosition = *e.Position
 			}
-		} else if e.Position == nil && lastActivePosition < limit {
+		} else if e.Position == nil && (limit == unlimitedMultiplayerPositionLimit || lastActivePosition < limit) {
 			inactive = append(inactive, MultiplayerPosition{
 				Position: lastActivePosition + 1,
 				Name:     e.Fullname,
@@ -145,7 +151,7 @@ func processRatingsEntries(entries []ratingsEntry, limit int) (active []Multipla
 	sort.Slice(active, func(i, j int) bool {
 		return active[i].Position < active[j].Position
 	})
-	if len(active) > limit {
+	if limit > 0 && len(active) > limit {
 		active = active[:limit]
 	}
 

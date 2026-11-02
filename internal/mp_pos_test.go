@@ -55,7 +55,7 @@ func TestRefreshMultiplayerPositions_InvalidLimit_v2(t *testing.T) {
 		desc  string
 	}{
 		{0, "zero limit"},
-		{-1, "negative limit"},
+		{-2, "unsupported negative limit"},
 	}
 
 	for _, test := range tests {
@@ -507,6 +507,29 @@ func TestProcessRatingsEntries_InactiveStopsAtLimit_v2(t *testing.T) {
 
 	if inactive[0].Name != "Inactive Before Limit" {
 		t.Errorf("expected 'Inactive Before Limit', got %q", inactive[0].Name)
+	}
+}
+
+func TestProcessRatingsEntries_UnlimitedIncludesAllPositions_v2(t *testing.T) {
+	entries := []ratingsEntry{
+		{UserId: 1, Fullname: "Driver A", Position: intPtr(1)},
+		{UserId: 2, Fullname: "Driver Beyond Former Limit", Position: intPtr(15000)},
+		{UserId: 10, Fullname: "Inactive Driver", Position: nil},
+	}
+
+	active, inactive := processRatingsEntries(entries, unlimitedMultiplayerPositionLimit)
+
+	if len(active) != 2 {
+		t.Fatalf("len(active) = %d, expected 2", len(active))
+	}
+	if active[1].Position != 15000 {
+		t.Errorf("active[1].Position = %d, expected 15000", active[1].Position)
+	}
+	if len(inactive) != 1 {
+		t.Fatalf("len(inactive) = %d, expected 1", len(inactive))
+	}
+	if inactive[0].Name != "Inactive Driver" || inactive[0].Position != 15001 {
+		t.Errorf("inactive[0] = %+v, expected inactive driver at position 15001", inactive[0])
 	}
 }
 
