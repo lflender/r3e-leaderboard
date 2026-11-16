@@ -6,7 +6,7 @@ import (
 )
 
 func TestDecodeLeaderboardResponse(t *testing.T) {
-	results, err := decodeLeaderboardResponse(encodeTestLeaderboardResponse(0, 1), "1703", testResponseXORSeed, testResponseXORStep)
+	results, err := decodeLeaderboardResponse(encodeTestLeaderboardResponse(0, 1), "1703", testResponseXORSeed, testResponseXORStep, testResponseXORLimit)
 	if err != nil {
 		t.Fatalf("decodeLeaderboardResponse returned error: %v", err)
 	}
@@ -43,23 +43,43 @@ func TestDecodeLeaderboardResponse(t *testing.T) {
 }
 
 func TestDecodeLeaderboardResponse_MalformedPayload(t *testing.T) {
-	if _, err := decodeLeaderboardResponse([]byte{0x00}, "1703", testResponseXORSeed, testResponseXORStep); err == nil {
+	if _, err := decodeLeaderboardResponse([]byte{0x00}, "1703", testResponseXORSeed, testResponseXORStep, testResponseXORLimit); err == nil {
 		t.Fatal("Expected malformed response to return an error")
 	}
 }
 
+func TestDecodeLeaderboardResponse_XORLimitExceedsPreviousCap(t *testing.T) {
+	const responseLimit = 512
+	response := encodeTestLeaderboardResponseWithXORAndLimit(0, 3, testResponseXORSeed, testResponseXORStep, responseLimit)
+	if len(response) <= testResponseXORLimit {
+		t.Fatalf("test response length = %d, want greater than %d", len(response), testResponseXORLimit)
+	}
+
+	results, err := decodeLeaderboardResponse(response, "1703", testResponseXORSeed, testResponseXORStep, responseLimit)
+	if err != nil {
+		t.Fatalf("decodeLeaderboardResponse returned error for extended XOR prefix: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("decoded %d results, want 3", len(results))
+	}
+}
+
 func encodeTestLeaderboardResponse(start, count int) []byte {
-	return encodeTestLeaderboardResponseWithXOR(start, count, testResponseXORSeed, testResponseXORStep)
+	return encodeTestLeaderboardResponseWithXORAndLimit(start, count, testResponseXORSeed, testResponseXORStep, testResponseXORLimit)
 }
 
 func encodeTestLeaderboardResponseWithXOR(start, count, seed, step int) []byte {
+	return encodeTestLeaderboardResponseWithXORAndLimit(start, count, seed, step, testResponseXORLimit)
+}
+
+func encodeTestLeaderboardResponseWithXORAndLimit(start, count, seed, step, limit int) []byte {
 	var response []byte
 	for index := start; index < start+count; index++ {
 		response = appendTestProtoBytes(response, 1, encodeTestLeaderboardResult(index))
 	}
 	response = appendTestProtoVarint(response, 2, 1)
 
-	xorAPIResponsePrefix(response, seed, step)
+	xorAPIResponsePrefix(response, seed, step, limit)
 	return response
 }
 

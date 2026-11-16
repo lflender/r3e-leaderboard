@@ -146,7 +146,6 @@ func GetTracks() []TrackConfig {
 		{"Hockenheimring - Short", "1764"},
 		{"Hockenheimring Classic - Grand Prix", "12112"},
 		{"Hockenheimring Classic - Short", "12236"},
-		{"Hockenheimring DMEC - DMEC", "10274"},
 		{"Hungaroring - Grand Prix", "1866"},
 		{"Imola - Grand Prix", "1850"},
 		{"Indianapolis 2012 - Grand Prix", "1852"},

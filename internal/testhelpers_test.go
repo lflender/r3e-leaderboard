@@ -16,12 +16,14 @@ const (
 	testPreviousRequestXR     = "3dadea97"
 	testPreviousResponseSeed  = 51
 	testPreviousResponseStep  = 5
+	testResponseXORLimit      = 128
 )
 
 func testAPIProtocol(endpoint, xr string, responseSeed, responseStep int) apiProtocol {
 	return apiProtocol{
 		endpoint: endpoint, xr: xr,
 		responseSeed: responseSeed, responseStep: responseStep,
+		responseLimit: testResponseXORLimit,
 	}
 }
 

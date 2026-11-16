@@ -13,8 +13,8 @@ type protobufField struct {
 	bytes    []byte
 }
 
-func decodeLeaderboardResponse(data []byte, classID string, responseSeed, responseStep int) ([]map[string]interface{}, error) {
-	xorAPIResponsePrefix(data, responseSeed, responseStep)
+func decodeLeaderboardResponse(data []byte, classID string, responseSeed, responseStep, responseLimit int) ([]map[string]interface{}, error) {
+	xorAPIResponsePrefix(data, responseSeed, responseStep, responseLimit)
 
 	fields, err := parseProtobufFields(data)
 	if err != nil {
@@ -39,8 +39,11 @@ func decodeLeaderboardResponse(data []byte, classID string, responseSeed, respon
 	return results, nil
 }
 
-func xorAPIResponsePrefix(data []byte, seed, step int) {
-	for i := 0; i < len(data) && i < responseXORLimit; i++ {
+func xorAPIResponsePrefix(data []byte, seed, step, limit int) {
+	if limit <= 0 {
+		limit = len(data)
+	}
+	for i := 0; i < len(data) && i < limit; i++ {
 		data[i] ^= byte(seed + i*step)
 	}
 }

@@ -88,7 +88,11 @@ discord_test.go:382: findTrackID("monza") = "", expected "1671" (Monza Circuit -
 - `TestAPIResponse_Unmarshal` - JSON parsing
 - `TestAPIClient_FetchLeaderboardData_Success` - Fetching across 100-result pages
 - `TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol` - Discovering protocol values on first use and after a cached endpoint changes
+- `TestAPIClient_FetchLeaderboardData_RediscoversChangedXORLimit` - Refreshing a cached protocol when RaceRoom expands its response XOR prefix
 - `TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol` - Discovering profile protocol values on first use and reusing them on subsequent requests
+- `TestDiscoverAPIProtocolInBundle_ToleratesMinifierChanges` - Finding protocol metadata across changed schema factories, request helpers, and header syntax
+- `TestAPIClient_DiscoverAPIProtocol_ScansScriptBundles` - Finding the API protocol when it is in a later JavaScript bundle
+- `TestDecodeLeaderboardResponse_XORLimitExceedsPreviousCap` - Decoding leaderboard payloads when RaceRoom encrypts more than the previous 128-byte prefix
 - `TestAPIClient_FetchLeaderboardData_ReportsMaintenanceDuringDiscovery` - Reporting maintenance when protocol discovery cannot fetch the client bundle
 - `TestAPIClient_FetchLeaderboardData_EmptyLeaderboard` - Treating RaceRoom's empty binary response as a valid empty leaderboard
 - `TestAPIClient_FetchLeaderboardData_ContextCancellation` - Cancellation handling
