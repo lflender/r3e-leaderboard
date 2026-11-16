@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -23,16 +24,16 @@ import (
 
 const (
 	raceRoomBaseURL     = "https://game.raceroomracing.com"
-	responseXORLimit    = 128
 	leaderboardPageSize = 100
 	leaderboardMaxPages = 1500
 )
 
 type apiProtocol struct {
-	endpoint     string
-	xr           string
-	responseSeed int
-	responseStep int
+	endpoint      string
+	xr            string
+	responseSeed  int
+	responseStep  int
+	responseLimit int
 }
 
 // APIResult represents the data structure returned by the API
@@ -158,7 +159,7 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 	}
 
 	if api.profileProtocol.endpoint == "" {
-		protocol, err := api.discoverAPIProtocol(ctx, profileSchemaPattern, "profile")
+		protocol, err := api.discoverAPIProtocol(ctx, "profile")
 		if err != nil {
 			return "", fmt.Errorf("discover profile protocol: %w", err)
 		}
@@ -167,7 +168,7 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 
 	avatarURL, err := api.fetchProfileAvatarWithProtocol(ctx, identifier, body, api.profileProtocol)
 	if err != nil && isStaleAPIProtocolError(err) {
-		discoveredProtocol, discoveryErr := api.discoverAPIProtocol(ctx, profileSchemaPattern, "profile")
+		discoveredProtocol, discoveryErr := api.discoverAPIProtocol(ctx, "profile")
 		if discoveryErr != nil {
 			return "", fmt.Errorf("%w; endpoint discovery failed: %v", err, discoveryErr)
 		}
@@ -233,7 +234,7 @@ func (api *APIClient) fetchProfileAvatarWithProtocol(ctx context.Context, identi
 
 	var avatarURL string
 	if contentType == "application/javascript-binast" {
-		xorAPIResponsePrefix(responseBody, protocol.responseSeed, protocol.responseStep)
+		xorAPIResponsePrefix(responseBody, protocol.responseSeed, protocol.responseStep, protocol.responseLimit)
 		avatarURL, err = decodeProfileAvatar(responseBody)
 	} else {
 		var profile struct {
@@ -449,7 +450,7 @@ func (api *APIClient) fetchLeaderboardPageWithProtocol(ctx context.Context, trac
 		return nil, staleAPIProtocolError{err: fmt.Errorf("API returned an empty leaderboard response")}
 	}
 
-	results, err := decodeLeaderboardResponse(responseBody, classID, protocol.responseSeed, protocol.responseStep)
+	results, err := decodeLeaderboardResponse(responseBody, classID, protocol.responseSeed, protocol.responseStep, protocol.responseLimit)
 	if err != nil {
 		return nil, staleAPIProtocolError{err: err}
 	}
@@ -474,25 +475,30 @@ func isStaleAPIProtocolError(err error) bool {
 }
 
 var (
-	leaderboardScriptPattern = regexp.MustCompile(`<script[^>]+src=["']([^"']+\.js)["']`)
-	leaderboardSchemaPattern = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)=\$\(\(\)=>\[\[1,\x60results\x60,[A-Za-z_$][A-Za-z0-9_$]*,1\],\[2,\x60responseStatus\x60,[A-Za-z_$][A-Za-z0-9_$]*\]\]\)`)
-	profileSchemaPattern     = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)=\$\(\(\)=>\[\[1,\x60userId\x60,5\],\[2,\x60userName\x60,9\].*?\x60avatarUrl\x60,9\].*?\x60responseStatus\x60`)
-	leaderboardXRPattern     = regexp.MustCompile(`xr:\x60([A-Za-z0-9_-]+)\x60`)
-	responseXORPattern       = regexp.MustCompile(`\^=([0-9]+)\+[A-Za-z_$][A-Za-z0-9_$]*\*([0-9]+)&255`)
+	leaderboardScriptPattern = regexp.MustCompile(`(?i)<(?:script\b[^>]*?\bsrc|link\b[^>]*?\bhref)\s*=\s*["']([^"']+)["'][^>]*>`)
+	apiEndpointPattern       = regexp.MustCompile(`(?i)/iapi/([a-f0-9]{8,64})`)
+	apiDecoderPattern        = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\.decode\b`)
+	apiIdentifierPattern     = regexp.MustCompile(`[A-Za-z_$][A-Za-z0-9_$]*`)
+	leaderboardXRPatterns    = []*regexp.Regexp{
+		regexp.MustCompile("(?i)(?:\\bxr\\b|[\"']xr[\"'])\\s*:\\s*[\"'`]([A-Za-z0-9_-]+)[\"'`]"),
+		regexp.MustCompile("(?i)\\.set\\(\\s*[\"']xr[\"']\\s*,\\s*[\"'`]([A-Za-z0-9_-]+)[\"'`]\\s*\\)"),
+		regexp.MustCompile("(?i)(?:\\bxr\\b|[\"']xr[\"'])(?:\\s*\\])?\\s*=\\s*[\"'`]([A-Za-z0-9_-]+)[\"'`]"),
+	}
+	responseXORPattern = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\]\s*\^=\s*([0-9]+)\s*\+\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\*\s*([0-9]+)\s*&\s*255`)
 )
 
 func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (apiProtocol, error) {
-	return api.discoverAPIProtocol(ctx, leaderboardSchemaPattern, "leaderboard")
+	return api.discoverAPIProtocol(ctx, "leaderboard")
 }
 
-func (api *APIClient) discoverAPIProtocol(ctx context.Context, schemaPattern *regexp.Regexp, apiName string) (apiProtocol, error) {
+func (api *APIClient) discoverAPIProtocol(ctx context.Context, apiName string) (apiProtocol, error) {
 	pageURL := strings.TrimRight(api.baseURL, "/") + "/leaderboard/"
 	page, err := api.getDiscoveryResource(ctx, pageURL)
 	if err != nil {
 		return apiProtocol{}, fmt.Errorf("fetch leaderboard page: %w", err)
 	}
-	scriptPath := leaderboardScriptPattern.FindSubmatch(page)
-	if len(scriptPath) != 2 {
+	scriptPaths := leaderboardScriptPattern.FindAllSubmatch(page, -1)
+	if len(scriptPaths) == 0 {
 		return apiProtocol{}, fmt.Errorf("leaderboard page did not include a JavaScript client bundle")
 	}
 
@@ -500,50 +506,285 @@ func (api *APIClient) discoverAPIProtocol(ctx context.Context, schemaPattern *re
 	if err != nil {
 		return apiProtocol{}, fmt.Errorf("parse leaderboard page URL: %w", err)
 	}
-	scriptURL := pageParsedURL.ResolveReference(&url.URL{Path: string(scriptPath[1])})
-	if scriptURL.Host != pageParsedURL.Host {
-		return apiProtocol{}, fmt.Errorf("leaderboard client bundle points to unexpected host %q", scriptURL.Host)
+	var lastErr error
+	for _, scriptPath := range scriptPaths {
+		scriptURL, err := url.Parse(string(scriptPath[1]))
+		if err != nil {
+			lastErr = fmt.Errorf("parse leaderboard client bundle URL: %w", err)
+			continue
+		}
+		if !strings.EqualFold(path.Ext(scriptURL.Path), ".js") {
+			continue
+		}
+		scriptURL = pageParsedURL.ResolveReference(scriptURL)
+		if scriptURL.Host != pageParsedURL.Host {
+			lastErr = fmt.Errorf("leaderboard client bundle points to unexpected host %q", scriptURL.Host)
+			continue
+		}
+		bundle, err := api.getDiscoveryResource(ctx, scriptURL.String())
+		if err != nil {
+			lastErr = fmt.Errorf("fetch API client bundle %s: %w", scriptURL, err)
+			continue
+		}
+		protocol, err := discoverAPIProtocolInBundle(bundle, apiName)
+		if err == nil {
+			return protocol, nil
+		}
+		lastErr = err
 	}
-	bundle, err := api.getDiscoveryResource(ctx, scriptURL.String())
-	if err != nil {
-		return apiProtocol{}, fmt.Errorf("fetch API client bundle: %w", err)
+	if ctx.Err() != nil {
+		return apiProtocol{}, ctx.Err()
+	}
+	if lastErr != nil {
+		return apiProtocol{}, fmt.Errorf("discover %s protocol from client bundles: %w", apiName, lastErr)
+	}
+	return apiProtocol{}, fmt.Errorf("API client bundles have no recognizable %s schema and endpoint", apiName)
+}
+
+func discoverAPIProtocolInBundle(bundle []byte, apiName string) (apiProtocol, error) {
+	var requiredSchemaFields []string
+	switch apiName {
+	case "leaderboard":
+		requiredSchemaFields = []string{"results", "responseStatus"}
+	case "profile":
+		requiredSchemaFields = []string{"userId", "avatarUrl", "responseStatus"}
+	default:
+		return apiProtocol{}, fmt.Errorf("unsupported API protocol type %q", apiName)
 	}
 
-	schema := schemaPattern.FindSubmatch(bundle)
-	if len(schema) != 2 {
-		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable " + apiName + " schema")
+	var endpoint string
+	schemaCache := make(map[string]bool)
+	for _, match := range apiEndpointPattern.FindAllSubmatchIndex(bundle, -1) {
+		schemaName := apiSchemaForEndpointCall(bundle, match[0], requiredSchemaFields, schemaCache)
+		if schemaName == "" {
+			continue
+		}
+		endpoint = "/iapi/" + string(bundle[match[2]:match[3]])
+		break
 	}
-	endpointPattern := regexp.MustCompile(
-		`[A-Za-z_$][A-Za-z0-9_$]*=e=>[A-Za-z_$][A-Za-z0-9_$]*\(\x60/iapi/([a-f0-9]+)\x60,e,void 0,void 0,` +
-			regexp.QuoteMeta(string(schema[1])) + `\.decode\)`,
-	)
-	endpoint := endpointPattern.FindSubmatch(bundle)
-	if len(endpoint) != 2 {
-		return apiProtocol{}, fmt.Errorf("API client bundle has no matching " + apiName + " endpoint")
+	if endpoint == "" {
+		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable %s schema and endpoint", apiName)
 	}
-	xr := leaderboardXRPattern.FindSubmatch(bundle)
-	if len(xr) != 2 {
+
+	var xr string
+	for _, pattern := range leaderboardXRPatterns {
+		if value := pattern.FindSubmatch(bundle); len(value) == 2 {
+			xr = string(value[1])
+			break
+		}
+	}
+	if xr == "" {
 		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable xr header")
 	}
-	responseXOR := responseXORPattern.FindSubmatch(bundle)
-	if len(responseXOR) != 3 {
-		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable response encoding")
-	}
-	seed, err := strconv.Atoi(string(responseXOR[1]))
+	responseSeed, responseStep, responseLimit, err := discoverResponseXOREncoding(bundle)
 	if err != nil {
-		return apiProtocol{}, fmt.Errorf("parse API response encoding seed: %w", err)
+		return apiProtocol{}, err
 	}
-	step, err := strconv.Atoi(string(responseXOR[2]))
+	return apiProtocol{
+		endpoint:      endpoint,
+		xr:            xr,
+		responseSeed:  responseSeed,
+		responseStep:  responseStep,
+		responseLimit: responseLimit,
+	}, nil
+}
+
+func discoverResponseXOREncoding(bundle []byte) (seed, step, limit int, err error) {
+	responseXOR := responseXORPattern.FindSubmatchIndex(bundle)
+	if len(responseXOR) != 12 || string(bundle[responseXOR[4]:responseXOR[5]]) != string(bundle[responseXOR[8]:responseXOR[9]]) {
+		return 0, 0, 0, fmt.Errorf("API client bundle has no recognizable response encoding")
+	}
+	seed, err = strconv.Atoi(string(bundle[responseXOR[6]:responseXOR[7]]))
 	if err != nil {
-		return apiProtocol{}, fmt.Errorf("parse API response encoding step: %w", err)
+		return 0, 0, 0, fmt.Errorf("parse API response encoding seed: %w", err)
+	}
+	step, err = strconv.Atoi(string(bundle[responseXOR[10]:responseXOR[11]]))
+	if err != nil {
+		return 0, 0, 0, fmt.Errorf("parse API response encoding step: %w", err)
 	}
 
-	return apiProtocol{
-		endpoint:     "/iapi/" + string(endpoint[1]),
-		xr:           string(xr[1]),
-		responseSeed: seed,
-		responseStep: step,
-	}, nil
+	arrayName := regexp.QuoteMeta(string(bundle[responseXOR[2]:responseXOR[3]]))
+	indexName := regexp.QuoteMeta(string(bundle[responseXOR[4]:responseXOR[5]]))
+	beforeXOR := bundle[:responseXOR[0]]
+	if len(beforeXOR) > 2048 {
+		beforeXOR = beforeXOR[len(beforeXOR)-2048:]
+	}
+	minLimitPattern := regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*Math\.min\(\s*([0-9]+)\s*,\s*` + arrayName + `\.length\s*\)`)
+	for _, match := range minLimitPattern.FindAllSubmatchIndex(beforeXOR, -1) {
+		boundName := regexp.QuoteMeta(string(beforeXOR[match[2]:match[3]]))
+		limit, err = strconv.Atoi(string(beforeXOR[match[4]:match[5]]))
+		if err != nil {
+			return 0, 0, 0, fmt.Errorf("parse API response encoding limit: %w", err)
+		}
+		loopPattern := regexp.MustCompile(
+			`for\s*\(\s*(?:(?:let|var|const)\s+)?` + indexName + `\s*=\s*0\s*;\s*` +
+				indexName + `\s*<\s*` + boundName + `\s*;\s*` + indexName + `\+\+\s*\)\s*` +
+				arrayName + `\s*\[\s*` + indexName + `\s*\]\s*\^=`,
+		)
+		if loopPattern.Match(bundle[responseXOR[0]-len(beforeXOR):]) {
+			return seed, step, limit, nil
+		}
+	}
+
+	fullLengthLoopPattern := regexp.MustCompile(
+		`for\s*\(\s*(?:(?:let|var|const)\s+)?` + indexName + `\s*=\s*0\s*;\s*` +
+			indexName + `\s*<\s*` + arrayName + `\.length\s*;\s*` + indexName + `\+\+\s*\)\s*` +
+			arrayName + `\s*\[\s*` + indexName + `\s*\]\s*\^=`,
+	)
+	if fullLengthLoopPattern.Match(bundle) {
+		return seed, step, 0, nil
+	}
+
+	return 0, 0, 0, fmt.Errorf("API client bundle has no recognizable response encoding limit")
+}
+
+func apiSchemaForEndpointCall(bundle []byte, endpointStart int, requiredFields []string, schemaCache map[string]bool) string {
+	quoteStart := endpointStart - 1
+	if quoteStart < 0 || !strings.ContainsRune("`\"'", rune(bundle[quoteStart])) {
+		return ""
+	}
+	for searchEnd := quoteStart; searchEnd > 0; {
+		callStart := bytes.LastIndexByte(bundle[:searchEnd], '(')
+		if callStart < 0 || quoteStart-callStart > 2048 {
+			return ""
+		}
+		callEnd := javascriptCallEnd(bundle, callStart)
+		if callEnd > endpointStart {
+			call := bundle[callStart:callEnd]
+			decoders := apiDecoderPattern.FindAllSubmatch(call, -1)
+			if len(decoders) == 1 && apiSchemaMatches(bundle, string(decoders[0][1]), requiredFields, schemaCache) {
+				return string(decoders[0][1])
+			}
+			matchingSchemas := make(map[string]struct{})
+			for _, identifier := range apiIdentifierPattern.FindAll(call, -1) {
+				name := string(identifier)
+				if apiSchemaMatches(bundle, name, requiredFields, schemaCache) {
+					matchingSchemas[name] = struct{}{}
+				}
+			}
+			if len(matchingSchemas) == 1 {
+				for name := range matchingSchemas {
+					return name
+				}
+			}
+		}
+		searchEnd = callStart
+	}
+	return ""
+}
+
+func apiSchemaMatches(bundle []byte, schemaName string, fields []string, cache map[string]bool) bool {
+	if matches, exists := cache[schemaName]; exists {
+		return matches
+	}
+	matches := apiSchemaHasFields(bundle, schemaName, fields)
+	cache[schemaName] = matches
+	return matches
+}
+
+func javascriptCallEnd(source []byte, callStart int) int {
+	depth := 0
+	var quote byte
+	for i := callStart; i < len(source); i++ {
+		current := source[i]
+		if quote != 0 {
+			if current == '\\' {
+				i++
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch current {
+		case '\'', '"', '`':
+			quote = current
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		case ';':
+			if depth == 0 {
+				return -1
+			}
+		}
+	}
+	return -1
+}
+
+func apiSchemaHasFields(bundle []byte, schemaName string, fields []string) bool {
+	definitionPattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(schemaName) + `\s*=`)
+	for _, definition := range definitionPattern.FindAllIndex(bundle, -1) {
+		start := definition[1]
+		end := javascriptExpressionEnd(bundle, start, 16<<10)
+		if end <= start {
+			continue
+		}
+		expression := bundle[start:end]
+		matchesAllFields := true
+		for _, field := range fields {
+			fieldPattern := regexp.MustCompile("[`\"']" + regexp.QuoteMeta(field) + "[`\"']")
+			if !fieldPattern.Match(expression) {
+				matchesAllFields = false
+				break
+			}
+		}
+		if matchesAllFields {
+			return true
+		}
+	}
+	return false
+}
+
+func javascriptExpressionEnd(source []byte, start, limit int) int {
+	endLimit := start + limit
+	if endLimit > len(source) {
+		endLimit = len(source)
+	}
+	var stack []byte
+	var quote byte
+	for i := start; i < endLimit; i++ {
+		current := source[i]
+		if quote != 0 {
+			if current == '\\' {
+				i++
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch current {
+		case '\'', '"', '`':
+			quote = current
+		case '(', '[', '{':
+			switch current {
+			case '(':
+				stack = append(stack, ')')
+			case '[':
+				stack = append(stack, ']')
+			case '{':
+				stack = append(stack, '}')
+			}
+		case ')', ']', '}':
+			if len(stack) == 0 {
+				return i
+			}
+			if stack[len(stack)-1] == current {
+				stack = stack[:len(stack)-1]
+			}
+		case ',', ';':
+			if len(stack) == 0 {
+				return i
+			}
+		}
+	}
+	return endLimit
 }
 
 func (api *APIClient) getDiscoveryResource(ctx context.Context, resourceURL string) ([]byte, error) {

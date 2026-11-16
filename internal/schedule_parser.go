@@ -989,7 +989,10 @@ func tokenMatch(a, b string) bool {
 	if len(a) > len(b) {
 		shorter, longer = b, a
 	}
-	return len(shorter) >= 4 && strings.HasPrefix(longer, shorter)
+	if len(shorter) >= 4 && strings.HasPrefix(longer, shorter) {
+		return true
+	}
+	return len(shorter) >= 6 && levenshteinDistance(a, b) <= 2
 }
 
 // isNumericToken returns true if the token consists entirely of digits.

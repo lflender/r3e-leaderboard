@@ -122,7 +122,7 @@ func TestAPIClient_FetchProfileAvatar(t *testing.T) {
 		responseBody := append([]byte{8, 1, 18, 124}, bytes.Repeat([]byte{'x'}, 124)...)
 		responseBody = append(responseBody, 58, byte(len(storageURL)))
 		responseBody = append(responseBody, []byte(storageURL)...)
-		xorAPIResponsePrefix(responseBody, testResponseXORSeed, testResponseXORStep)
+		xorAPIResponsePrefix(responseBody, testResponseXORSeed, testResponseXORStep, testResponseXORLimit)
 		encoder, err := zstd.NewWriter(nil)
 		if err != nil {
 			t.Errorf("Create zstd encoder: %v", err)
@@ -185,9 +185,9 @@ func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
 			discoveryRequests++
 			_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
 		case "/assets/client.js":
-			bundle := "Zf=$(()=>[[1,`userId`,5],[2,`userName`,9],[3,`displayName`,9],[7,`avatarUrl`,9],[18,`responseStatus`,Km]])," +
-				"$g=e=>lg(`/iapi/35f91b2039c4f232fd422df64e52be7a`,e,void 0,void 0,Zf.decode)," +
-				"xr:`93e52559`,n[e]^=57+e*19&255"
+			bundle := "Zf=X(()=>[[1,`userId`,5],[2,`userName`,9],[3,`displayName`,9],[7,`avatarUrl`,9],[18,`responseStatus`,Km]])," +
+				"$g=e=>Q(`/iapi/35f91b2039c4f232fd422df64e52be7a`,e,void 0,void 0,Zf.decode)," +
+				"xr:`93e52559`,r=Math.min(512,n.length);for(let e=0;e<r;e++)n[e]^=57+e*19&255"
 			_, _ = w.Write([]byte(bundle))
 		case discoveredEndpoint:
 			profileRequests++
@@ -205,7 +205,7 @@ func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
 			}
 			const avatarURL = "https://example.com/avatar.webp"
 			responseBody := append([]byte{8, 1, 58, byte(len(avatarURL))}, []byte(avatarURL)...)
-			xorAPIResponsePrefix(responseBody, 57, 19)
+			xorAPIResponsePrefix(responseBody, 57, 19, 512)
 			w.Header().Set("Content-Type", "application/javascript-binast")
 			_, _ = w.Write(responseBody)
 		default:
@@ -364,35 +364,43 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 		name          string
 		endpoint      string
 		xr            string
+		schemaFactory string
 		helper        string
 		xorSeed       int
 		xorStep       int
+		xorLimit      int
 		cached        apiProtocol
 		staleEndpoint string
 	}{
 		{
-			name:     "previous bundle format",
-			endpoint: testPreviousLeaderboardID,
-			xr:       testPreviousRequestXR,
-			helper:   "cg",
-			xorSeed:  testPreviousResponseSeed,
-			xorStep:  testPreviousResponseStep,
+			name:          "previous bundle format",
+			endpoint:      testPreviousLeaderboardID,
+			xr:            testPreviousRequestXR,
+			schemaFactory: "$",
+			helper:        "cg",
+			xorSeed:       testPreviousResponseSeed,
+			xorStep:       testPreviousResponseStep,
+			xorLimit:      testResponseXORLimit,
 		},
 		{
-			name:     "current bundle format",
-			endpoint: "/iapi/4d6dc32acf4d75c9173f7641bf7951e3",
-			xr:       "93e52559",
-			helper:   "lg",
-			xorSeed:  57,
-			xorStep:  19,
+			name:          "current bundle format",
+			endpoint:      "/iapi/4d6dc32acf4d75c9173f7641bf7951e3",
+			xr:            "93e52559",
+			schemaFactory: "X",
+			helper:        "Q",
+			xorSeed:       57,
+			xorStep:       19,
+			xorLimit:      512,
 		},
 		{
 			name:          "changed protocol after startup",
 			endpoint:      "/iapi/4d6dc32acf4d75c9173f7641bf7951e3",
 			xr:            "93e52559",
-			helper:        "lg",
+			schemaFactory: "X",
+			helper:        "Q",
 			xorSeed:       57,
 			xorStep:       19,
+			xorLimit:      512,
 			cached:        testAPIProtocol(testPreviousLeaderboardID, testPreviousRequestXR, testPreviousResponseSeed, testPreviousResponseStep),
 			staleEndpoint: testPreviousLeaderboardID,
 		},
@@ -409,10 +417,11 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 					discoveryRequests++
 					_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
 				case "/assets/client.js":
-					bundle := "wf=$(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
+					bundle := "wf=" + test.schemaFactory + "(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
 						"Eg=e=>" + test.helper + "(`/iapi/" + strings.TrimPrefix(test.endpoint, "/iapi/") +
 						"`,e,void 0,void 0,wf.decode)," +
-						"xr:`" + test.xr + "`,n[e]^=" + strconv.Itoa(test.xorSeed) + "+e*" +
+						"xr:`" + test.xr + "`,r=Math.min(" + strconv.Itoa(test.xorLimit) +
+						",n.length);for(let e=0;e<r;e++)n[e]^=" + strconv.Itoa(test.xorSeed) + "+e*" +
 						strconv.Itoa(test.xorStep) + "&255"
 					_, _ = w.Write([]byte(bundle))
 				case test.endpoint:
@@ -420,7 +429,7 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 						t.Errorf("xr header = %q, want %q", got, test.xr)
 					}
 					w.Header().Set("Content-Type", "application/javascript-binast")
-					_, _ = w.Write(encodeTestLeaderboardResponseWithXOR(0, 1, test.xorSeed, test.xorStep))
+					_, _ = w.Write(encodeTestLeaderboardResponseWithXORAndLimit(0, 1, test.xorSeed, test.xorStep, test.xorLimit))
 				default:
 					t.Errorf("Unexpected request path %q", r.URL.Path)
 					http.NotFound(w, r)
@@ -451,7 +460,157 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 				t.Errorf("Cached response encoding = %d + i*%d, want %d + i*%d",
 					client.protocol.responseSeed, client.protocol.responseStep, test.xorSeed, test.xorStep)
 			}
+			if client.protocol.responseLimit != test.xorLimit {
+				t.Errorf("Cached response encoding limit = %d, want %d", client.protocol.responseLimit, test.xorLimit)
+			}
 		})
+	}
+}
+
+func TestAPIClient_FetchLeaderboardData_RediscoversChangedXORLimit(t *testing.T) {
+	const endpoint = "/iapi/0123456789abcdef"
+	var protocolRequests int
+	var discoveryRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case endpoint:
+			protocolRequests++
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(encodeTestLeaderboardResponseWithXORAndLimit(0, 3, 57, 19, 512))
+		case "/leaderboard/":
+			discoveryRequests++
+			_, _ = w.Write([]byte(`<script src="/assets/client.js"></script>`))
+		case "/assets/client.js":
+			_, _ = w.Write([]byte(
+				`board=X(()=>[[1,` + "`results`" + `,rows,1],[2,` + "`responseStatus`" + `,status]]),` +
+					`fetch=e=>Q("` + endpoint + `",e,void 0,void 0,board.decode),xr:"current-token",` +
+					`r=Math.min(512,n.length);for(let i=0;i<r;i++)n[i]^=57+i*19&255`,
+			))
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+	client.protocol = apiProtocol{
+		endpoint: endpoint, xr: "current-token",
+		responseSeed: 57, responseStep: 19, responseLimit: testResponseXORLimit,
+	}
+
+	results, _, err := client.FetchLeaderboardData(context.Background(), "7112", "1703")
+	if err != nil {
+		t.Fatalf("FetchLeaderboardData returned error: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("FetchLeaderboardData returned %d results, want 3", len(results))
+	}
+	if protocolRequests != 2 || discoveryRequests != 1 {
+		t.Errorf("protocol/discovery requests = %d/%d, want 2/1", protocolRequests, discoveryRequests)
+	}
+	if client.protocol.responseLimit != 512 {
+		t.Errorf("cached response XOR limit = %d, want 512", client.protocol.responseLimit)
+	}
+}
+
+func TestDiscoverAPIProtocolInBundle_ToleratesMinifierChanges(t *testing.T) {
+	tests := []struct {
+		name     string
+		bundle   string
+		endpoint string
+		seed     int
+		step     int
+		limit    int
+	}{
+		{
+			name: "factory, field order, and helper changed",
+			bundle: `boardSchema=makeSchema({fields:[[1,"results",items,1],[7,"cursor",3],[3,"responseStatus",status]]}),` +
+				`fetchBoard=params=>request({url:"/iapi/0123456789abcdef",decoder:boardSchema.decode},params),` +
+				`headers={"xr":"token-v2"}, r=Math.min(512,n.length);for(let i=0;i<r;i++)n[i] ^= 48 + i * 5 & 255`,
+			endpoint: "/iapi/0123456789abcdef",
+			seed:     48,
+			step:     5,
+			limit:    512,
+		},
+		{
+			name: "nested request call and quoted decoder header",
+			bundle: `responseSchema=register({fields:[[1,'results',items,1],[2,'responseStatus',status]]}),` +
+				`fetchBoard=params=>request(buildOptions('/iapi/abcdef0123456789',{decoder:responseSchema}),params),` +
+				`headers['xr']='token-v3', limit=Math.min(256,bytes.length);for(let i=0;i<limit;i++)bytes[i]^=31+i*7&255`,
+			endpoint: "/iapi/abcdef0123456789",
+			seed:     31,
+			step:     7,
+			limit:    256,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			protocol, err := discoverAPIProtocolInBundle([]byte(test.bundle), "leaderboard")
+			if err != nil {
+				t.Fatalf("discoverAPIProtocolInBundle returned error: %v", err)
+			}
+			if protocol.endpoint != test.endpoint {
+				t.Errorf("endpoint = %q, want %q", protocol.endpoint, test.endpoint)
+			}
+			if protocol.xr == "" {
+				t.Error("discovered protocol has no xr token")
+			}
+			if protocol.responseSeed != test.seed || protocol.responseStep != test.step || protocol.responseLimit != test.limit {
+				t.Errorf("response encoding = (%d, %d, %d), want (%d, %d, %d)",
+					protocol.responseSeed, protocol.responseStep, protocol.responseLimit, test.seed, test.step, test.limit)
+			}
+		})
+	}
+}
+
+func TestAPIClient_DiscoverAPIProtocol_ScansScriptBundles(t *testing.T) {
+	const endpoint = "/iapi/0123456789abcdef"
+	bundleRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/leaderboard/":
+			_, _ = w.Write([]byte(
+				`<script src="/assets/vendor.js"></script>` +
+					`<script type="module" src="/assets/entry.js"></script>` +
+					`<link rel="modulepreload" href="/assets/client.js?v=2">`,
+			))
+		case "/assets/vendor.js":
+			bundleRequests++
+			_, _ = w.Write([]byte(`vendorSchema=X(()=>[[1,"other",item,1]])`))
+		case "/assets/entry.js":
+			bundleRequests++
+			_, _ = w.Write([]byte(`entry=()=>{}`))
+		case "/assets/client.js":
+			bundleRequests++
+			_, _ = w.Write([]byte(
+				`boardSchema=createSchema({fields:[[1,"results",items,1],[2,"responseStatus",status]]}),` +
+					`fetchBoard=params=>request({url:"` + endpoint + `",decoder:boardSchema.decode},params),` +
+					`headers={"xr":"script-token"}, limit=Math.min(512,bytes.length);for(let i=0;i<limit;i++)bytes[i]^=57+i*19&255`,
+			))
+		default:
+			t.Errorf("Unexpected request path %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	protocol, err := client.discoverLeaderboardProtocol(context.Background())
+	if err != nil {
+		t.Fatalf("discoverLeaderboardProtocol returned error: %v", err)
+	}
+	if protocol.endpoint != endpoint || protocol.xr != "script-token" {
+		t.Errorf("discovered protocol = %+v, want endpoint %q and current token", protocol, endpoint)
+	}
+	if bundleRequests != 3 {
+		t.Errorf("bundle requests = %d, want 3", bundleRequests)
 	}
 }
 
