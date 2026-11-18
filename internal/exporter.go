@@ -47,8 +47,10 @@ type StatusData struct {
 	TrackCount               int           `json:"track_count"`
 	TotalFetchedCombinations int           `json:"total_fetched_combinations"`
 	TotalUniqueTracks        int           `json:"total_unique_tracks"`
+	TotalCombinations        int           `json:"total_combinations"`
 	TotalDrivers             int           `json:"total_drivers"`
 	TotalEntries             int           `json:"total_entries"`
+	IndexMetricsVersion      int           `json:"index_metrics_version,omitempty"`
 	LastIndexUpdate          time.Time     `json:"last_index_update"`
 	IndexBuildTimeMs         float64       `json:"index_build_time_ms"`
 	MemoryAllocMB            uint64        `json:"memory_alloc_mb"`
@@ -826,8 +828,18 @@ func ExportStatusData(status StatusData) error {
 	return writeStatusData(status)
 }
 
+// UpdateStatusData atomically updates selected status fields without losing concurrent changes.
+func UpdateStatusData(update func(*StatusData)) error {
+	statusDataMu.Lock()
+	defer statusDataMu.Unlock()
+	status := ReadStatusData()
+	update(&status)
+	return writeStatusData(status)
+}
+
 func writeStatusData(status StatusData) error {
 	status.TotalUniqueTracks = len(GetTracks())
+	status.TotalCombinations = status.TotalUniqueTracks * len(GetCarClasses())
 
 	// Convert to JSON
 	jsonData, err := json.MarshalIndent(status, "", "  ")
@@ -873,54 +885,47 @@ func writeStatusData(status StatusData) error {
 
 // UpdateLastAvatarRefresh records when all known avatar profiles were refreshed.
 func UpdateLastAvatarRefresh(timestamp time.Time) error {
-	statusDataMu.Lock()
-	defer statusDataMu.Unlock()
-
-	status := ReadStatusData()
-	if status.LastAvatarRefresh.After(timestamp) {
-		timestamp = status.LastAvatarRefresh
-	}
-	status.LastAvatarRefresh = timestamp
-	return writeStatusData(status)
+	return UpdateStatusData(func(status *StatusData) {
+		if timestamp.After(status.LastAvatarRefresh) {
+			status.LastAvatarRefresh = timestamp
+		}
+	})
 }
 
-// UpdateStatusWithIndexMetrics updates the status file with index statistics
-// This is exported so indexer.go can update status after building the index
-func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, totalEntries int, buildDuration time.Duration) error {
-	// Read current memory stats
+const indexMetricsVersion = 1
+
+func updateStatusWithIndexMetrics(combinations map[string]int, index DriverIndex, buildDuration time.Duration, rankedSeriesRefresh time.Time) error {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-
-	// Read existing status to preserve fetch/scrape fields
-	existingStatus := ReadStatusData()
-
-	// Count total cached combinations (including empty)
-	dataCache := NewDataCache()
-	totalCached := dataCache.CountCachedCombinations()
-
-	status := StatusData{
-		// Preserve orchestrator-managed fields
-		FetchInProgress: existingStatus.FetchInProgress,
-		LastScrapeStart: existingStatus.LastScrapeStart,
-		LastScrapeEnd:   existingStatus.LastScrapeEnd,
-		// Update index-related metrics
-		TrackCount:               len(tracks),
-		TotalFetchedCombinations: totalCached,
-		TotalDrivers:             len(index),
-		TotalEntries:             totalEntries,
-		LastIndexUpdate:          time.Now(),
-		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
-		MemoryAllocMB:            m.Alloc / 1024 / 1024,
-		MemorySysMB:              m.Sys / 1024 / 1024,
-		// Preserve ranked-series and fetch-error fields
-		FailedFetchCount:        existingStatus.FailedFetchCount,
-		FailedFetches:           existingStatus.FailedFetches,
-		RetriedFetchCount:       existingStatus.RetriedFetchCount,
-		LastAvatarRefresh:       existingStatus.LastAvatarRefresh,
-		RankedSeriesCount:       existingStatus.RankedSeriesCount,
-		LastRankedSeriesRefresh: existingStatus.LastRankedSeriesRefresh,
+	drivers := make(map[string]struct{})
+	for _, results := range index {
+		for _, result := range results {
+			if result.PathID != "" {
+				drivers[result.PathID] = struct{}{}
+			}
+		}
 	}
-	return ExportStatusData(status)
+	nonEmpty, entries := 0, 0
+	for _, count := range combinations {
+		if count > 0 {
+			nonEmpty++
+			entries += count
+		}
+	}
+	return UpdateStatusData(func(status *StatusData) {
+		status.TrackCount = nonEmpty
+		status.TotalFetchedCombinations = NewDataCache().CountCachedCombinations()
+		status.TotalDrivers = len(drivers)
+		status.TotalEntries = entries
+		status.IndexMetricsVersion = indexMetricsVersion
+		status.LastIndexUpdate = time.Now()
+		status.IndexBuildTimeMs = buildDuration.Seconds() * 1000
+		status.MemoryAllocMB = m.Alloc / 1024 / 1024
+		status.MemorySysMB = m.Sys / 1024 / 1024
+		if !rankedSeriesRefresh.IsZero() {
+			status.LastRankedSeriesRefresh = rankedSeriesRefresh
+		}
+	})
 }
 
 // ExportTopCombinations exports the top 1000 track/class combinations by entry count

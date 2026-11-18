@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -1697,6 +1698,34 @@ func TestStatusWritesConfiguredTracksAndRemovesLegacyTeams(t *testing.T) {
 				t.Fatalf("total_unique_tracks = %v, want %d", got, len(GetTracks()))
 			}
 		})
+	}
+}
+
+func TestUpdateStatusDataSerializesConcurrentUpdates(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	const updates = 20
+	var wg sync.WaitGroup
+	errors := make(chan error, updates)
+	for i := 0; i < updates; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errors <- UpdateStatusData(func(status *StatusData) {
+				status.TotalEntries++
+			})
+		}()
+	}
+	wg.Wait()
+	close(errors)
+	for err := range errors {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := ReadStatusData().TotalEntries; got != updates {
+		t.Fatalf("TotalEntries = %d, want %d", got, updates)
 	}
 }
 

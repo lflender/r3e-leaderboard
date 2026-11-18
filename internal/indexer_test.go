@@ -713,7 +713,7 @@ func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) 
 	}
 }
 
-func TestIncrementalIndexUpdate_PreservesTrackCountDuringRefresh(t *testing.T) {
+func TestIncrementalIndexUpdate_RecomputesTrackCountDuringRefresh(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
@@ -745,12 +745,99 @@ func TestIncrementalIndexUpdate_PreservesTrackCountDuringRefresh(t *testing.T) {
 	}
 
 	status := readJSONFile[StatusData](t, StatusFile)
-	// During a fetch, TrackCount is preserved from the orchestrator's progress value
-	if status.TrackCount != 5000 {
-		t.Fatalf("TrackCount = %d, expected 5000 (preserved during refresh)", status.TrackCount)
+	if status.TrackCount != 2 {
+		t.Fatalf("TrackCount = %d, expected 2 during refresh", status.TrackCount)
 	}
 	if status.TotalFetchedCombinations != 2 {
 		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
+	}
+}
+
+func TestIndexStatusCountsEntriesAndProfileIDs(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	cache := NewDataCache()
+	first := TrackInfo{Name: "Track A", TrackID: "1111", ClassID: "1703", Data: []map[string]interface{}{
+		{"driver": map[string]interface{}{"name": "Same Name", "path": "/users/info/101/"}},
+		{"driver": map[string]interface{}{"name": "Same Name", "path": "/users/info/102/"}},
+		{"driver": map[string]interface{}{"name": "No Profile"}},
+		{"invalid": true},
+	}}
+	second := TrackInfo{Name: "Track B", TrackID: "2222", ClassID: "1703", Data: []map[string]interface{}{
+		{"driver": map[string]interface{}{"name": "Renamed", "path": "/users/info/101/"}},
+	}}
+	empty := TrackInfo{Name: "Empty", TrackID: "3333", ClassID: "1703"}
+	for _, track := range []TrackInfo{first, second, empty} {
+		if err := cache.SaveTrackData(track); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := BuildAndExportIndex([]TrackInfo{first, second, empty}); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus := func(wantCombos, wantDrivers, wantEntries int) {
+		t.Helper()
+		status := ReadStatusData()
+		if status.TrackCount != wantCombos || status.TotalDrivers != wantDrivers || status.TotalEntries != wantEntries {
+			t.Fatalf("status counts = (%d, %d, %d), want (%d, %d, %d)", status.TrackCount, status.TotalDrivers, status.TotalEntries, wantCombos, wantDrivers, wantEntries)
+		}
+		if status.TotalUniqueTracks != len(GetTracks()) || status.TotalCombinations != len(GetTracks())*len(GetCarClasses()) {
+			t.Fatalf("configured totals are incorrect: %+v", status)
+		}
+	}
+	assertStatus(2, 2, 5)
+
+	if err := IncrementalIndexUpdate([]string{"3333-1703"}); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(2, 2, 5)
+
+	first.Data = []map[string]interface{}{{"invalid": true}}
+	if err := cache.SaveTrackData(first); err != nil {
+		t.Fatal(err)
+	}
+	second.Data = nil
+	if err := cache.SaveTrackData(second); err != nil {
+		t.Fatal(err)
+	}
+	if err := IncrementalIndexUpdate([]string{"1111-1703", "2222-1703"}); err != nil {
+		t.Fatal(err)
+	}
+	assertStatus(1, 0, 1)
+
+	all := readJSONFile[TopCombinationsData](t, AllCombinationsFile)
+	if all.Count != 1 || len(all.Results) != 1 || all.Results[0].EntryCount != 1 {
+		t.Fatalf("combination export does not match status: %+v", all)
+	}
+}
+
+func TestRebuildLegacyIndexMetrics(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+	track := GetTracks()[0]
+	class := GetCarClasses()[0]
+	data := TrackInfo{Name: track.Name, TrackID: track.TrackID, ClassID: class.ClassID, Data: []map[string]interface{}{
+		{"driver": map[string]interface{}{"name": "No Profile"}},
+		{"driver": map[string]interface{}{"name": "Real Profile", "path": "/users/info/101/"}},
+	}}
+	if err := NewDataCache().SaveTrackData(data); err != nil {
+		t.Fatal(err)
+	}
+	if err := ExportStatusData(StatusData{TotalDrivers: 100, TotalEntries: 100}); err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := RebuildLegacyIndexMetrics(context.Background())
+	if err != nil || !rebuilt {
+		t.Fatalf("legacy rebuild = %v, %v", rebuilt, err)
+	}
+	status := ReadStatusData()
+	if status.IndexMetricsVersion != indexMetricsVersion || status.TotalDrivers != 1 || status.TotalEntries != 2 || status.TrackCount != 1 {
+		t.Fatalf("incorrect rebuilt status: %+v", status)
+	}
+	rebuilt, err = RebuildLegacyIndexMetrics(context.Background())
+	if err != nil || rebuilt {
+		t.Fatalf("second legacy rebuild = %v, %v", rebuilt, err)
 	}
 }
 
