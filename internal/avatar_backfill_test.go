@@ -100,6 +100,30 @@ func TestRunAvatarBackfillJobsRetriesLookupFailure(t *testing.T) {
 	}
 }
 
+func TestRunAvatarBackfillJobsStopsOnAuthorizationFailure(t *testing.T) {
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			requestCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestCount++
+				http.Error(w, "authorization failed", status)
+			}))
+			defer server.Close()
+
+			attempted := make(map[string]struct{})
+			runAvatarBackfillJobs(context.Background(), []avatarBackfillJob{
+				{pathID: "123"}, {pathID: "456"},
+			}, newAvatarBackfillTestClient(server), 0, attempted, func([]avatarUpdate) error {
+				t.Error("must not save failed lookups")
+				return nil
+			})
+			if requestCount != 1 || len(attempted) != 0 {
+				t.Fatalf("requests = %d, completed = %d; want 1 request and no completed jobs", requestCount, len(attempted))
+			}
+		})
+	}
+}
+
 func TestRunAvatarBackfillJobsRetriesSaveFailure(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -204,31 +228,6 @@ func TestFindMissingDriverAvatarJobs(t *testing.T) {
 	}
 }
 
-func TestAvatarRefreshDue(t *testing.T) {
-	now := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
-	freshness := 24 * time.Hour
-
-	tests := []struct {
-		name        string
-		lastRefresh time.Time
-		freshness   time.Duration
-		want        bool
-	}{
-		{name: "never refreshed", want: true},
-		{name: "within freshness period", lastRefresh: now.Add(-freshness + time.Second), freshness: freshness},
-		{name: "freshness period elapsed", lastRefresh: now.Add(-freshness), freshness: freshness, want: true},
-		{name: "zero freshness", lastRefresh: now, freshness: 0, want: true},
-		{name: "negative freshness", lastRefresh: now, freshness: -time.Second, want: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := avatarRefreshDue(test.lastRefresh, now, test.freshness); got != test.want {
-				t.Errorf("avatarRefreshDue() = %t, want %t", got, test.want)
-			}
-		})
-	}
-}
-
 func TestSaveDriverAvatarUpdates(t *testing.T) {
 	withAvatarBackfillTempDir(t)
 	names := DriverNamesIndex{
@@ -320,12 +319,65 @@ func TestAvatarBackfillLogsETA(t *testing.T) {
 	}
 }
 
-func TestAvatarBackfillManagerScheduleCoalescesSignals(t *testing.T) {
-	manager := avatarBackfillManager{started: true, wake: make(chan struct{}, 1)}
-	manager.schedule()
-	manager.schedule()
-	if len(manager.wake) != 1 {
-		t.Fatalf("Queued wake signals = %d, want 1 coalesced signal", len(manager.wake))
+func TestNextAvatarBackfillTime(t *testing.T) {
+	location := time.FixedZone("server", 3600)
+	schedule := GetDefaultConfig().Schedule
+	tests := []struct {
+		name string
+		now  time.Time
+		want time.Time
+	}{
+		{"day before", time.Date(2026, 11, 15, 23, 0, 0, 0, location), time.Date(2026, 11, 16, 4, 0, 0, 0, location)},
+		{"before scheduled time", time.Date(2026, 11, 16, 3, 59, 0, 0, location), time.Date(2026, 11, 16, 4, 0, 0, 0, location)},
+		{"exact scheduled time", time.Date(2026, 11, 16, 4, 0, 0, 0, location), time.Date(2026, 11, 23, 4, 0, 0, 0, location)},
+		{"after scheduled time", time.Date(2026, 11, 16, 5, 0, 0, 0, location), time.Date(2026, 11, 23, 4, 0, 0, 0, location)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := nextAvatarBackfillTime(tt.now, schedule)
+			if !got.Equal(tt.want) || got.Location() != location {
+				t.Fatalf("next backfill = %s, want %s in server time", got, tt.want)
+			}
+		})
+	}
+
+	schedule.AvatarBackfillWeekday = time.Friday
+	schedule.AvatarBackfillHour = 18
+	schedule.AvatarBackfillMinute = 30
+	now := time.Date(2026, 11, 16, 4, 0, 0, 0, location)
+	want := time.Date(2026, 11, 20, 18, 30, 0, 0, location)
+	if got := nextAvatarBackfillTime(now, schedule); !got.Equal(want) {
+		t.Fatalf("custom schedule = %s, want %s", got, want)
+	}
+}
+
+func TestStartDriverAvatarBackfillRejectsInvalidSchedule(t *testing.T) {
+	for _, schedule := range []ScheduleConfig{
+		{AvatarBackfillWeekday: -1},
+		{AvatarBackfillWeekday: 7},
+		{AvatarBackfillHour: -1},
+		{AvatarBackfillHour: 24},
+		{AvatarBackfillMinute: -1},
+		{AvatarBackfillMinute: 60},
+	} {
+		if err := StartDriverAvatarBackfill(context.Background(), schedule); err == nil {
+			t.Errorf("expected invalid schedule error for %+v", schedule)
+		}
+	}
+}
+
+func TestAvatarBackfillStopsWhileWaiting(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		runDriverAvatarBackfill(ctx, GetDefaultConfig().Schedule)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("backfill scheduler did not stop after cancellation")
 	}
 }
 

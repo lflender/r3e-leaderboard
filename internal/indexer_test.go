@@ -479,8 +479,8 @@ func TestBuildAndExportIndex_ExportsAllArtifacts(t *testing.T) {
 	if status.TotalEntries != 5 {
 		t.Fatalf("TotalEntries = %d, expected 5", status.TotalEntries)
 	}
-	if status.TotalUniqueTracks != 2 {
-		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	if status.TotalUniqueTracks != len(GetTracks()) {
+		t.Fatalf("TotalUniqueTracks = %d, expected %d", status.TotalUniqueTracks, len(GetTracks()))
 	}
 
 	top := readJSONFile[TopCombinationsData](t, TopCombinationsFile)
@@ -596,8 +596,8 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	if status.TotalEntries != 2 {
 		t.Fatalf("TotalEntries = %d, expected 2", status.TotalEntries)
 	}
-	if !status.LastDailyRaceRefresh.Equal(refreshTS) {
-		t.Fatalf("LastDailyRaceRefresh = %v, expected %v", status.LastDailyRaceRefresh, refreshTS)
+	if !status.LastRankedSeriesRefresh.Equal(refreshTS) {
+		t.Fatalf("LastRankedSeriesRefresh = %v, expected %v", status.LastRankedSeriesRefresh, refreshTS)
 	}
 
 	if _, err := os.Stat(StatsOverallPoleFile); !os.IsNotExist(err) {
@@ -708,8 +708,8 @@ func TestIncrementalIndexUpdate_RecomputesStatusCombinationTotals(t *testing.T) 
 	if status.TotalFetchedCombinations != 2 {
 		t.Fatalf("TotalFetchedCombinations = %d, expected 2", status.TotalFetchedCombinations)
 	}
-	if status.TotalUniqueTracks != 2 {
-		t.Fatalf("TotalUniqueTracks = %d, expected 2", status.TotalUniqueTracks)
+	if status.TotalUniqueTracks != len(GetTracks()) {
+		t.Fatalf("TotalUniqueTracks = %d, expected %d", status.TotalUniqueTracks, len(GetTracks()))
 	}
 }
 

@@ -17,24 +17,31 @@ type Scheduler struct {
 // NewScheduler creates a scheduler with a daily anchor time and repeat interval.
 // refreshHour: 0-23, refreshMinute: 0-59, refreshIntervalHours: positive number of hours
 func NewScheduler(refreshHour, refreshMinute, refreshIntervalHours int) *Scheduler {
-	if refreshIntervalHours <= 0 {
-		log.Printf("⚠️ Invalid full refresh interval (%d hours); defaulting to %d hours",
-			refreshIntervalHours, defaultFullRefreshIntervalHours)
-		refreshIntervalHours = defaultFullRefreshIntervalHours
-	}
-
 	return &Scheduler{
 		refreshHour:     refreshHour,
 		refreshMinute:   refreshMinute,
-		refreshInterval: time.Duration(refreshIntervalHours) * time.Hour,
+		refreshInterval: fullRefreshInterval(refreshIntervalHours),
 		stopChan:        make(chan bool),
 		stopped:         false,
 	}
 }
 
-// Start begins the background scheduler
-func (s *Scheduler) Start(refreshCallback func()) {
-	go s.runScheduler(refreshCallback)
+// NextRefreshTime returns the next refresh based on the last scrape, or the
+// configured daily anchor when there is no usable previous scrape.
+func (s *Scheduler) NextRefreshTime(now, lastRefresh time.Time) time.Time {
+	if !lastRefresh.IsZero() && !lastRefresh.After(now) {
+		return lastRefresh.Add(s.refreshInterval)
+	}
+	return nextAutomaticRefreshTime(now, s.refreshHour, s.refreshMinute, s.refreshInterval)
+}
+
+// Start begins the background scheduler.
+func (s *Scheduler) Start(refreshCallback func(), lastRefresh time.Time) {
+	if lastRefresh.After(time.Now()) {
+		log.Printf("⚠️ Last scrape start is in the future (%s); using the scheduled anchor", lastRefresh.Format(time.RFC3339))
+		lastRefresh = time.Time{}
+	}
+	go s.runScheduler(refreshCallback, lastRefresh)
 }
 
 // Stop stops the background scheduler
@@ -47,7 +54,7 @@ func (s *Scheduler) Stop() {
 }
 
 // runScheduler runs the background scheduling loop
-func (s *Scheduler) runScheduler(refreshCallback func()) {
+func (s *Scheduler) runScheduler(refreshCallback func(), lastRefresh time.Time) {
 	defer func() {
 		// Clean up on exit
 		log.Println("📅 Scheduler goroutine exiting")
@@ -55,10 +62,13 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 
 	for {
 		now := time.Now()
-		nextRefresh := nextAutomaticRefreshTime(now, s.refreshHour, s.refreshMinute, s.refreshInterval)
+		nextRefresh := s.NextRefreshTime(now, lastRefresh)
 
 		timeUntilRefresh := time.Until(nextRefresh)
-		log.Printf("📅 Next automatic refresh scheduled in %v (at %s)", timeUntilRefresh.Round(time.Minute), nextRefresh.Format("2006-01-02 15:04"))
+		if timeUntilRefresh < 0 {
+			timeUntilRefresh = 0
+		}
+		log.Printf("📅 Next automatic refresh scheduled in %v (at %s)", timeUntilRefresh.Round(time.Minute), nextRefresh.Format(time.RFC3339))
 
 		// Use a timer instead of time.After to allow cleanup
 		timer := time.NewTimer(timeUntilRefresh)
@@ -67,6 +77,7 @@ func (s *Scheduler) runScheduler(refreshCallback func()) {
 		select {
 		case <-timer.C:
 			log.Printf("🕓 Automatic cache refresh triggered at %s", time.Now().Format("15:04"))
+			lastRefresh = time.Now()
 			refreshCallback()
 		case <-s.stopChan:
 			timer.Stop()

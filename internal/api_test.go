@@ -185,7 +185,9 @@ func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
 			discoveryRequests++
 			_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
 		case "/assets/client.js":
-			bundle := "Zf=X(()=>[[1,`userId`,5],[2,`userName`,9],[3,`displayName`,9],[7,`avatarUrl`,9],[18,`responseStatus`,Km]])," +
+			bundle := "account=X(()=>[[1,`userId`,5],[6,`email`,9],[10,`avatarUrl`,9],[12,`responseStatus`,Km]])," +
+				"private=e=>Q(`/iapi/1111111111111111`,e,void 0,void 0,account.decode)," +
+				"Zf=X(()=>[[1,`userId`,5],[2,`userName`,9],[3,`displayName`,9],[7,`avatarUrl`,9],[14,`multiplayer`,Mp],[15,`timeAttack`,Ta],[18,`responseStatus`,Km]])," +
 				"$g=e=>Q(`/iapi/35f91b2039c4f232fd422df64e52be7a`,e,void 0,void 0,Zf.decode)," +
 				"xr:`93e52559`,r=Math.min(512,n.length);for(let e=0;e<r;e++)n[e]^=57+e*19&255"
 			_, _ = w.Write([]byte(bundle))
@@ -564,6 +566,23 @@ func TestDiscoverAPIProtocolInBundle_ToleratesMinifierChanges(t *testing.T) {
 					protocol.responseSeed, protocol.responseStep, protocol.responseLimit, test.seed, test.step, test.limit)
 			}
 		})
+	}
+}
+
+func TestDiscoverAPIProtocolInBundle_SelectsRankedSeriesDetails(t *testing.T) {
+	bundle := `metadataSchema=createSchema({fields:[[1,"series",items,1],[2,"responseStatus",status]]}),` +
+		`fetchMetadata=params=>request({url:"/iapi/111111111111",decoder:metadataSchema.decode},params),` +
+		`rankedSeriesItem=createSchema({fields:[[1,"rounds",items,1],[2,"currentRound",3]]}),` +
+		`rankedSeriesSchema=createSchema({fields:[[1,"series",rankedSeriesItem,1],[2,"responseStatus",status]]}),` +
+		`fetchRankedSeries=params=>request({url:"/iapi/222222222222",decoder:rankedSeriesSchema.decode},params),` +
+		`headers={"xr":"series-token"}, limit=Math.min(512,bytes.length);for(let i=0;i<limit;i++)bytes[i]^=51+i*5&255`
+
+	protocol, err := discoverAPIProtocolInBundle([]byte(bundle), "series")
+	if err != nil {
+		t.Fatalf("discoverAPIProtocolInBundle returned error: %v", err)
+	}
+	if protocol.endpoint != "/iapi/222222222222" {
+		t.Errorf("endpoint = %q, want ranked-series details endpoint", protocol.endpoint)
 	}
 }
 

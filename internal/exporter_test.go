@@ -32,7 +32,7 @@ func TestStatusData_Struct(t *testing.T) {
 		MemorySysMB:              256,
 		FailedFetchCount:         5,
 		RetriedFetchCount:        3,
-		DailySprintRacesCount:    6,
+		RankedSeriesCount:        6,
 	}
 
 	// Test JSON marshaling
@@ -1648,8 +1648,8 @@ func TestExportStatusData_WritesJSONFile(t *testing.T) {
 		MemorySysMB:              20,
 		FailedFetchCount:         1,
 		RetriedFetchCount:        2,
-		DailySprintRacesCount:    4,
-		LastDailyRaceRefresh:     now.Add(15 * time.Minute),
+		RankedSeriesCount:        4,
+		LastRankedSeriesRefresh:  now.Add(15 * time.Minute),
 	}
 
 	if err := ExportStatusData(status); err != nil {
@@ -1660,11 +1660,43 @@ func TestExportStatusData_WritesJSONFile(t *testing.T) {
 	if loaded.TotalDrivers != status.TotalDrivers {
 		t.Fatalf("TotalDrivers = %d, expected %d", loaded.TotalDrivers, status.TotalDrivers)
 	}
-	if !loaded.LastDailyRaceRefresh.Equal(status.LastDailyRaceRefresh) {
-		t.Fatalf("LastDailyRaceRefresh = %v, expected %v", loaded.LastDailyRaceRefresh, status.LastDailyRaceRefresh)
+	if !loaded.LastRankedSeriesRefresh.Equal(status.LastRankedSeriesRefresh) {
+		t.Fatalf("LastRankedSeriesRefresh = %v, expected %v", loaded.LastRankedSeriesRefresh, status.LastRankedSeriesRefresh)
 	}
 	if _, err := os.Stat(StatusFile + ".tmp"); !os.IsNotExist(err) {
 		t.Fatalf("Temporary status file should be removed, got err=%v", err)
+	}
+}
+
+func TestStatusWritesConfiguredTracksAndRemovesLegacyTeams(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	if err := os.MkdirAll(filepath.Dir(StatusFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name  string
+		write func() error
+	}{
+		{"status export", func() error { return ExportStatusData(ReadStatusData()) }},
+		{"avatar timestamp update", func() error { return UpdateLastAvatarRefresh(time.Now()) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := os.WriteFile(StatusFile, []byte(`{"total_unique_tracks":999999,"total_teams":42}`), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tt.write(); err != nil {
+				t.Fatal(err)
+			}
+			status := readJSONFile[map[string]interface{}](t, StatusFile)
+			if _, exists := status["total_teams"]; exists {
+				t.Fatal("total_teams must not be written")
+			}
+			if got := status["total_unique_tracks"]; got != float64(len(GetTracks())) {
+				t.Fatalf("total_unique_tracks = %v, want %d", got, len(GetTracks()))
+			}
+		})
 	}
 }
 

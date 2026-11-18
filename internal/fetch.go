@@ -289,7 +289,7 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// NOTE: We intentionally do NOT call tempCache.PromoteTempCache() here.
-	// Promotion is the responsibility of the caller (e.g., RefreshDailyRaceCombinations,
+	// Promotion is the responsibility of the caller (e.g., ranked-series refresh,
 	// PerformTargetedRefresh) so it can capture ALL promoted combo IDs for incremental
 	// indexing. Calling PromoteTempCache() here would silently promote files from
 	// concurrent operations (like the startup loader) without passing their combo IDs
@@ -409,7 +409,7 @@ func FetchTargetedTrackDataWithCallback(ctx context.Context, trackIDs []string, 
 		}
 	}
 
-	log.Printf("📊 Refreshing %d Daily Race combinations...", totalCombos)
+	log.Printf("📊 Refreshing %d targeted combinations...", totalCombos)
 
 	// Log what we're refreshing
 	for _, combo := range targetCombos {

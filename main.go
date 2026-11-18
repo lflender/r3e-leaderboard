@@ -38,31 +38,6 @@ func main() {
 	config := internal.GetDefaultConfig()
 	internal.SetAPIThrottle(time.Duration(config.Data.APIThrottleMs) * time.Millisecond)
 
-	// Initialize Discord client if enabled
-	var discordClient *internal.DiscordClient
-	if config.Discord.Enabled {
-		discordClient = internal.NewDiscordClient(config.Discord)
-		log.Println("🔄 Phase 1: Fetch discord schedule")
-
-		// Check for initial Daily Sprint Races message at startup (synchronous)
-		// This ensures the cache is updated BEFORE the orchestrator starts
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		result, err := discordClient.CheckForNewDailySprintRaces(ctx, config.Discord.MessageCheckMins)
-		cancel()
-
-		if err != nil {
-			log.Printf("⚠️ Failed to check Discord at startup: %v", err)
-		} else if result != nil {
-			// Save to cache
-			cache := internal.NewDataCache()
-			if saveErr := cache.SaveDiscordRaces(result); saveErr != nil {
-				log.Printf("⚠️ Failed to save Discord races to cache: %v", saveErr)
-			}
-		}
-	} else {
-		log.Println("ℹ️ Discord integration disabled (no bot token found)")
-	}
-
 	// Initialize application lifecycle context
 	appContext, appCancel := context.WithCancel(context.Background())
 
@@ -88,29 +63,25 @@ func main() {
 	mpCancel()
 
 	// Start background operations
-	orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
-	internal.StartDriverAvatarBackfill(
-		appContext,
-		time.Duration(config.Data.AvatarCacheFreshnessHours)*time.Hour,
-	)
-	orchestrator.StartScheduledRefresh(
+	if err := internal.StartDriverAvatarBackfill(appContext, config.Schedule); err != nil {
+		log.Printf("⚠️ Avatar URL backfill not started: %v", err)
+	}
+	overdue := orchestrator.StartScheduledRefresh(
 		config.Schedule.RefreshHour,
 		config.Schedule.RefreshMinute,
 		config.Schedule.RefreshIntervalHours,
 		config.Schedule.IndexingMinutes,
 	)
+	if overdue {
+		log.Println("🔄 Last scrape is overdue; starting a full refresh instead of normal startup loading")
+	} else {
+		orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
+	}
 	// Ultra-lightweight manual trigger via file sentinel
 	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60, config.Schedule.IndexingMinutes)
-	// Standalone Daily Race refresh loop (runs when system is idle)
-	orchestrator.StartDailyRaceRefreshLoop(config.Schedule.DailyRaceRefreshIntervalMins)
 
 	// Start periodic memory monitoring and GC
 	go periodicMemoryMonitoring(appContext)
-
-	// Start Discord message checking if enabled (every hour before Daily Race refresh)
-	if config.Discord.Enabled && discordClient != nil {
-		go periodicDiscordChecking(appContext, discordClient, config.Schedule.DailyRaceRefreshIntervalMins)
-	}
 
 	// Wait for shutdown signal
 	waitForShutdown()
@@ -154,37 +125,6 @@ func periodicMemoryMonitoring(ctx context.Context) {
 				m.Alloc/1024/1024, m.Sys/1024/1024, m.NumGC)
 		case <-ctx.Done():
 			log.Println("⏹️ Memory monitoring stopped")
-			return
-		}
-	}
-}
-
-func periodicDiscordChecking(ctx context.Context, client *internal.DiscordClient, checkMinutes int) {
-	// Use the same interval as checkMinutes for polling
-	checkInterval := time.Duration(checkMinutes) * time.Minute
-	ticker := time.NewTicker(checkInterval)
-	defer ticker.Stop()
-
-	log.Printf("🔄 Discord message checking started (every %d minutes)", checkMinutes)
-
-	for {
-		select {
-		case <-ticker.C:
-			checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			result, err := client.CheckForNewDailySprintRaces(checkCtx, checkMinutes)
-			cancel()
-
-			if err != nil {
-				log.Printf("⚠️ Discord check failed: %v", err)
-			} else if result != nil {
-				// Save to cache
-				cache := internal.NewDataCache()
-				if saveErr := cache.SaveDiscordRaces(result); saveErr != nil {
-					log.Printf("⚠️ Failed to save Discord races to cache: %v", saveErr)
-				}
-			}
-		case <-ctx.Done():
-			log.Println("⏹️ Discord checking stopped")
 			return
 		}
 	}

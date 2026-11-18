@@ -2,10 +2,74 @@ package internal
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 )
 
+func TestStartupCacheFreshnessUsesRefreshInterval(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+
+	track := TrackConfig{Name: "Test", TrackID: "123"}
+	class := CarClassConfig{Name: "Test", ClassID: "456"}
+	cache := NewDataCache()
+	tests := []struct {
+		name         string
+		age          time.Duration
+		hours        int
+		missing      bool
+		wantFetching bool
+	}{
+		{"fresh within three hours", 2 * time.Hour, 3, false, false},
+		{"expired after three hours", 4 * time.Hour, 3, false, true},
+		{"same cache fresh with six hour interval", 4 * time.Hour, 6, false, false},
+		{"invalid interval uses scheduler default", 4 * time.Hour, 0, false, true},
+		{"missing cache", 0, 3, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := cache.SaveTrackData(TrackInfo{Name: track.Name, TrackID: track.TrackID, ClassID: class.ClassID, Data: []map[string]interface{}{{"test": true}}}); err != nil {
+				t.Fatal(err)
+			}
+			path := cache.GetCacheFileName(track.TrackID, class.ClassID)
+			if tt.missing {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				modified := time.Now().Add(-tt.age)
+				if err := os.Chtimes(path, modified, modified); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			called := false
+			loadAllTrackDataWithCallback(ctx, []TrackConfig{track}, []CarClassConfig{class}, nil, func(_ []TrackInfo, needsFetching bool) {
+				called = true
+				if needsFetching != tt.wantFetching {
+					t.Errorf("needsFetching = %t, want %t", needsFetching, tt.wantFetching)
+				}
+				cancel()
+			}, tt.hours)
+			if !called {
+				t.Fatal("cache completion callback was not called")
+			}
+		})
+	}
+}
 
 func TestLoadAllCachedData_EmptyContext(t *testing.T) {
 	ctx := context.Background()
@@ -107,7 +171,7 @@ func TestLoadAllTrackDataWithCallback_NilCallbacks(t *testing.T) {
 	defer cancel()
 
 	// Should not crash with nil callbacks
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("LoadAllTrackDataWithCallback returned nil")
@@ -125,7 +189,7 @@ func TestLoadAllTrackDataWithCallback_ProgressCallbackInvoked(t *testing.T) {
 		callCount++
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, progressCallback, nil)
+	result := LoadAllTrackDataWithCallback(ctx, progressCallback, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -147,7 +211,7 @@ func TestLoadAllTrackDataWithCallback_CacheCompleteCallbackInvoked(t *testing.T)
 		needsFetching = needsFetch
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, cacheCompleteCallback)
+	result := LoadAllTrackDataWithCallback(ctx, nil, cacheCompleteCallback, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -174,7 +238,7 @@ func TestLoadAllTrackDataWithCallback_BothCallbacks(t *testing.T) {
 		cacheCompleteCallCount++
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback)
+	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -197,7 +261,7 @@ func TestLoadAllTrackDataWithCallback_CancelledDuringCacheLoad(t *testing.T) {
 		cancel()
 	}()
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil even with cancellation")
@@ -215,7 +279,7 @@ func TestLoadAllTrackDataWithCallback_CancelledDuringFetch(t *testing.T) {
 		cancel()
 	}()
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil even with cancellation")
@@ -237,7 +301,7 @@ func TestLoadAllTrackDataWithCallback_FourPhaseFlow(t *testing.T) {
 		phases = append(phases, "cache_complete")
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback)
+	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -263,7 +327,7 @@ func TestLoadAllTrackDataWithCallback_ReturnStructure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -294,7 +358,7 @@ func TestLoadAllTrackDataWithCallback_CacheExpiriyCheck(t *testing.T) {
 		cacheStatus = needsFetch
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, cacheCompleteCallback)
+	result := LoadAllTrackDataWithCallback(ctx, nil, cacheCompleteCallback, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -314,7 +378,7 @@ func TestLoadAll_ClientClosed(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -332,7 +396,7 @@ func TestLoadAllTrackDataWithCallback_MemoryCleanup(t *testing.T) {
 	defer cancel()
 
 	// Load data - this should trigger cleanup
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -349,7 +413,7 @@ func TestLoadAllTrackDataWithCallback_TempCachePromotion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result := LoadAllTrackDataWithCallback(ctx, nil, nil)
+	result := LoadAllTrackDataWithCallback(ctx, nil, nil, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
@@ -377,7 +441,7 @@ func TestLoadAllTrackDataWithCallback_CacheCompleteBeforeProgress(t *testing.T) 
 		order = append(order, "cache_complete")
 	}
 
-	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback)
+	result := LoadAllTrackDataWithCallback(ctx, progressCallback, cacheCompleteCallback, defaultFullRefreshIntervalHours)
 
 	if result == nil {
 		t.Error("Result should not be nil")
