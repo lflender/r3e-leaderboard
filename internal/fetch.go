@@ -136,12 +136,9 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 
 // exportFailedFetches saves failed fetch information to the status file
 func exportFailedFetches(failedFetches []FailedFetchInfo) {
-	status := ReadStatusData()
-	status.FailedFetchCount = len(failedFetches)
-	status.FailedFetches = make([]FailedFetch, 0, len(failedFetches))
-
+	failures := make([]FailedFetch, 0, len(failedFetches))
 	for _, failed := range failedFetches {
-		status.FailedFetches = append(status.FailedFetches, FailedFetch{
+		failures = append(failures, FailedFetch{
 			TrackName: failed.Track.Name,
 			TrackID:   failed.Track.TrackID,
 			ClassID:   failed.Class.ClassID,
@@ -150,7 +147,10 @@ func exportFailedFetches(failedFetches []FailedFetchInfo) {
 		})
 	}
 
-	if err := ExportStatusData(status); err != nil {
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.FailedFetchCount = len(failures)
+		status.FailedFetches = failures
+	}); err != nil {
 		log.Printf("⚠️ Failed to export failed fetch data: %v", err)
 	}
 }
@@ -300,23 +300,7 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 		log.Printf("⚠️ %d combination(s) failed to fetch (will retry later)", len(failedFetches))
 	}
 
-	status := ReadStatusData()
-	status.FailedFetchCount = len(failedFetches)
-	status.FailedFetches = make([]FailedFetch, 0, len(failedFetches))
-
-	for _, failed := range failedFetches {
-		status.FailedFetches = append(status.FailedFetches, FailedFetch{
-			TrackName: failed.Track.Name,
-			TrackID:   failed.Track.TrackID,
-			ClassID:   failed.Class.ClassID,
-			Error:     failed.Err.Error(),
-			Timestamp: time.Now(),
-		})
-	}
-
-	if err := ExportStatusData(status); err != nil {
-		log.Printf("⚠️ Failed to export failed fetch data: %v", err)
-	}
+	exportFailedFetches(failedFetches)
 
 	return allTrackData
 }

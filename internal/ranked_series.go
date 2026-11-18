@@ -735,9 +735,9 @@ func RefreshRankedSeriesCombinations(ctx context.Context, series []RankedSeries,
 }
 
 func UpdateRankedSeriesRefreshTime() {
-	status := ReadStatusData()
-	status.LastRankedSeriesRefresh = time.Now()
-	if err := ExportStatusData(status); err != nil {
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.LastRankedSeriesRefresh = time.Now()
+	}); err != nil {
 		log.Printf("⚠️ Failed to update ranked-series refresh time: %v", err)
 	}
 }

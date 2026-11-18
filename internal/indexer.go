@@ -187,7 +187,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 					pathStr, _ := driverMap["path"].(string)
 					pathID := ExtractPathID(pathStr)
 					if pathID == "" {
-						pathID = strings.ToLower(name) // fallback for entries without path
+						pathID = "\x00" + strings.ToLower(name)
 					}
 					driverCounts[pathID]++
 				}
@@ -227,8 +227,9 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 			// Extract pathID — the unique driver identifier
 			pathStr, _ := driverMap["path"].(string)
 			pathID := ExtractPathID(pathStr)
-			if pathID == "" {
-				pathID = strings.ToLower(name) // fallback for entries without path
+			driverKey := pathID
+			if driverKey == "" {
+				driverKey = "\x00" + strings.ToLower(name)
 			}
 
 			// Get position
@@ -306,7 +307,7 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 			}
 
 			// Add to index by pathID
-			index[pathID] = append(index[pathID], result)
+			index[driverKey] = append(index[driverKey], result)
 		}
 	}
 
@@ -321,7 +322,10 @@ func buildDriverIndex(tracks []TrackInfo) (DriverIndex, map[string]int, int, int
 func BuildAndExportIndex(tracks []TrackInfo) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
+	return buildAndExportIndex(tracks)
+}
 
+func buildAndExportIndex(tracks []TrackInfo) error {
 	if len(tracks) == 0 {
 		log.Println("⚠️ No tracks to index - skipping export")
 		return nil
@@ -348,9 +352,11 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		log.Printf("⚠️ Failed to export teams index: %v", err)
 	}
 
-	// Update status with index statistics
-	if err := UpdateStatusWithIndexMetrics(tracks, index, totalEntries, buildDuration); err != nil {
-		log.Printf("⚠️ Failed to update status with index stats: %v", err)
+	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
+		return err
+	}
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, time.Time{}); err != nil {
+		return fmt.Errorf("update index status: %w", err)
 	}
 
 	// Clean up index variable after export
@@ -370,11 +376,32 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 		float64(mAfter.Alloc)/(1024*1024),
 		float64(mBefore.Alloc-mAfter.Alloc)/(1024*1024))
 
-	// Export top combinations
-	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
-		return err
-	}
 	return nil
+}
+
+// RebuildLegacyIndexMetrics upgrades existing indexes whose fallback names were
+// stored as profile IDs. It returns whether an index rebuild was performed.
+func RebuildLegacyIndexMetrics(ctx context.Context) (bool, error) {
+	indexUpdateMu.Lock()
+	defer indexUpdateMu.Unlock()
+	return rebuildLegacyIndexMetrics(ctx)
+}
+
+func rebuildLegacyIndexMetrics(ctx context.Context) (bool, error) {
+	if ReadStatusData().IndexMetricsVersion == indexMetricsVersion {
+		return false, nil
+	}
+	tracks := LoadAllCachedData(ctx)
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if len(tracks) == 0 {
+		return false, fmt.Errorf("cannot rebuild legacy index metrics: no cached combinations with entries")
+	}
+	if err := buildAndExportIndex(tracks); err != nil {
+		return false, fmt.Errorf("rebuild legacy index metrics: %w", err)
+	}
+	return true, nil
 }
 
 // HasShardedIndex returns true when both letter-sharded metadata and at least
@@ -487,8 +514,7 @@ func LoadDriverIndexFromShards() (DriverIndex, error) {
 		for _, r := range results {
 			pathID := r.PathID
 			if pathID == "" {
-				pathID = lowerName
-				r.PathID = pathID
+				pathID = "\x00" + lowerName
 			}
 
 			if identity, ok := identityByPathID[pathID]; ok {
@@ -550,6 +576,19 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 		return nil
 	}
 
+	rebuilt, err := rebuildLegacyIndexMetrics(context.Background())
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		if !rankedSeriesRefresh.IsZero() {
+			return UpdateStatusData(func(status *StatusData) {
+				status.LastRankedSeriesRefresh = rankedSeriesRefresh
+			})
+		}
+		return nil
+	}
+
 	indexStart := time.Now()
 
 	// NOTE: Do NOT call runtime.GC() or debug.FreeOSMemory() before loading the
@@ -562,6 +601,17 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	index, err := LoadDriverIndexFromShards()
 	if err != nil {
 		return fmt.Errorf("incremental update failed — cannot load sharded index: %w", err)
+	}
+	allCombinations, err := readGzipJSON[TopCombinationsData](AllCombinationsFile)
+	if err != nil {
+		return fmt.Errorf("incremental update failed to load indexed combination counts: %w", err)
+	}
+	combinationTracks := make(map[string]TrackInfo, len(allCombinations.Results))
+	trackEntryCounts := make(map[string]int, len(allCombinations.Results))
+	for _, combination := range allCombinations.Results {
+		key := combination.TrackID + "_" + combination.ClassID
+		combinationTracks[key] = TrackInfo{Name: combination.Track, TrackID: combination.TrackID, ClassID: combination.ClassID}
+		trackEntryCounts[key] = combination.EntryCount
 	}
 
 	// 2. Parse changed combos into a lookup set
@@ -620,9 +670,11 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	for combo := range changed {
 		trackInfo, err := cache.LoadTrackData(combo.trackID, combo.classID)
 		if err != nil {
-			log.Printf("⚠️ Incremental update: failed to load %s-%s: %v", combo.trackID, combo.classID, err)
-			continue
+			return fmt.Errorf("incremental update: failed to load %s-%s: %w", combo.trackID, combo.classID, err)
 		}
+		key := combo.trackID + "_" + combo.classID
+		combinationTracks[key] = metadataOnlyTrackInfo(trackInfo)
+		trackEntryCounts[key] = len(trackInfo.Data)
 
 		// Add entries to index (same logic as buildDriverIndex second pass)
 		for _, entry := range trackInfo.Data {
@@ -642,8 +694,9 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 			// Extract pathID — the unique driver identifier
 			pathStr, _ := driverMap["path"].(string)
 			pathID := ExtractPathID(pathStr)
-			if pathID == "" {
-				pathID = strings.ToLower(name) // fallback for entries without path
+			driverKey := pathID
+			if driverKey == "" {
+				driverKey = "\x00" + strings.ToLower(name)
 			}
 
 			// Get position
@@ -705,7 +758,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 				result.DateTime = dateTime
 			}
 
-			index[pathID] = append(index[pathID], result)
+			index[driverKey] = append(index[driverKey], result)
 			addedEntries++
 		}
 		// Free trackInfo.Data immediately
@@ -718,21 +771,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	buildDuration := time.Since(indexStart)
 	log.Printf("🔍 Incremental index update: %.3f seconds (%d drivers, %d entries, -%d/+%d changed)",
 		buildDuration.Seconds(), len(index), totalEntries, removedEntries, addedEntries)
-
-	// 5. Capture stats we need BEFORE export, then nil the index immediately after
-	driverCount := len(index)
-
-	// Count unique non-empty track+class combinations from the index
-	comboSet := make(map[string]struct{}, 1024)
-	for _, results := range index {
-		for _, r := range results {
-			if r.TrackID != "" && r.ClassID != "" {
-				comboSet[r.TrackID+"_"+r.ClassID] = struct{}{}
-			}
-		}
-	}
-	nonEmptyCombos := len(comboSet)
-	comboSet = nil
 
 	// This index contains every driver, so profile lookups here would block
 	// incremental refreshes on one network request per driver.
@@ -748,6 +786,17 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 		log.Printf("⚠️ Failed to export teams index: %v", err)
 	}
 
+	tracks := make([]TrackInfo, 0, len(combinationTracks))
+	for _, track := range combinationTracks {
+		tracks = append(tracks, track)
+	}
+	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
+		return fmt.Errorf("export indexed combinations: %w", err)
+	}
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, rankedSeriesRefresh); err != nil {
+		return fmt.Errorf("update incremental index status: %w", err)
+	}
+
 	// Free the large index map after export. Use GC only — skip
 	// debug.FreeOSMemory() which does expensive madvise() syscalls on every
 	// freed page (scales with heap size) and releases pages that will just
@@ -755,53 +804,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	index = nil
 	runtime.GC()
 
-	// Refresh combination exports after index update
-	if err := refreshCombinationExportsFromCache(context.Background(), false); err != nil {
-		log.Printf("⚠️ Failed to refresh top/all combinations exports after incremental update: %v", err)
-	}
-
-	// Lightweight status update — preserve fields that are not recomputed here.
-	existingStatus := ReadStatusData()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
-
-	// Use provided timestamp if specified, otherwise preserve it from disk.
-	rankedSeriesTS := rankedSeriesRefresh
-	if rankedSeriesTS.IsZero() {
-		rankedSeriesTS = existingStatus.LastRankedSeriesRefresh
-	}
-	totalCached := cache.CountCachedCombinations()
-
-	// When a full refresh is in progress, track_count is managed by the orchestrator
-	// (it reflects real-time fetch progress). Preserve it in that case.
-	// When idle, track_count = non-empty combos computed directly from the index.
-	trackCount := nonEmptyCombos
-	if existingStatus.FetchInProgress {
-		trackCount = existingStatus.TrackCount
-	}
-
-	status := StatusData{
-		FetchInProgress:          existingStatus.FetchInProgress,
-		LastScrapeStart:          existingStatus.LastScrapeStart,
-		LastScrapeEnd:            existingStatus.LastScrapeEnd,
-		TrackCount:               trackCount,
-		TotalFetchedCombinations: totalCached,
-		TotalDrivers:             driverCount,
-		TotalEntries:             totalEntries,
-		LastIndexUpdate:          time.Now(),
-		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
-		MemoryAllocMB:            m.Alloc / 1024 / 1024,
-		MemorySysMB:              m.Sys / 1024 / 1024,
-		FailedFetchCount:         existingStatus.FailedFetchCount,
-		FailedFetches:            existingStatus.FailedFetches,
-		RetriedFetchCount:        existingStatus.RetriedFetchCount,
-		LastAvatarRefresh:        existingStatus.LastAvatarRefresh,
-		RankedSeriesCount:        existingStatus.RankedSeriesCount,
-		LastRankedSeriesRefresh:  rankedSeriesTS,
-	}
-	if err := ExportStatusData(status); err != nil {
-		log.Printf("⚠️ Failed to update status after incremental index: %v", err)
-	}
 
 	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
 		float64(m.Alloc)/(1024*1024))

@@ -108,6 +108,13 @@ const partialResults = Object.entries(driverIndex)
 Contains current status and statistics about the data.
 `total_unique_tracks` is the number of configured entries returned by
 `GetTracks()`, independent of cached or indexed results.
+`total_combinations` is the number of configured tracks multiplied by the
+number of classes returned by `GetCarClasses()`. `track_count` counts indexed
+track/class combinations with at least one entry; `total_entries` sums all
+their leaderboard entries, including entries without an indexable driver.
+`total_drivers` counts distinct profile IDs in the driver index, excluding
+name-only fallbacks. `total_fetched_combinations` instead counts cached files,
+including empty combinations.
 
 **Structure:**
 ```json
@@ -117,6 +124,7 @@ Contains current status and statistics about the data.
   "last_scrape_end": "2025-12-19T16:30:00Z",
   "track_count": 14027,
   "total_unique_tracks": 183,
+  "total_combinations": 20000,
   "total_drivers": 45000,
   "total_entries": 200000,
   "last_index_update": "2025-12-19T16:30:15Z",
@@ -132,7 +140,7 @@ const status = await fetch('cache/status.json').then(r => r.json());
 // Display loading state
 if (status.fetch_in_progress) {
   console.log('Data is being updated...');
-  console.log(`Progress: ${status.track_count} tracks loaded`);
+  console.log(`${status.track_count} non-empty combinations indexed`);
 } else {
   console.log('All data up to date!');
   console.log(`${status.total_drivers} drivers indexed`);

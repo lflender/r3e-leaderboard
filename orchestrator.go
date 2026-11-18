@@ -87,6 +87,11 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 		o.exportStatus()
 
 		hasExistingShardedIndex := internal.HasShardedIndex()
+		if hasExistingShardedIndex {
+			if _, err := internal.RebuildLegacyIndexMetrics(opCtx); err != nil {
+				log.Printf("⚠️ Failed to rebuild legacy index metrics: %v", err)
+			}
+		}
 		willFetchFresh := false
 
 		// Create a callback to update status incrementally during loading
@@ -414,47 +419,23 @@ func (o *Orchestrator) StartPeriodicIndexing(ctx context.Context, intervalMinute
 // Note: This is used for intermediate status updates (during fetching, before/after scraping)
 // All indexing-related metrics are calculated and exported by BuildAndExportIndex, not here
 func (o *Orchestrator) exportStatus() {
-	// Read existing status to preserve all indexing-related metrics
-	existingStatus := internal.ReadStatusData()
-
-	// Preserve scrape timestamps if orchestrator values are zero (haven't been set yet)
-	scrapeStart := o.lastScrapeStart
-	if scrapeStart.IsZero() {
-		scrapeStart = existingStatus.LastScrapeStart
-	}
-	scrapeEnd := o.lastScrapeEnd
-	if scrapeEnd.IsZero() {
-		scrapeEnd = existingStatus.LastScrapeEnd
-	}
-
 	// Read current memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	// Update ONLY the fetch/scrape status fields that the orchestrator manages
-	// TrackCount is managed exclusively by the indexer (BuildAndExportIndex /
-	// IncrementalIndexUpdate) — the orchestrator must never overwrite it.
-	status := internal.StatusData{
-		FetchInProgress:          o.fetchInProgress,
-		LastScrapeStart:          scrapeStart,
-		LastScrapeEnd:            scrapeEnd,
-		TrackCount:               existingStatus.TrackCount,               // Preserved from indexing
-		TotalFetchedCombinations: existingStatus.TotalFetchedCombinations, // Preserved from indexing
-		TotalDrivers:             existingStatus.TotalDrivers,             // Preserved from indexing
-		TotalEntries:             existingStatus.TotalEntries,             // Preserved from indexing
-		LastIndexUpdate:          existingStatus.LastIndexUpdate,          // Preserved from indexing
-		IndexBuildTimeMs:         existingStatus.IndexBuildTimeMs,         // Preserved from indexing
-		MemoryAllocMB:            m.Alloc / 1024 / 1024,
-		MemorySysMB:              m.Sys / 1024 / 1024,
-		FailedFetchCount:         existingStatus.FailedFetchCount,  // Preserved from loader
-		FailedFetches:            existingStatus.FailedFetches,     // Preserved from loader
-		RetriedFetchCount:        existingStatus.RetriedFetchCount, // Preserved from loader
-		LastAvatarRefresh:        existingStatus.LastAvatarRefresh,
-		RankedSeriesCount:        o.rankedSeriesCount,
-		LastRankedSeriesRefresh:  o.lastRankedSeriesRefresh,
-	}
-
-	if err := internal.ExportStatusData(status); err != nil {
+	if err := internal.UpdateStatusData(func(status *internal.StatusData) {
+		status.FetchInProgress = o.fetchInProgress
+		if !o.lastScrapeStart.IsZero() {
+			status.LastScrapeStart = o.lastScrapeStart
+		}
+		if !o.lastScrapeEnd.IsZero() {
+			status.LastScrapeEnd = o.lastScrapeEnd
+		}
+		status.MemoryAllocMB = m.Alloc / 1024 / 1024
+		status.MemorySysMB = m.Sys / 1024 / 1024
+		status.RankedSeriesCount = o.rankedSeriesCount
+		status.LastRankedSeriesRefresh = o.lastRankedSeriesRefresh
+	}); err != nil {
 		log.Printf("⚠️ Failed to export status: %v", err)
 	}
 }
