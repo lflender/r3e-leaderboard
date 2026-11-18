@@ -1,69 +1,58 @@
 package internal
 
 import (
-	"os"
-	"strings"
+	"log"
+	"time"
 )
 
-const defaultFullRefreshIntervalHours = 6
+const defaultFullRefreshIntervalHours = 3
+
+func fullRefreshInterval(hours int) time.Duration {
+	if hours <= 0 {
+		log.Printf("⚠️ Invalid full refresh interval (%d hours); defaulting to %d hours", hours, defaultFullRefreshIntervalHours)
+		hours = defaultFullRefreshIntervalHours
+	}
+	return time.Duration(hours) * time.Hour
+}
 
 // Config holds application configuration
 type Config struct {
 	Schedule ScheduleConfig `json:"schedule"`
-	Discord  DiscordConfig  `json:"discord"`
 	Data     DataConfig     `json:"data"`
 }
 
 // ScheduleConfig holds scheduling configuration
 type ScheduleConfig struct {
-	RefreshHour                  int `json:"refresh_hour"`
-	RefreshMinute                int `json:"refresh_minute"`
-	RefreshIntervalHours         int `json:"refresh_interval_hours"`
-	IndexingMinutes              int `json:"indexing_minutes"`
-	DailyRaceRefreshIntervalMins int `json:"daily_race_refresh_interval_mins"` // How often to refresh Daily Race combinations (minutes)
-}
-
-// DiscordConfig holds Discord integration configuration
-type DiscordConfig struct {
-	BotToken         string `json:"bot_token"`          // Discord bot token (stored in discord_token - DO NOT COMMIT!)
-	ChannelID        string `json:"channel_id"`         // Channel ID to monitor
-	MessageCheckMins int    `json:"message_check_mins"` // How far back to check for new messages (in minutes)
-	Enabled          bool   `json:"enabled"`            // Whether Discord integration is enabled
+	RefreshHour           int          `json:"refresh_hour"`
+	RefreshMinute         int          `json:"refresh_minute"`
+	RefreshIntervalHours  int          `json:"refresh_interval_hours"`
+	IndexingMinutes       int          `json:"indexing_minutes"`
+	AvatarBackfillWeekday time.Weekday `json:"avatar_backfill_weekday"`
+	AvatarBackfillHour    int          `json:"avatar_backfill_hour"`
+	AvatarBackfillMinute  int          `json:"avatar_backfill_minute"`
 }
 
 // DataConfig holds data fetching configuration
 type DataConfig struct {
-	MultiplayerPositionLimit  int `json:"multiplayer_position_limit"`   // Maximum positions to track; -1 tracks all positions
-	APIThrottleMs             int `json:"api_throttle_ms"`              // Delay between API calls in milliseconds (default 20)
-	AvatarCacheFreshnessHours int `json:"avatar_cache_freshness_hours"` // Hours before cached avatar URLs are refreshed (default 24)
+	MultiplayerPositionLimit int `json:"multiplayer_position_limit"` // Maximum positions to track; -1 tracks all positions
+	APIThrottleMs            int `json:"api_throttle_ms"`            // Delay between API calls in milliseconds (default 20)
 }
 
 // GetDefaultConfig returns default configuration
 func GetDefaultConfig() Config {
-	// Try to read Discord bot token from discord_token file
-	discordToken := ""
-	if data, err := os.ReadFile("discord_token"); err == nil {
-		discordToken = strings.TrimSpace(string(data))
-	}
-
 	return Config{
 		Schedule: ScheduleConfig{
-			RefreshHour:                  2, // 2 AM
-			RefreshMinute:                0, // At the top of the hour
-			RefreshIntervalHours:         6,
-			IndexingMinutes:              60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
-			DailyRaceRefreshIntervalMins: 60, // Refresh Daily Race combinations every hour
-		},
-		Discord: DiscordConfig{
-			BotToken:         discordToken,
-			ChannelID:        "1468248477736894648", // Your Discord channel
-			MessageCheckMins: 70,                    // Check messages from last 70 minutes
-			Enabled:          discordToken != "",    // Enable only if token is set
+			RefreshHour:           2, // 2 AM
+			RefreshMinute:         0, // At the top of the hour
+			RefreshIntervalHours:  defaultFullRefreshIntervalHours,
+			IndexingMinutes:       60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
+			AvatarBackfillWeekday: time.Monday,
+			AvatarBackfillHour:    4,
+			AvatarBackfillMinute:  0,
 		},
 		Data: DataConfig{
-			MultiplayerPositionLimit:  unlimitedMultiplayerPositionLimit,
-			APIThrottleMs:             20, // 20ms between API calls
-			AvatarCacheFreshnessHours: 24, // Refresh avatar URLs every 24 hours
+			MultiplayerPositionLimit: unlimitedMultiplayerPositionLimit,
+			APIThrottleMs:            20, // 20ms between API calls
 		},
 	}
 }

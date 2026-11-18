@@ -3,110 +3,7 @@ package internal
 import (
 	"context"
 	"log"
-	"time"
 )
-
-// RefreshDailyRaceCombinations refreshes only the track/class combinations
-// from the cached Daily Races data. Returns the track IDs that were refreshed.
-// This is a lightweight refresh that only fetches a few combinations (typically 5-6).
-// When refreshMPPositions is true, multiplayer positions are refreshed at the end.
-func RefreshDailyRaceCombinations(ctx context.Context, cfg Config, refreshMPPositions bool) ([]string, error) {
-	ctx = WithFetchPauseBypass(ctx)
-	cache := NewDataCache()
-	dailyRaces, err := cache.LoadDiscordRaces()
-	if err != nil {
-		return nil, err
-	}
-
-	if dailyRaces == nil || (len(dailyRaces.Races) == 0 && len(dailyRaces.FeatureRaces) == 0) {
-		log.Println("ℹ️ No Daily Races cached - skipping Daily Race refresh")
-		return nil, nil
-	}
-
-	// Extract unique track-class combinations that are fully matched
-	seen := make(map[string]bool)
-	var trackIDs []string
-
-	allRaces := make([]DailySprintRace, 0, len(dailyRaces.Races)+len(dailyRaces.FeatureRaces))
-	allRaces = append(allRaces, dailyRaces.Races...)
-	allRaces = append(allRaces, dailyRaces.FeatureRaces...)
-
-	for _, race := range allRaces {
-		if !race.MatchedOK || race.TrackID == "" || race.CarClassID == "" {
-			continue
-		}
-
-		if len(race.CategoryIDs) > 0 {
-			for _, classID := range race.CategoryIDs {
-				if !isNumericID(classID) {
-					continue
-				}
-				key := race.TrackID + "-" + classID
-				if !seen[key] {
-					seen[key] = true
-					trackIDs = append(trackIDs, key)
-				}
-			}
-			continue
-		}
-
-		if !isNumericID(race.CarClassID) {
-			continue
-		}
-
-		// Format: "trackID-classID" for targeted refresh
-		key := race.TrackID + "-" + race.CarClassID
-		if !seen[key] {
-			seen[key] = true
-			trackIDs = append(trackIDs, key)
-		}
-	}
-
-	if len(trackIDs) == 0 {
-		log.Println("ℹ️ No matched Daily Race combinations to refresh")
-		return nil, nil
-	}
-
-	// Fetch fresh data for these specific combinations
-	// Use FetchTargetedTrackDataWithCallback but without triggering indexing
-	FetchTargetedTrackDataWithCallback(ctx, trackIDs, nil, "daily-races")
-
-	// FetchTargetedTrackDataWithCallback saves fetched data to cache_temp but
-	// does NOT promote (to avoid stealing files from concurrent operations).
-	// We promote here and capture ALL promoted combo IDs — this includes both
-	// the daily race files AND any pending files from the main loader.
-	// This is critical: if we only returned trackIDs (the daily race combos),
-	// the caller's IncrementalIndexUpdate would miss the loader's combos,
-	// causing those entries to be absent from the search index.
-	tempCache := NewTempDataCache()
-	promotedIDs, err := tempCache.PromoteTempCache()
-	if err != nil {
-		log.Printf("⚠️ Failed to promote cache: %v", err)
-	}
-
-	// Merge promoted IDs with daily race trackIDs to ensure all are included,
-	// even if some daily race files were already in main cache
-	allIDs := MergeUniqueStrings(promotedIDs, trackIDs)
-
-	// Update status with last refresh time
-	UpdateDailyRaceRefreshTime()
-
-	if refreshMPPositions {
-		// Refresh multiplayer positions at the end of Daily Race refresh
-		mpCtx, mpCancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := RefreshMultiplayerPositions(mpCtx, cfg.Data.MultiplayerPositionLimit); err != nil {
-			log.Printf("⚠️ Failed to refresh multiplayer positions: %v", err)
-		}
-		mpCancel()
-	}
-
-	if len(allIDs) != len(trackIDs) {
-		log.Printf("🔄 Returning %d combo IDs (%d daily race + %d from pending cache)",
-			len(allIDs), len(trackIDs), len(allIDs)-len(trackIDs))
-	}
-
-	return allIDs, nil
-}
 
 // MergeUniqueStrings combines multiple string slices, removing duplicates.
 func MergeUniqueStrings(slices ...[]string) []string {
@@ -121,27 +18,6 @@ func MergeUniqueStrings(slices ...[]string) []string {
 		result = append(result, v)
 	}
 	return result
-}
-
-func isNumericID(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// UpdateDailyRaceRefreshTime updates the status.json with the current Daily Race refresh timestamp
-func UpdateDailyRaceRefreshTime() {
-	existingStatus := ReadStatusData()
-	existingStatus.LastDailyRaceRefresh = time.Now()
-	if err := ExportStatusData(existingStatus); err != nil {
-		log.Printf("⚠️ Failed to update Daily Race refresh time: %v", err)
-	}
 }
 
 // PerformFullRefresh executes a full force-fetch refresh of all combinations

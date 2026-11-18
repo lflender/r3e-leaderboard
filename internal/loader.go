@@ -154,14 +154,15 @@ func loadCachedMetadataWithEntryCounts(ctx context.Context) ([]TrackInfo, map[st
 
 // LoadAllTrackData loads leaderboard data for all track+class combinations
 func LoadAllTrackData(ctx context.Context) []TrackInfo {
-	return LoadAllTrackDataWithCallback(ctx, nil, nil)
+	return LoadAllTrackDataWithCallback(ctx, nil, nil, GetDefaultConfig().Schedule.RefreshIntervalHours)
 }
 
 // LoadAllTrackDataWithCallback loads data and calls progressCallback periodically for status updates
-func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool)) []TrackInfo {
-	trackConfigs := GetTracks()
-	classConfigs := GetCarClasses()
+func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool), refreshIntervalHours int) []TrackInfo {
+	return loadAllTrackDataWithCallback(ctx, GetTracks(), GetCarClasses(), progressCallback, cacheCompleteCallback, refreshIntervalHours)
+}
 
+func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig, progressCallback func([]TrackInfo), cacheCompleteCallback func([]TrackInfo, bool), refreshIntervalHours int) []TrackInfo {
 	log.Printf("📊 Loading data for %d tracks × %d classes = %d combinations...",
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
@@ -169,7 +170,8 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	defer apiClient.Close() // Ensure connections are cleaned up
 
 	var allTrackData []TrackInfo
-	dataCache := NewDataCache()     // For reading existing cache
+	dataCache := NewDataCache() // For reading existing cache
+	dataCache.maxAge = fullRefreshInterval(refreshIntervalHours)
 	tempCache := NewTempDataCache() // For writing new fetches
 	// Note: temp cache is NOT cleared on exit - it will be promoted at next startup
 
@@ -180,7 +182,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 	needsFetching := false
 	for _, track := range trackConfigs {
 		for _, class := range classConfigs {
-			if !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID) {
+			if !dataCache.IsCacheValid(track.TrackID, class.ClassID) {
 				needsFetching = true
 				break
 			}
@@ -280,7 +282,7 @@ func LoadAllTrackDataWithCallback(ctx context.Context, progressCallback func([]T
 			}
 
 			key := track.TrackID + "_" + class.ClassID
-			needsRefresh := !dataCache.CacheExists(track.TrackID, class.ClassID) || dataCache.IsCacheExpired(track.TrackID, class.ClassID)
+			needsRefresh := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
 
 			if !needsRefresh {
 				// Already have fresh cache, skip

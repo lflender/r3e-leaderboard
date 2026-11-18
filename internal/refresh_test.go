@@ -172,162 +172,6 @@ func TestProgressCallback_Called(t *testing.T) {
 }
 
 // =============================================================================
-// DAILY RACE REFRESH TESTS
-// =============================================================================
-
-func TestRefreshDailyRaceCombinations_NoCachedRaces(t *testing.T) {
-	// With no cached Daily Races, should return nil without error
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	cfg := GetDefaultConfig()
-
-	// Note: This test assumes no daily_races.json exists in the cache directory
-	// In a fresh test environment, this should be the case
-	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg, false)
-
-	if err != nil {
-		t.Logf("Got error (expected if cache dir doesn't exist): %v", err)
-	}
-
-	// Should return nil or empty when no races cached
-	t.Logf("Returned %d track IDs", len(trackIDs))
-}
-
-func TestRefreshDailyRaceCombinations_CancelledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Cancel immediately
-
-	cfg := GetDefaultConfig()
-
-	// Should handle cancelled context gracefully
-	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg, false)
-
-	if err != nil {
-		t.Logf("Got error with cancelled context: %v", err)
-	}
-
-	t.Logf("Returned %d track IDs with cancelled context", len(trackIDs))
-}
-
-func TestUpdateDailyRaceRefreshTime(t *testing.T) {
-	// This function should not panic even if status file doesn't exist
-	// It's a fire-and-forget operation
-	UpdateDailyRaceRefreshTime()
-
-	// Just verify it doesn't panic
-	t.Log("UpdateDailyRaceRefreshTime completed without panic")
-}
-
-// =============================================================================
-// CATEGORY HANDLING TESTS
-// =============================================================================
-
-func TestRefreshDailyRaceCombinations_WithCategoryIDs(t *testing.T) {
-	// Test that races with CategoryIDs (like WTCR 18-22) are correctly expanded
-	// into multiple track-class combinations for refresh
-
-	cache := NewDataCache()
-
-	// Create a mock daily races result with a category
-	mockRaces := &DailySprintRacesResult{
-		Races: []DailySprintRace{
-			// Normal single-class race
-			{
-				CarClass:    "GT3",
-				CarClassID:  "1703",
-				TrackID:     "7112",
-				MatchedOK:   true,
-				CategoryIDs: nil,
-			},
-			// WTCR category race with multiple class IDs
-			{
-				CarClass:   "WTCR",
-				CarClassID: "WTCR",
-				TrackID:    "5925",
-				CategoryIDs: []string{
-					"7009",  // WTCR 2018
-					"7844",  // WTCR 2019
-					"9233",  // WTCR 2020
-					"10344", // WTCR 2021
-					"11317", // WTCR 2022
-				},
-				MatchedOK: true,
-			},
-			// Another normal race
-			{
-				CarClass:    "F4",
-				CarClassID:  "4867",
-				TrackID:     "10782",
-				MatchedOK:   true,
-				CategoryIDs: nil,
-			},
-		},
-		MessageID:   "test_msg",
-		MessageTime: time.Now(),
-		ParsedAt:    time.Now(),
-	}
-
-	// Save the mock races to cache
-	if err := cache.SaveDiscordRaces(mockRaces); err != nil {
-		t.Fatalf("Failed to save mock races: %v", err)
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	cancel() // Cancel immediately to prevent actual API fetches
-
-	cfg := GetDefaultConfig()
-	// Call RefreshDailyRaceCombinations
-	trackIDs, err := RefreshDailyRaceCombinations(ctx, cfg, false)
-
-	// We expect it to identify all track-class combinations
-	// The error might be context cancelled, but we should still get the trackIDs
-	if err != nil && err != context.Canceled {
-		t.Logf("Got non-cancellation error: %v", err)
-	}
-
-	// Expected combinations:
-	// 1. GT3: 7112-1703
-	// 2. WTCR 2018: 5925-7009
-	// 3. WTCR 2019: 5925-7844
-	// 4. WTCR 2020: 5925-9233
-	// 5. WTCR 2021: 5925-10344
-	// 6. WTCR 2022: 5925-11317
-	// 7. F4: 10782-4867
-	// Total: 7 combinations
-
-	expectedCombinations := []string{
-		"7112-1703",  // GT3
-		"5925-7009",  // WTCR 2018
-		"5925-7844",  // WTCR 2019
-		"5925-9233",  // WTCR 2020
-		"5925-10344", // WTCR 2021
-		"5925-11317", // WTCR 2022
-		"10782-4867", // F4
-	}
-
-	if len(trackIDs) != len(expectedCombinations) {
-		t.Errorf("Expected %d track-class combinations, got %d: %v",
-			len(expectedCombinations), len(trackIDs), trackIDs)
-	}
-
-	// Verify each expected combination is present
-	foundCombos := make(map[string]bool)
-	for _, id := range trackIDs {
-		foundCombos[id] = true
-	}
-
-	for _, expected := range expectedCombinations {
-		if !foundCombos[expected] {
-			t.Errorf("Expected combination '%s' not found in results", expected)
-		}
-	}
-
-	t.Logf("✅ Successfully identified %d track-class combinations from category races", len(trackIDs))
-}
-
-// =============================================================================
 // MERGE UNIQUE STRINGS TESTS
 // =============================================================================
 
@@ -377,7 +221,7 @@ func TestMergeUniqueStrings_ThreeSlices(t *testing.T) {
 }
 
 func TestMergeUniqueStrings_NilAndNonEmpty(t *testing.T) {
-	// Simulates: no pre-promoted files, but some daily race IDs
+	// Simulates requested series combinations with no pre-promoted files.
 	result := MergeUniqueStrings(nil, []string{"9958-8600", "7112-1703"})
 	if len(result) != 2 {
 		t.Errorf("Expected 2 items, got %d: %v", len(result), result)
@@ -391,13 +235,13 @@ func TestMergeUniqueStrings_NilAndNonEmpty(t *testing.T) {
 func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 	// This test validates the fix for the incremental indexing bug:
 	// When PromoteTempCache() is called, it should return ALL promoted combo IDs.
-	// Previously, the daily race refresh would call PromoteTempCache() inside
+	// Previously, a targeted refresh would call PromoteTempCache() inside
 	// fetchSpecificCombinations, promoting ALL cache_temp files (including the
-	// main loader's files), but discarding the returned IDs. Only daily race IDs
+	// main loader's files), but discarding the returned IDs. Only requested IDs
 	// were passed to IncrementalIndexUpdate, causing main loader entries to be
 	// missing from the search index.
 
-	// Setup: create temp cache with "loader" files and "daily race" files
+	// Setup: create temp cache with "loader" files and requested series files.
 	tempDir := t.TempDir()
 	cacheDir := t.TempDir()
 
@@ -421,8 +265,8 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 		t.Fatalf("Failed to save loader track: %v", err)
 	}
 
-	// Simulate daily race refresh writing to cache_temp
-	dailyRaceTrack := TrackInfo{
+	// Simulate ranked-series refresh writing to cache_temp.
+	refreshedTrack := TrackInfo{
 		Name:    "Autodrom Most - Grand Prix",
 		TrackID: "7112",
 		ClassID: "1703",
@@ -430,11 +274,11 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 			{"driver": map[string]interface{}{"name": "Test Driver"}, "index": float64(0)},
 		},
 	}
-	if err := dc.SaveTrackData(dailyRaceTrack); err != nil {
+	if err := dc.SaveTrackData(refreshedTrack); err != nil {
 		t.Fatalf("Failed to save daily race track: %v", err)
 	}
 
-	// Now promote — this is what RefreshDailyRaceCombinations does
+	// Promote cached data for later indexing.
 	promoted, err := dc.PromoteTempCache()
 	if err != nil {
 		t.Fatalf("PromoteTempCache failed: %v", err)
@@ -446,20 +290,20 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 	}
 
 	foundLoader := false
-	foundDailyRace := false
+	foundTrack := false
 	for _, id := range promoted {
 		if id == "9958-8600" {
 			foundLoader = true
 		}
 		if id == "7112-1703" {
-			foundDailyRace = true
+			foundTrack = true
 		}
 	}
 
 	if !foundLoader {
 		t.Error("Promoted IDs should include loader combo '9958-8600' (Indianapolis)")
 	}
-	if !foundDailyRace {
+	if !foundTrack {
 		t.Error("Promoted IDs should include daily race combo '7112-1703' (Most)")
 	}
 
@@ -478,8 +322,8 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 
 	// If we merge promoted IDs with daily race trackIDs (like the fix does),
 	// the result should include BOTH
-	dailyRaceIDs := []string{"7112-1703"}
-	allIDs := MergeUniqueStrings(promoted, dailyRaceIDs)
+	targetedIDs := []string{"7112-1703"}
+	allIDs := MergeUniqueStrings(promoted, targetedIDs)
 
 	if len(allIDs) != 2 {
 		t.Errorf("Merged IDs should contain 2 combos, got %d: %v", len(allIDs), allIDs)

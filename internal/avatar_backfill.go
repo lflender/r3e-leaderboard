@@ -2,13 +2,14 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -17,7 +18,6 @@ const (
 	avatarBackfillSaveBatchSize = 100
 	avatarBackfillLogInterval   = 1000
 	avatarBackfillFirstLogAt    = 100
-	avatarBackfillScanInterval  = 30 * time.Minute
 	avatarProfileRequestTimeout = 15 * time.Second
 )
 
@@ -33,113 +33,65 @@ type avatarUpdate struct {
 	avatarBackfillJob
 }
 
-type avatarBackfillManager struct {
-	mu        sync.Mutex
-	started   bool
-	wake      chan struct{}
-	freshness time.Duration
-}
-
-var driverAvatarBackfill = avatarBackfillManager{wake: make(chan struct{}, 1)}
-
-// StartDriverAvatarBackfill starts the non-blocking profile URL backfill.
-// Successful URLs are written to the metadata shards, so unfinished work is
-// naturally rediscovered after a restart.
-func StartDriverAvatarBackfill(ctx context.Context, freshness time.Duration) {
-	driverAvatarBackfill.mu.Lock()
-	if driverAvatarBackfill.started {
-		driverAvatarBackfill.mu.Unlock()
-		driverAvatarBackfill.schedule()
-		return
+// StartDriverAvatarBackfill schedules a full profile URL refresh once a week.
+func StartDriverAvatarBackfill(ctx context.Context, schedule ScheduleConfig) error {
+	if schedule.AvatarBackfillWeekday < time.Sunday || schedule.AvatarBackfillWeekday > time.Saturday ||
+		schedule.AvatarBackfillHour < 0 || schedule.AvatarBackfillHour > 23 ||
+		schedule.AvatarBackfillMinute < 0 || schedule.AvatarBackfillMinute > 59 {
+		return fmt.Errorf("invalid avatar backfill schedule: weekday %d, time %02d:%02d",
+			schedule.AvatarBackfillWeekday, schedule.AvatarBackfillHour, schedule.AvatarBackfillMinute)
 	}
-	driverAvatarBackfill.freshness = freshness
-	driverAvatarBackfill.started = true
-	driverAvatarBackfill.mu.Unlock()
-
-	go driverAvatarBackfill.run(ctx)
+	go runDriverAvatarBackfill(ctx, schedule)
+	return nil
 }
 
-// ScheduleDriverAvatarBackfill asks the background worker to scan for new
-// drivers after an index export. It never waits for profile requests.
-func ScheduleDriverAvatarBackfill() {
-	driverAvatarBackfill.schedule()
-}
-
-func (manager *avatarBackfillManager) schedule() {
-	manager.mu.Lock()
-	started := manager.started
-	manager.mu.Unlock()
-	if !started {
-		return
+func nextAvatarBackfillTime(now time.Time, schedule ScheduleConfig) time.Time {
+	days := (int(schedule.AvatarBackfillWeekday) - int(now.Weekday()) + 7) % 7
+	next := time.Date(now.Year(), now.Month(), now.Day()+days,
+		schedule.AvatarBackfillHour, schedule.AvatarBackfillMinute, 0, 0, now.Location())
+	if !next.After(now) {
+		next = time.Date(now.Year(), now.Month(), now.Day()+days+7,
+			schedule.AvatarBackfillHour, schedule.AvatarBackfillMinute, 0, 0, now.Location())
 	}
-
-	select {
-	case manager.wake <- struct{}{}:
-	default:
-	}
+	return next
 }
 
-func (manager *avatarBackfillManager) run(ctx context.Context) {
+func runDriverAvatarBackfill(ctx context.Context, schedule ScheduleConfig) {
 	client := NewAPIClient()
 	defer client.Close()
 
-	attempted := make(map[string]struct{})
-	fullRefreshInProgress := false
-	ticker := time.NewTicker(avatarBackfillScanInterval)
-	defer ticker.Stop()
-
 	for {
-		now := time.Now()
-		lastRefresh := ReadStatusData().LastAvatarRefresh
-		refreshAll := avatarRefreshDue(lastRefresh, now, manager.freshness)
-		if refreshAll && !fullRefreshInProgress {
-			clear(attempted)
-			fullRefreshInProgress = true
-		} else if !refreshAll {
-			fullRefreshInProgress = false
-		}
-
-		jobs, err := findDriverAvatarJobs(refreshAll)
-		if err != nil {
-			log.Printf("⚠️ Avatar URL backfill could not scan metadata: %v", err)
-		} else {
-			pending := jobs[:0]
-			for _, job := range jobs {
-				if _, wasAttempted := attempted[job.pathID]; !wasAttempted {
-					pending = append(pending, job)
-				}
-			}
-			jobs = pending
-		}
-		if err == nil && len(jobs) > 0 {
-			refreshType := "missing avatar URLs"
-			if refreshAll {
-				refreshType = "profiles for a full freshness refresh"
-			}
-			log.Printf("🖼️ Avatar URL backfill queued %d %s; only profile metadata URLs are requested, not image files. ETA will be reported after the first %d profiles.",
-				len(jobs), refreshType, avatarBackfillLogInterval)
-			runAvatarBackfillJobs(ctx, jobs, client, apiThrottle, attempted, saveDriverAvatarUpdates)
-			if refreshAll && allAvatarJobsAttempted(jobs, attempted) {
-				if err := UpdateLastAvatarRefresh(time.Now()); err != nil {
-					log.Printf("⚠️ Failed to persist avatar refresh timestamp: %v", err)
-				}
-			}
-		} else if err == nil {
-			if refreshAll && allAvatarJobsAttempted(jobs, attempted) {
-				if err := UpdateLastAvatarRefresh(time.Now()); err != nil {
-					log.Printf("⚠️ Failed to persist avatar refresh timestamp: %v", err)
-				}
-			} else {
-				log.Println("🖼️ Avatar URL backfill scan complete: no missing avatar URLs need fetching")
-			}
-		}
-
+		next := nextAvatarBackfillTime(time.Now(), schedule)
+		log.Printf("🖼️ Next avatar URL backfill scheduled for %s", next.Format(time.RFC3339))
+		timer := time.NewTimer(time.Until(next))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			log.Println("⏹️ Avatar URL backfill stopped")
 			return
-		case <-manager.wake:
-		case <-ticker.C:
+		case <-timer.C:
+		}
+
+		jobs, err := findDriverAvatarJobs(true)
+		if err != nil {
+			log.Printf("⚠️ Avatar URL backfill could not scan metadata: %v", err)
+			continue
+		}
+		attempted := make(map[string]struct{})
+		if len(jobs) > 0 {
+			log.Printf("🖼️ Avatar URL backfill queued %d profiles for a full refresh; only profile metadata URLs are requested, not image files. ETA will be reported after the first %d profiles.",
+				len(jobs), avatarBackfillLogInterval)
+			runAvatarBackfillJobs(ctx, jobs, client, apiThrottle, attempted, saveDriverAvatarUpdates)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if allAvatarJobsAttempted(jobs, attempted) {
+			if err := UpdateLastAvatarRefresh(time.Now()); err != nil {
+				log.Printf("⚠️ Failed to persist avatar refresh timestamp: %v", err)
+			}
+		} else {
+			log.Println("⚠️ Avatar URL backfill was incomplete; failed profiles will be retried on the next scheduled run")
 		}
 	}
 }
@@ -185,10 +137,6 @@ func findDriverAvatarJobs(includeFresh bool) ([]avatarBackfillJob, error) {
 		return jobs[i].letter < jobs[j].letter
 	})
 	return jobs, nil
-}
-
-func avatarRefreshDue(lastRefresh, now time.Time, freshness time.Duration) bool {
-	return lastRefresh.IsZero() || freshness <= 0 || !now.Before(lastRefresh.Add(freshness))
 }
 
 func allAvatarJobsAttempted(jobs []avatarBackfillJob, attempted map[string]struct{}) bool {
@@ -254,6 +202,13 @@ func runAvatarBackfillJobs(
 			failures++
 			if failures == 1 {
 				log.Printf("⚠️ First avatar URL lookup failure for driver %s: %v", job.pathID, err)
+			}
+			var statusErr profileAPIStatusError
+			if errors.As(err, &statusErr) && (statusErr.statusCode == http.StatusUnauthorized || statusErr.statusCode == http.StatusForbidden) {
+				flush()
+				log.Printf("⚠️ Avatar URL backfill stopped after HTTP %d; remaining profiles will be retried on the next scheduled run", statusErr.statusCode)
+				logAvatarBackfillProgress(len(jobs), processed, urlsFound, noAvatar, failures, saveFailures, startedAt, false)
+				return
 			}
 		} else if avatarURL == "" {
 			noAvatar++

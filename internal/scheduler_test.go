@@ -24,8 +24,8 @@ func TestNewScheduler(t *testing.T) {
 	if scheduler.refreshMinute != 30 {
 		t.Errorf("refreshMinute = %d, expected 30", scheduler.refreshMinute)
 	}
-	if scheduler.refreshInterval != 6*time.Hour {
-		t.Errorf("refreshInterval = %s, expected 6h", scheduler.refreshInterval)
+	if scheduler.refreshInterval != 3*time.Hour {
+		t.Errorf("refreshInterval = %s, expected 3h", scheduler.refreshInterval)
 	}
 
 	if scheduler.stopped {
@@ -71,7 +71,7 @@ func TestScheduler_StartAndStop(t *testing.T) {
 		callCount++
 	}
 
-	scheduler.Start(callback)
+	scheduler.Start(callback, time.Time{})
 
 	// Give it a moment to start
 	time.Sleep(10 * time.Millisecond)
@@ -90,7 +90,7 @@ func TestScheduler_StartAndStop(t *testing.T) {
 func TestScheduler_StopMultipleTimes(t *testing.T) {
 	scheduler := NewScheduler(3, 0, defaultFullRefreshIntervalHours)
 
-	scheduler.Start(func() {})
+	scheduler.Start(func() {}, time.Time{})
 	time.Sleep(10 * time.Millisecond)
 
 	// Stop multiple times should not panic
@@ -201,6 +201,53 @@ func TestNextAutomaticRefreshTimeUsesConfiguredInterval(t *testing.T) {
 	}
 }
 
+func TestSchedulerNextRefreshTimeFromLastScrape(t *testing.T) {
+	scheduler := NewScheduler(2, 0, 3)
+	now := time.Date(2026, time.November, 17, 18, 27, 0, 0, time.UTC)
+
+	tests := []struct {
+		name string
+		last time.Time
+		want time.Time
+	}{
+		{"overdue after restart", time.Date(2026, time.November, 17, 14, 0, 0, 0, time.UTC), time.Date(2026, time.November, 17, 17, 0, 0, 0, time.UTC)},
+		{"recent scrape", time.Date(2026, time.November, 17, 16, 0, 0, 0, time.UTC), time.Date(2026, time.November, 17, 19, 0, 0, 0, time.UTC)},
+		{"no previous scrape", time.Time{}, time.Date(2026, time.November, 17, 20, 0, 0, 0, time.UTC)},
+		{"future scrape", now.Add(time.Hour), time.Date(2026, time.November, 17, 20, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scheduler.NextRefreshTime(now, tt.last)
+			if !got.Equal(tt.want) {
+				t.Fatalf("NextRefreshTime() = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSchedulerRunsOverdueRefreshAndRepeats(t *testing.T) {
+	scheduler := NewScheduler(2, 0, 3)
+	scheduler.refreshInterval = 100 * time.Millisecond
+	calls := make(chan time.Time, 2)
+	scheduler.Start(func() { calls <- time.Now() }, time.Now().Add(-time.Hour))
+	defer scheduler.Stop()
+
+	var first time.Time
+	select {
+	case first = <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("overdue refresh did not run")
+	}
+	select {
+	case second := <-calls:
+		if second.Sub(first) < 80*time.Millisecond {
+			t.Fatalf("refreshes ran too close together: %s", second.Sub(first))
+		}
+	case <-time.After(time.Second):
+		t.Fatal("subsequent refresh did not run")
+	}
+}
+
 // =============================================================================
 // SCHEDULER CALLBACK TESTS
 // =============================================================================
@@ -255,7 +302,7 @@ func TestScheduler_InitialState(t *testing.T) {
 
 func TestScheduler_ConcurrentAccess(t *testing.T) {
 	scheduler := NewScheduler(10, 30, defaultFullRefreshIntervalHours)
-	scheduler.Start(func() {})
+	scheduler.Start(func() {}, time.Time{})
 
 	// Multiple goroutines stopping at once should not panic
 	var wg sync.WaitGroup

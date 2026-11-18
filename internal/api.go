@@ -36,6 +36,15 @@ type apiProtocol struct {
 	responseLimit int
 }
 
+type profileAPIStatusError struct {
+	statusCode int
+	identifier string
+}
+
+func (err profileAPIStatusError) Error() string {
+	return fmt.Sprintf("profile API returned status code %d for %q", err.statusCode, err.identifier)
+}
+
 // APIResult represents the data structure returned by the API
 type APIResult struct {
 	Driver      map[string]interface{} `json:"driver"`
@@ -204,7 +213,7 @@ func (api *APIClient) fetchProfileAvatarWithProtocol(ctx context.Context, identi
 	defer resp.Body.Close()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		err := fmt.Errorf("profile API returned status code %d for %q", resp.StatusCode, identifier)
+		err := profileAPIStatusError{statusCode: resp.StatusCode, identifier: identifier}
 		if resp.StatusCode == http.StatusNotFound {
 			return "", staleAPIProtocolError{err: err}
 		}
@@ -492,14 +501,18 @@ func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (apiProto
 }
 
 func (api *APIClient) discoverAPIProtocol(ctx context.Context, apiName string) (apiProtocol, error) {
-	pageURL := strings.TrimRight(api.baseURL, "/") + "/leaderboard/"
+	pagePath := "/leaderboard/"
+	if apiName == "series" {
+		pagePath = "/ranked/series"
+	}
+	pageURL := strings.TrimRight(api.baseURL, "/") + pagePath
 	page, err := api.getDiscoveryResource(ctx, pageURL)
 	if err != nil {
-		return apiProtocol{}, fmt.Errorf("fetch leaderboard page: %w", err)
+		return apiProtocol{}, fmt.Errorf("fetch %s page: %w", apiName, err)
 	}
 	scriptPaths := leaderboardScriptPattern.FindAllSubmatch(page, -1)
 	if len(scriptPaths) == 0 {
-		return apiProtocol{}, fmt.Errorf("leaderboard page did not include a JavaScript client bundle")
+		return apiProtocol{}, fmt.Errorf("%s page did not include a JavaScript client bundle", apiName)
 	}
 
 	pageParsedURL, err := url.Parse(pageURL)
@@ -547,7 +560,9 @@ func discoverAPIProtocolInBundle(bundle []byte, apiName string) (apiProtocol, er
 	case "leaderboard":
 		requiredSchemaFields = []string{"results", "responseStatus"}
 	case "profile":
-		requiredSchemaFields = []string{"userId", "avatarUrl", "responseStatus"}
+		requiredSchemaFields = []string{"userId", "avatarUrl", "responseStatus", "multiplayer", "timeAttack"}
+	case "series":
+		requiredSchemaFields = []string{"series", "responseStatus"}
 	default:
 		return apiProtocol{}, fmt.Errorf("unsupported API protocol type %q", apiName)
 	}
@@ -678,8 +693,38 @@ func apiSchemaMatches(bundle []byte, schemaName string, fields []string, cache m
 		return matches
 	}
 	matches := apiSchemaHasFields(bundle, schemaName, fields)
+	if matches && containsString(fields, "series") && containsString(fields, "responseStatus") {
+		matches = apiSchemaContainsRankedSeries(bundle, schemaName)
+	}
 	cache[schemaName] = matches
 	return matches
+}
+
+func apiSchemaContainsRankedSeries(bundle []byte, schemaName string) bool {
+	definitionPattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + regexp.QuoteMeta(schemaName) + `\s*=`)
+	seriesTypePattern := regexp.MustCompile("\\[\\s*[0-9]+\\s*,\\s*[\\x60\"']series[\\x60\"']\\s*,\\s*([A-Za-z_$][A-Za-z0-9_$]*)")
+	for _, definition := range definitionPattern.FindAllIndex(bundle, -1) {
+		start := definition[1]
+		end := javascriptExpressionEnd(bundle, start, 16<<10)
+		if end <= start {
+			continue
+		}
+		for _, match := range seriesTypePattern.FindAllSubmatch(bundle[start:end], -1) {
+			if apiSchemaHasFields(bundle, string(match[1]), []string{"rounds", "currentRound"}) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func javascriptCallEnd(source []byte, callStart int) int {

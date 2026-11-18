@@ -344,13 +344,12 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	}
 
 	// Export teams index
-	teamCount, err := ExportTeamsIndex(index)
-	if err != nil {
+	if _, err := ExportTeamsIndex(index); err != nil {
 		log.Printf("⚠️ Failed to export teams index: %v", err)
 	}
 
 	// Update status with index statistics
-	if err := UpdateStatusWithIndexMetrics(tracks, index, uniqueTrackCount, totalEntries, buildDuration, teamCount); err != nil {
+	if err := UpdateStatusWithIndexMetrics(tracks, index, totalEntries, buildDuration); err != nil {
 		log.Printf("⚠️ Failed to update status with index stats: %v", err)
 	}
 
@@ -375,7 +374,6 @@ func BuildAndExportIndex(tracks []TrackInfo) error {
 	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
 		return err
 	}
-	ScheduleDriverAvatarBackfill()
 	return nil
 }
 
@@ -405,7 +403,7 @@ func HasShardedIndex() bool {
 // last periodic indexer tick) would be silently missing from the index.
 //
 // Returns the updated indexed-count baseline for orchestrator status tracking.
-func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDailyRaceRefresh time.Time) (int, error) {
+func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastRankedSeriesRefresh time.Time) (int, error) {
 	tempCache := NewTempDataCache()
 	promotedCombos, err := tempCache.PromoteTempCache()
 	if err != nil {
@@ -413,7 +411,7 @@ func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastDail
 	}
 
 	if len(promotedCombos) > 0 {
-		if err := IncrementalIndexUpdate(promotedCombos, lastDailyRaceRefresh); err != nil {
+		if err := IncrementalIndexUpdate(promotedCombos, lastRankedSeriesRefresh); err != nil {
 			return currentIndexedCount, fmt.Errorf("startup final incremental index update failed: %w", err)
 		}
 		log.Printf("✅ Final incremental index complete (%d changed combos)", len(promotedCombos))
@@ -535,16 +533,16 @@ func LoadDriverIndexFromShards() (DriverIndex, error) {
 //  4. Re-exports the updated index
 //
 // This reduces peak memory by ~2 GB compared to a full BuildAndExportIndex.
-// The lastDailyRaceRefresh parameter allows the caller to preserve/update this
+// The lastRankedSeriesRefresh parameter allows the caller to preserve/update this
 // timestamp; if zero, it reads from the current status file on disk.
-func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time.Time) error {
+func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...time.Time) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
 
-	// Extract the optional lastDailyRaceRefresh parameter if provided
-	var dailyRaceRefresh time.Time
-	if len(lastDailyRaceRefresh) > 0 {
-		dailyRaceRefresh = lastDailyRaceRefresh[0]
+	// Extract the optional last-ranked-series refresh timestamp.
+	var rankedSeriesRefresh time.Time
+	if len(lastRankedSeriesRefresh) > 0 {
+		rankedSeriesRefresh = lastRankedSeriesRefresh[0]
 	}
 
 	if len(changedCombos) == 0 {
@@ -746,8 +744,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	}
 
 	// Export teams index
-	teamCount, err := ExportTeamsIndex(index)
-	if err != nil {
+	if _, err := ExportTeamsIndex(index); err != nil {
 		log.Printf("⚠️ Failed to export teams index: %v", err)
 	}
 
@@ -763,19 +760,17 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		log.Printf("⚠️ Failed to refresh top/all combinations exports after incremental update: %v", err)
 	}
 
-	// Lightweight status update — preserve existing values for fields we can't
-	// compute cheaply (uniqueTracks, totalFetchedCombinations, etc.)
+	// Lightweight status update — preserve fields that are not recomputed here.
 	existingStatus := ReadStatusData()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
-	// Use provided lastDailyRaceRefresh if specified, otherwise preserve from disk
-	dailyRaceTS := dailyRaceRefresh
-	if dailyRaceTS.IsZero() {
-		dailyRaceTS = existingStatus.LastDailyRaceRefresh
+	// Use provided timestamp if specified, otherwise preserve it from disk.
+	rankedSeriesTS := rankedSeriesRefresh
+	if rankedSeriesTS.IsZero() {
+		rankedSeriesTS = existingStatus.LastRankedSeriesRefresh
 	}
 	totalCached := cache.CountCachedCombinations()
-	uniqueCachedTracks := cache.CountUniqueTracks()
 
 	// When a full refresh is in progress, track_count is managed by the orchestrator
 	// (it reflects real-time fetch progress). Preserve it in that case.
@@ -791,10 +786,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		LastScrapeEnd:            existingStatus.LastScrapeEnd,
 		TrackCount:               trackCount,
 		TotalFetchedCombinations: totalCached,
-		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             driverCount,
 		TotalEntries:             totalEntries,
-		TotalTeams:               teamCount,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,
@@ -803,8 +796,8 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 		FailedFetches:            existingStatus.FailedFetches,
 		RetriedFetchCount:        existingStatus.RetriedFetchCount,
 		LastAvatarRefresh:        existingStatus.LastAvatarRefresh,
-		DailySprintRacesCount:    existingStatus.DailySprintRacesCount,
-		LastDailyRaceRefresh:     dailyRaceTS,
+		RankedSeriesCount:        existingStatus.RankedSeriesCount,
+		LastRankedSeriesRefresh:  rankedSeriesTS,
 	}
 	if err := ExportStatusData(status); err != nil {
 		log.Printf("⚠️ Failed to update status after incremental index: %v", err)
@@ -813,6 +806,5 @@ func IncrementalIndexUpdate(changedCombos []string, lastDailyRaceRefresh ...time
 	log.Printf("💾 Memory after incremental index: %.1f MB allocated",
 		float64(m.Alloc)/(1024*1024))
 
-	ScheduleDriverAvatarBackfill()
 	return nil
 }

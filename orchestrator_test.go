@@ -1,12 +1,50 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"log"
 	"os"
 	"r3e-leaderboard/internal"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestStartScheduledRefreshRunsOverdueScrape(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	if err := internal.ExportStatusData(internal.StatusData{LastScrapeStart: time.Now().Add(-4 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
+	o.scheduledCancelDelay = 0
+	called := make(chan struct{}, 1)
+	o.fullRefreshRunner = func(int, string) { called <- struct{}{} }
+
+	if !o.StartScheduledRefresh(2, 0, 3, 60) {
+		t.Fatal("expected an overdue refresh")
+	}
+	defer o.scheduler.Stop()
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("overdue scheduled refresh did not run")
+	}
+}
 
 // TestFormatDuration tests the pure formatDuration helper.
 func TestFormatDuration(t *testing.T) {
@@ -69,23 +107,56 @@ func TestGetScrapeTimestampsReflectsState(t *testing.T) {
 	}
 }
 
-func TestShouldRefreshDailyRacesAtStartup(t *testing.T) {
-	cfg := internal.GetDefaultConfig()
-	now := time.Now()
-	o := &Orchestrator{config: cfg}
-
-	if !o.shouldRefreshDailyRacesAtStartup(now) {
-		t.Fatal("expected startup refresh when no previous refresh exists")
+func TestStartupLoadingDoesNotRefreshRankedSeries(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	o.lastDailyRaceRefresh = now.Add(-time.Duration(cfg.Schedule.DailyRaceRefreshIntervalMins-1) * time.Minute)
-	if o.shouldRefreshDailyRacesAtStartup(now) {
-		t.Fatal("expected startup refresh to be skipped when last refresh occurred less than the configured delay ago")
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
 	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	reader, writer := io.Pipe()
+	originalLogWriter := log.Writer()
+	log.SetOutput(writer)
+	defer func() {
+		log.SetOutput(originalLogWriter)
+		reader.Close()
+		writer.Close()
+	}()
+	startupLogs := make(chan string, 1)
+	go func() {
+		var output strings.Builder
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			line := scanner.Text()
+			output.WriteString(line)
+			output.WriteByte('\n')
+			if strings.Contains(line, "Startup load canceled") {
+				startupLogs <- output.String()
+				return
+			}
+		}
+	}()
 
-	o.lastDailyRaceRefresh = now.Add(-time.Duration(cfg.Schedule.DailyRaceRefreshIntervalMins+1) * time.Minute)
-	if !o.shouldRefreshDailyRacesAtStartup(now) {
-		t.Fatal("expected startup refresh when last refresh occurred longer than the configured delay ago")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
+	o.StartBackgroundDataLoading(60)
+	select {
+	case output := <-startupLogs:
+		if !strings.Contains(output, "Phase 4: Load local cache") {
+			t.Fatalf("startup did not reach cache loading: %s", output)
+		}
+		if strings.Contains(strings.ToLower(output), "ranked series") || strings.Contains(strings.ToLower(output), "ranked-series") {
+			t.Fatalf("startup attempted a separate ranked-series refresh: %s", output)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup loading did not finish")
 	}
 }
 
@@ -284,7 +355,7 @@ func TestCancelFetch_NilSafe(t *testing.T) {
 func TestCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	scheduler := internal.NewScheduler(3, 0, 6)
-	scheduler.Start(func() {})
+	scheduler.Start(func() {}, time.Time{})
 
 	o := &Orchestrator{
 		fetchContext: ctx,
@@ -343,31 +414,6 @@ func TestCompactTrackData(t *testing.T) {
 func TestCompactTrackData_NilSafe(t *testing.T) {
 	o := &Orchestrator{tracks: nil}
 	o.CompactTrackData() // must not panic
-}
-
-// TestStopDailyRaceRefreshLoop verifies the stop channel is closed and nil-ed.
-func TestStopDailyRaceRefreshLoop(t *testing.T) {
-	stopCh := make(chan struct{})
-	o := &Orchestrator{dailyRaceRefreshStop: stopCh}
-
-	o.StopDailyRaceRefreshLoop()
-
-	// Channel should be closed (readable with zero value).
-	select {
-	case <-stopCh:
-		// expected
-	default:
-		t.Fatal("dailyRaceRefreshStop channel should be closed after Stop")
-	}
-	if o.dailyRaceRefreshStop != nil {
-		t.Error("dailyRaceRefreshStop should be nil after Stop")
-	}
-}
-
-// TestStopDailyRaceRefreshLoop_NilSafe verifies no panic when channel is already nil.
-func TestStopDailyRaceRefreshLoop_NilSafe(t *testing.T) {
-	o := &Orchestrator{}
-	o.StopDailyRaceRefreshLoop() // must not panic
 }
 
 // TestPerformTargetedRefresh_UsesIncrementalUpdate verifies that targeted refresh

@@ -57,12 +57,8 @@ type StatusData struct {
 	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
 	RetriedFetchCount        int           `json:"retried_fetch_count"`
 	LastAvatarRefresh        time.Time     `json:"last_avatar_refresh"`
-	// Discord Daily Sprint Races data
-	DailySprintRacesCount int `json:"daily_sprint_races_count"`
-	// Teams index count
-	TotalTeams int `json:"total_teams"`
-	// Daily Race refresh tracking
-	LastDailyRaceRefresh time.Time `json:"last_daily_race_refresh"`
+	RankedSeriesCount        int           `json:"ranked_series_count"`
+	LastRankedSeriesRefresh  time.Time     `json:"last_ranked_series_refresh"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -751,16 +747,20 @@ func writeGzipJSON(finalPath string, v interface{}) (int64, error) {
 // writeJSON writes a value as JSON to disk using atomic temp+rename.
 // Returns file size in bytes.
 func writeJSON(finalPath string, v interface{}) (int64, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return 0, fmt.Errorf("failed to marshal JSON for %s: %w", finalPath, err)
+	}
+	return writeJSONBytes(finalPath, data)
+}
+
+func writeJSONBytes(finalPath string, data []byte) (int64, error) {
 	dir := filepath.Dir(finalPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return 0, fmt.Errorf("failed to create directory %s: %w", dir, err)
 	}
 
 	tmpPath := finalPath + ".tmp"
-	data, err := json.Marshal(v)
-	if err != nil {
-		return 0, fmt.Errorf("failed to marshal JSON for %s: %w", finalPath, err)
-	}
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return 0, fmt.Errorf("failed to write temp file %s: %w", tmpPath, err)
 	}
@@ -827,6 +827,8 @@ func ExportStatusData(status StatusData) error {
 }
 
 func writeStatusData(status StatusData) error {
+	status.TotalUniqueTracks = len(GetTracks())
+
 	// Convert to JSON
 	jsonData, err := json.MarshalIndent(status, "", "  ")
 	if err != nil {
@@ -884,7 +886,7 @@ func UpdateLastAvatarRefresh(timestamp time.Time) error {
 
 // UpdateStatusWithIndexMetrics updates the status file with index statistics
 // This is exported so indexer.go can update status after building the index
-func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueTrackCount, totalEntries int, buildDuration time.Duration, teamCount int) error {
+func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, totalEntries int, buildDuration time.Duration) error {
 	// Read current memory stats
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
@@ -895,10 +897,6 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 	// Count total cached combinations (including empty)
 	dataCache := NewDataCache()
 	totalCached := dataCache.CountCachedCombinations()
-	uniqueCachedTracks := dataCache.CountUniqueTracks()
-	if uniqueCachedTracks < uniqueTrackCount {
-		uniqueCachedTracks = uniqueTrackCount
-	}
 
 	status := StatusData{
 		// Preserve orchestrator-managed fields
@@ -908,21 +906,19 @@ func UpdateStatusWithIndexMetrics(tracks []TrackInfo, index DriverIndex, uniqueT
 		// Update index-related metrics
 		TrackCount:               len(tracks),
 		TotalFetchedCombinations: totalCached,
-		TotalUniqueTracks:        uniqueCachedTracks,
 		TotalDrivers:             len(index),
 		TotalEntries:             totalEntries,
-		TotalTeams:               teamCount,
 		LastIndexUpdate:          time.Now(),
 		IndexBuildTimeMs:         buildDuration.Seconds() * 1000,
 		MemoryAllocMB:            m.Alloc / 1024 / 1024,
 		MemorySysMB:              m.Sys / 1024 / 1024,
-		// Preserve Daily Race and fetch-error fields
-		FailedFetchCount:      existingStatus.FailedFetchCount,
-		FailedFetches:         existingStatus.FailedFetches,
-		RetriedFetchCount:     existingStatus.RetriedFetchCount,
-		LastAvatarRefresh:     existingStatus.LastAvatarRefresh,
-		DailySprintRacesCount: existingStatus.DailySprintRacesCount,
-		LastDailyRaceRefresh:  existingStatus.LastDailyRaceRefresh,
+		// Preserve ranked-series and fetch-error fields
+		FailedFetchCount:        existingStatus.FailedFetchCount,
+		FailedFetches:           existingStatus.FailedFetches,
+		RetriedFetchCount:       existingStatus.RetriedFetchCount,
+		LastAvatarRefresh:       existingStatus.LastAvatarRefresh,
+		RankedSeriesCount:       existingStatus.RankedSeriesCount,
+		LastRankedSeriesRefresh: existingStatus.LastRankedSeriesRefresh,
 	}
 	return ExportStatusData(status)
 }
