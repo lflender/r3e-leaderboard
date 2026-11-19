@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/http/cookiejar"
@@ -65,12 +66,35 @@ type APIResponse struct {
 
 // APIClient handles all API communications with RaceRoom
 type APIClient struct {
-	client          *http.Client
-	timeout         time.Duration
-	transport       *http.Transport
-	baseURL         string
-	protocol        apiProtocol
-	profileProtocol apiProtocol
+	client                       *http.Client
+	timeout                      time.Duration
+	transport                    *http.Transport
+	baseURL                      string
+	protocol                     apiProtocol
+	profileProtocol              apiProtocol
+	discoveryStatus              func(string, error) error
+	leaderboardNeedsVerification bool
+	profileNeedsVerification     bool
+}
+
+func newStatusReportingAPIClient() *APIClient {
+	client := NewAPIClient()
+	client.discoveryStatus = updateAPIDiscoveryStatus
+	return client
+}
+
+func (api *APIClient) reportDiscoveryStatus(ctx context.Context, operation string, err error) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	if api.discoveryStatus == nil {
+		return true
+	}
+	if statusErr := api.discoveryStatus(operation, err); statusErr != nil {
+		log.Printf("⚠️ Failed to update %s API discovery status: %v", operation, statusErr)
+		return false
+	}
+	return true
 }
 
 // NewAPIClient creates a new API client with default settings
@@ -173,6 +197,7 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 			return "", fmt.Errorf("discover profile protocol: %w", err)
 		}
 		api.profileProtocol = protocol
+		api.profileNeedsVerification = true
 	}
 
 	avatarURL, err := api.fetchProfileAvatarWithProtocol(ctx, identifier, body, api.profileProtocol)
@@ -182,18 +207,29 @@ func (api *APIClient) FetchProfileAvatar(ctx context.Context, identifier string)
 			return "", fmt.Errorf("%w; endpoint discovery failed: %v", err, discoveryErr)
 		}
 		if discoveredProtocol == api.profileProtocol {
-			return "", fmt.Errorf("%w; discovered protocol matches the stale protocol", err)
+			api.profileNeedsVerification = true
+			err = fmt.Errorf("%w; discovered protocol matches the stale protocol", err)
+			api.reportDiscoveryStatus(ctx, "profile", err)
+			return "", err
 		}
 		avatarURL, err = api.fetchProfileAvatarWithProtocol(ctx, identifier, body, discoveredProtocol)
 		if err != nil {
+			if isStaleAPIProtocolError(err) {
+				api.reportDiscoveryStatus(ctx, "profile", err)
+			}
 			return "", fmt.Errorf("retry with discovered profile protocol: %w", err)
 		}
 		api.profileProtocol = discoveredProtocol
+		api.profileNeedsVerification = true
 	}
 	if err != nil {
 		return "", err
 	}
-	return normalizeProfileAvatarURL(avatarURL, api.baseURL)
+	avatarURL, err = normalizeProfileAvatarURL(avatarURL, api.baseURL)
+	if err == nil && api.profileNeedsVerification {
+		api.profileNeedsVerification = !api.reportDiscoveryStatus(ctx, "profile", nil)
+	}
+	return avatarURL, err
 }
 
 func (api *APIClient) fetchProfileAvatarWithProtocol(ctx context.Context, identifier string, body []byte, protocol apiProtocol) (string, error) {
@@ -374,10 +410,17 @@ func (api *APIClient) fetchLeaderboardPage(ctx context.Context, trackID, classID
 			return nil, fmt.Errorf("discover leaderboard protocol: %w", err)
 		}
 		api.protocol = protocol
+		api.leaderboardNeedsVerification = true
 	}
 
 	results, err := api.fetchLeaderboardPageWithProtocol(ctx, trackID, classID, start, api.protocol)
-	if err == nil || !isStaleAPIProtocolError(err) {
+	if err == nil {
+		if api.leaderboardNeedsVerification {
+			api.leaderboardNeedsVerification = !api.reportDiscoveryStatus(ctx, "leaderboard", nil)
+		}
+		return results, nil
+	}
+	if !isStaleAPIProtocolError(err) {
 		return results, err
 	}
 
@@ -386,14 +429,21 @@ func (api *APIClient) fetchLeaderboardPage(ctx context.Context, trackID, classID
 		return nil, fmt.Errorf("%w; endpoint discovery failed: %v", err, discoveryErr)
 	}
 	if discoveredProtocol == api.protocol {
-		return nil, fmt.Errorf("%w; discovered protocol matches the stale protocol", err)
+		api.leaderboardNeedsVerification = true
+		err = fmt.Errorf("%w; discovered protocol matches the stale protocol", err)
+		api.reportDiscoveryStatus(ctx, "leaderboard", err)
+		return nil, err
 	}
 
 	results, err = api.fetchLeaderboardPageWithProtocol(ctx, trackID, classID, start, discoveredProtocol)
 	if err != nil {
+		if isStaleAPIProtocolError(err) {
+			api.reportDiscoveryStatus(ctx, "leaderboard", err)
+		}
 		return nil, fmt.Errorf("retry with discovered leaderboard protocol: %w", err)
 	}
 	api.protocol = discoveredProtocol
+	api.leaderboardNeedsVerification = !api.reportDiscoveryStatus(ctx, "leaderboard", nil)
 	return results, nil
 }
 
@@ -502,6 +552,14 @@ func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (apiProto
 }
 
 func (api *APIClient) discoverAPIProtocol(ctx context.Context, apiName string) (apiProtocol, error) {
+	protocol, err := api.discoverAPIProtocolFromBundles(ctx, apiName)
+	if err != nil {
+		api.reportDiscoveryStatus(ctx, apiName, err)
+	}
+	return protocol, err
+}
+
+func (api *APIClient) discoverAPIProtocolFromBundles(ctx context.Context, apiName string) (apiProtocol, error) {
 	pagePath := "/leaderboard/"
 	if apiName == "series" {
 		pagePath = "/ranked/series"

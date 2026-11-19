@@ -148,6 +148,7 @@ func (api *APIClient) FetchRankedSeries(ctx context.Context) ([]RankedSeries, er
 	if len(series) == 0 {
 		return nil, fmt.Errorf("ranked-series response contained no series")
 	}
+	api.reportDiscoveryStatus(ctx, "series", nil)
 	return series, nil
 }
 
@@ -607,7 +608,7 @@ func ExportRankedSeries(series []RankedSeries) error {
 }
 
 func FetchAndExportRankedSeries(ctx context.Context) ([]RankedSeries, error) {
-	api := NewAPIClient()
+	api := newStatusReportingAPIClient()
 	defer api.Close()
 	series, err := api.FetchRankedSeries(ctx)
 	if err != nil {

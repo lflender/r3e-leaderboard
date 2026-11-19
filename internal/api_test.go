@@ -220,6 +220,11 @@ func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
 	client := NewAPIClient()
 	defer client.Close()
 	client.baseURL = server.URL
+	var profileStatusCleared bool
+	client.discoveryStatus = func(operation string, err error) error {
+		profileStatusCleared = operation == "profile" && err == nil
+		return nil
+	}
 
 	avatar, err := client.FetchProfileAvatar(context.Background(), "9587602")
 	if err != nil {
@@ -227,6 +232,9 @@ func TestAPIClient_FetchProfileAvatar_DiscoversChangedProtocol(t *testing.T) {
 	}
 	if avatar != "https://example.com/avatar.webp" {
 		t.Errorf("FetchProfileAvatar = %q, want discovered avatar URL", avatar)
+	}
+	if !profileStatusCleared {
+		t.Error("successful profile discovery did not clear its warning")
 	}
 	if discoveryRequests != 1 {
 		t.Errorf("Discovery requests = %d, want 1", discoveryRequests)
@@ -734,6 +742,184 @@ func TestAPIClient_DiscoverAPIProtocol_PreservesRelevantBundleError(t *testing.T
 	_, err := client.discoverLeaderboardProtocol(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "/client.js") || !strings.Contains(err.Error(), "response encoding") {
 		t.Fatalf("discovery error = %v, want the client bundle's response encoding failure", err)
+	}
+}
+
+func TestAPIClient_DiscoveryStatusFailureAndRecovery(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	const endpoint = "/iapi/0123456789abcdef"
+	bundleReady := false
+	endpointStatus := http.StatusServiceUnavailable
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/leaderboard/":
+			_, _ = w.Write([]byte(`<script src="/client.js"></script>`))
+		case "/client.js":
+			bundle := `board=X(()=>[[1,"results",items,1],[2,"responseStatus",status]]),` +
+				`fetch=e=>request("` + endpoint + `",e,board.decode),headers={xr:"token"}`
+			if bundleReady {
+				bundle += `,r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]=(n[i]??0)^53+i*3&255`
+			}
+			_, _ = w.Write([]byte(bundle))
+		case endpoint:
+			if endpointStatus != http.StatusOK {
+				http.Error(w, "unavailable", endpointStatus)
+				return
+			}
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(encodeTestLeaderboardResponseWithXORAndLimit(0, 1, 53, 3, 256))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.TotalDrivers = 42
+		status.APIDiscoveryErrors = map[string]string{"profile": "profile discovery failed"}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	client := newStatusReportingAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err == nil {
+		t.Fatal("expected discovery to fail")
+	}
+	status := readJSONFile[StatusData](t, StatusFile)
+	if !status.APIDiscoveryFailed || !strings.Contains(status.APIDiscoveryErrors["leaderboard"], "response encoding") ||
+		status.APIDiscoveryErrors["profile"] == "" || status.TotalDrivers != 42 {
+		t.Fatalf("unexpected status after discovery failure: %+v", status)
+	}
+
+	bundleReady = true
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err == nil {
+		t.Fatal("expected unverified endpoint to fail")
+	}
+	status = readJSONFile[StatusData](t, StatusFile)
+	if status.APIDiscoveryErrors["leaderboard"] == "" {
+		t.Fatal("discovery warning cleared before the endpoint succeeded")
+	}
+
+	endpointStatus = http.StatusOK
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err != nil {
+		t.Fatalf("fetch after recovery: %v", err)
+	}
+	status = readJSONFile[StatusData](t, StatusFile)
+	if !status.APIDiscoveryFailed || status.APIDiscoveryErrors["leaderboard"] != "" || status.APIDiscoveryErrors["profile"] == "" {
+		t.Fatalf("unexpected status after leaderboard recovery: %+v", status)
+	}
+	endpointStatus = http.StatusNotFound
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err == nil {
+		t.Fatal("expected rediscovery of an unchanged stale protocol to fail")
+	}
+	status = readJSONFile[StatusData](t, StatusFile)
+	if !strings.Contains(status.APIDiscoveryErrors["leaderboard"], "matches the stale protocol") {
+		t.Fatalf("stale rediscovered protocol was not reported: %+v", status)
+	}
+	endpointStatus = http.StatusOK
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err != nil {
+		t.Fatalf("fetch after stale endpoint recovered: %v", err)
+	}
+	if err := updateAPIDiscoveryStatus("profile", nil); err != nil {
+		t.Fatal(err)
+	}
+	status = readJSONFile[StatusData](t, StatusFile)
+	if status.APIDiscoveryFailed || len(status.APIDiscoveryErrors) != 0 || status.TotalDrivers != 42 {
+		t.Fatalf("unexpected status after all recoveries: %+v", status)
+	}
+}
+
+func TestAPIClient_DiscoveryStatusForOtherOperations(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "maintenance", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	client := newStatusReportingAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+	if _, err := client.FetchProfileAvatar(context.Background(), "123"); err == nil {
+		t.Fatal("expected profile discovery to fail")
+	}
+	if _, err := client.FetchRankedSeries(context.Background()); err == nil {
+		t.Fatal("expected series discovery to fail")
+	}
+	status := readJSONFile[StatusData](t, StatusFile)
+	if !status.APIDiscoveryFailed || status.APIDiscoveryErrors["profile"] == "" || status.APIDiscoveryErrors["series"] == "" {
+		t.Fatalf("expected profile and series discovery warnings: %+v", status)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := client.fetchLeaderboardPage(ctx, "1671", "1703", 0); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled request returned %v", err)
+	}
+	status = readJSONFile[StatusData](t, StatusFile)
+	if status.APIDiscoveryErrors["leaderboard"] != "" {
+		t.Fatalf("cancelled request recorded a discovery failure: %+v", status)
+	}
+}
+
+func TestAPIClient_DiscoveryStatusRequiresSuccessfulNewProtocol(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	const oldEndpoint = "/iapi/111111111111"
+	const newEndpoint = "/iapi/222222222222"
+	oldReady, newReady := false, false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/leaderboard/":
+			_, _ = w.Write([]byte(`<script src="/client.js"></script>`))
+		case "/client.js":
+			_, _ = w.Write([]byte(`board=X(()=>[[1,"results",items,1],[2,"responseStatus",status]]),` +
+				`fetch=e=>request("` + newEndpoint + `",e,board.decode),headers={xr:"token"},` +
+				`r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]^=53+i*3&255`))
+		case oldEndpoint, newEndpoint:
+			if (r.URL.Path == oldEndpoint && !oldReady) || (r.URL.Path == newEndpoint && !newReady) {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(encodeTestLeaderboardResponseWithXORAndLimit(0, 1, 53, 3, 256))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newStatusReportingAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+	client.protocol = apiProtocol{endpoint: oldEndpoint, xr: "token", responseSeed: 53, responseStep: 3, responseLimit: 256}
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err == nil {
+		t.Fatal("expected new protocol retry to fail")
+	}
+	if !ReadStatusData().APIDiscoveryFailed {
+		t.Fatal("failed new protocol retry did not record a warning")
+	}
+
+	oldReady = true
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err != nil {
+		t.Fatalf("fetch using old protocol: %v", err)
+	}
+	if !ReadStatusData().APIDiscoveryFailed {
+		t.Fatal("success using the old protocol cleared the new protocol warning")
+	}
+
+	oldReady, newReady = false, true
+	if _, err := client.fetchLeaderboardPage(context.Background(), "1671", "1703", 0); err != nil {
+		t.Fatalf("fetch using new protocol: %v", err)
+	}
+	if ReadStatusData().APIDiscoveryFailed {
+		t.Fatal("successful new protocol did not clear the warning")
 	}
 }
 

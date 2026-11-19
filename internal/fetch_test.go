@@ -2,7 +2,12 @@ package internal
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -34,7 +39,7 @@ func TestSetAPIThrottle(t *testing.T) {
 func TestFetchCombinations_EmptyConfigs(t *testing.T) {
 	ctx := context.Background()
 
-	result := fetchCombinations(ctx, nil, nil, nil, "test")
+	result := fetchCombinations(ctx, nil, nil, nil, "test", true)
 
 	if len(result) != 0 {
 		t.Errorf("Expected empty result for nil configs, got %d", len(result))
@@ -48,7 +53,7 @@ func TestFetchCombinations_WithCancelledContext(t *testing.T) {
 	trackConfigs := []TrackConfig{{Name: "Track 1", TrackID: "1671"}}
 	classConfigs := []CarClassConfig{{Name: "GTR 3", ClassID: "1703"}}
 
-	result := fetchCombinations(ctx, trackConfigs, classConfigs, nil, "test")
+	result := fetchCombinations(ctx, trackConfigs, classConfigs, nil, "test", true)
 
 	// Should return early with empty result
 	if len(result) != 0 {
@@ -71,7 +76,7 @@ func TestFetchCombinations_ProgressCallbackInvoked(t *testing.T) {
 
 	// This will attempt real fetch - document that limitation
 	t.Logf("Note: fetch_test without mocking will attempt real API calls")
-	_ = fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "test")
+	_ = fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "test", true)
 
 	// Callback may be invoked depending on results
 	t.Logf("Progress callback invoked %d times", callCount)
@@ -93,7 +98,7 @@ func TestFetchCombinations_RateLimitingEnforced(t *testing.T) {
 	}
 
 	start := time.Now()
-	_ = fetchCombinations(ctx, trackConfigs, classConfigs, nil, "test")
+	_ = fetchCombinations(ctx, trackConfigs, classConfigs, nil, "test", true)
 	duration := time.Since(start)
 
 	// Should have taken at least one throttle period (between 2 requests)
@@ -419,5 +424,112 @@ func TestExportFailedFetches_PreservesTimestamp(t *testing.T) {
 		if ts.Before(before) || ts.After(after) {
 			t.Logf("Timestamp %v not in range [%v, %v]", ts, before, after)
 		}
+	}
+}
+
+func TestFullRefreshFailedFetchStatus(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	originalThrottle := apiThrottle
+	apiThrottle = 0
+	defer func() { apiThrottle = originalThrottle }()
+
+	var mu sync.Mutex
+	mode := 0
+	calls := make(map[string]int)
+	setMode := func(value int) {
+		mu.Lock()
+		defer mu.Unlock()
+		mode = value
+		calls = make(map[string]int)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Filters struct {
+				Filters []struct {
+					Name  string `json:"name"`
+					Value string `json:"value"`
+				} `json:"filters"`
+			} `json:"filters"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		track := ""
+		for _, filter := range request.Filters.Filters {
+			if filter.Name == "track" {
+				track = filter.Value
+			}
+		}
+		mu.Lock()
+		calls[track]++
+		call, currentMode := calls[track], mode
+		mu.Unlock()
+
+		if currentMode == 2 || (currentMode == 0 && (track == "2" || call == 1)) {
+			status := http.StatusServiceUnavailable
+			if currentMode == 0 && track == "2" && call > 1 {
+				status = http.StatusBadGateway
+			}
+			http.Error(w, "failed", status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript-binast")
+		if track == "1" {
+			_, _ = w.Write(encodeTestLeaderboardResponse(0, 1))
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+	client.protocol = testAPIProtocol(testLeaderboardEndpoint, testRequestXR, testResponseXORSeed, testResponseXORStep)
+	tracks := []TrackConfig{{Name: "One", TrackID: "1"}, {Name: "Two", TrackID: "2"}, {Name: "Empty", TrackID: "3"}}
+	classes := []CarClassConfig{{Name: "Class", ClassID: "4"}}
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.TotalDrivers = 42
+		status.FailedFetchCount = 1
+		status.FailedFetches = []FailedFetch{{TrackID: "old", Error: "old error"}}
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	fetchCombinationsWithClient(context.Background(), tracks, classes, nil, "full", true, client)
+	status := ReadStatusData()
+	if status.FailedFetchCount != 1 || len(status.FailedFetches) != 1 ||
+		status.FailedFetches[0].TrackID != "2" || !strings.Contains(status.FailedFetches[0].Error, "502") ||
+		status.TotalDrivers != 42 {
+		t.Fatalf("status after full refresh and retries = %+v", status)
+	}
+
+	setMode(1)
+	fetchCombinationsWithClient(context.Background(), tracks, classes, nil, "full", true, client)
+	status = ReadStatusData()
+	if status.FailedFetchCount != 0 || len(status.FailedFetches) != 0 || status.TotalDrivers != 42 {
+		t.Fatalf("status after successful full refresh = %+v", status)
+	}
+
+	exportFailedFetches([]FailedFetchInfo{{Track: tracks[1], Class: classes[0], Err: errors.New("last full refresh")}})
+	setMode(2)
+	fetchCombinationsWithClient(context.Background(), tracks[:1], classes, nil, "targeted", false, client)
+	status = ReadStatusData()
+	if status.FailedFetchCount != 1 || len(status.FailedFetches) != 1 || status.FailedFetches[0].Error != "last full refresh" {
+		t.Fatalf("targeted refresh changed full refresh failures: %+v", status)
+	}
+	fetchSpecificCombinations(context.Background(), nil, nil, nil, nil)
+	if got := ReadStatusData(); got.FailedFetchCount != 1 || len(got.FailedFetches) != 1 {
+		t.Fatalf("specific refresh changed full refresh failures: %+v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fetchCombinationsWithClient(ctx, tracks[:1], classes, func([]TrackInfo) { cancel() }, "cancelled full", true, client)
+	status = ReadStatusData()
+	if status.FailedFetchCount != 1 || len(status.FailedFetches) != 1 || status.FailedFetches[0].Error != "last full refresh" {
+		t.Fatalf("cancelled full refresh changed previous failures: %+v", status)
 	}
 }

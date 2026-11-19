@@ -166,7 +166,7 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 	log.Printf("📊 Loading data for %d tracks × %d classes = %d combinations...",
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
-	apiClient := NewAPIClient()
+	apiClient := newStatusReportingAPIClient()
 	defer apiClient.Close() // Ensure connections are cleaned up
 
 	var allTrackData []TrackInfo
@@ -385,7 +385,7 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 
 	// PHASE 6: Retry failed fetches
 	log.Printf("🔄 Phase 6: Retry failed fetches (%d pending)", len(failedFetches))
-	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	retriedTracks, _ := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	for i := range retriedTracks {
 		retriedTracks[i].Data = nil
 	}
@@ -399,11 +399,6 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 
 	log.Printf("✅ Loaded %d total combinations (%d from cache, %d fetched)",
 		len(allTrackData), cacheLoadCount, fetchedCount)
-
-	// Export failed fetch statistics to status file
-	if len(failedFetches) > 0 {
-		exportFailedFetches(failedFetches)
-	}
 
 	// Force GC after large loading operation to clean up temporary structures
 	runtime.GC()

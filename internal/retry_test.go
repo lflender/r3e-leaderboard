@@ -61,7 +61,7 @@ func TestRetryFailedFetches_EmptyList(t *testing.T) {
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(originalWriter)
 
-	result := retryFailedFetches(ctx, apiClient, tempCache, nil)
+	result, _ := retryFailedFetches(ctx, apiClient, tempCache, nil)
 
 	if len(result) != 0 {
 		t.Errorf("Expected nil or empty result for empty failed list, got %d", len(result))
@@ -96,10 +96,13 @@ func TestRetryFailedFetches_CancelledContext(t *testing.T) {
 		},
 	}
 
-	result := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	result, remaining := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 
 	// With cancelled context, should return early with empty result
 	t.Logf("Retry result with cancelled context: %d tracks", len(result))
+	if len(remaining) != 1 || remaining[0].Err.Error() != "original error" {
+		t.Fatalf("cancelled retry lost pending failures: %+v", remaining)
+	}
 }
 
 // =============================================================================
@@ -175,7 +178,7 @@ func TestRetryRateLimiting(t *testing.T) {
 	}
 
 	start := time.Now()
-	_ = retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	_, _ = retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	elapsed := time.Since(start)
 
 	// Should take at least some time due to rate limiting (20ms per request)
