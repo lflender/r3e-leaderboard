@@ -484,6 +484,7 @@ func isStaleAPIProtocolError(err error) bool {
 }
 
 var (
+	errAPISchemaNotFound     = errors.New("API client bundle has no recognizable schema and endpoint")
 	leaderboardScriptPattern = regexp.MustCompile(`(?i)<(?:script\b[^>]*?\bsrc|link\b[^>]*?\bhref)\s*=\s*["']([^"']+)["'][^>]*>`)
 	apiEndpointPattern       = regexp.MustCompile(`(?i)/iapi/([a-f0-9]{8,64})`)
 	apiDecoderPattern        = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\.decode\b`)
@@ -493,7 +494,7 @@ var (
 		regexp.MustCompile("(?i)\\.set\\(\\s*[\"']xr[\"']\\s*,\\s*[\"'`]([A-Za-z0-9_-]+)[\"'`]\\s*\\)"),
 		regexp.MustCompile("(?i)(?:\\bxr\\b|[\"']xr[\"'])(?:\\s*\\])?\\s*=\\s*[\"'`]([A-Za-z0-9_-]+)[\"'`]"),
 	}
-	responseXORPattern = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\]\s*\^=\s*([0-9]+)\s*\+\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\*\s*([0-9]+)\s*&\s*255`)
+	responseXORPattern = regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\]\s*(?:\^=\s*|=\s*\(?\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\]\s*(?:\?\?\s*0\s*)?\)?\s*\^\s*)([0-9]+)\s*\+\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\*\s*([0-9]+)\s*&\s*255`)
 )
 
 func (api *APIClient) discoverLeaderboardProtocol(ctx context.Context) (apiProtocol, error) {
@@ -519,7 +520,7 @@ func (api *APIClient) discoverAPIProtocol(ctx context.Context, apiName string) (
 	if err != nil {
 		return apiProtocol{}, fmt.Errorf("parse leaderboard page URL: %w", err)
 	}
-	var lastErr error
+	var lastErr, matchedBundleErr error
 	for _, scriptPath := range scriptPaths {
 		scriptURL, err := url.Parse(string(scriptPath[1]))
 		if err != nil {
@@ -543,10 +544,16 @@ func (api *APIClient) discoverAPIProtocol(ctx context.Context, apiName string) (
 		if err == nil {
 			return protocol, nil
 		}
-		lastErr = err
+		lastErr = fmt.Errorf("client bundle %s: %w", scriptURL, err)
+		if !errors.Is(err, errAPISchemaNotFound) {
+			matchedBundleErr = lastErr
+		}
 	}
 	if ctx.Err() != nil {
 		return apiProtocol{}, ctx.Err()
+	}
+	if matchedBundleErr != nil {
+		return apiProtocol{}, fmt.Errorf("discover %s protocol from client bundles: %w", apiName, matchedBundleErr)
 	}
 	if lastErr != nil {
 		return apiProtocol{}, fmt.Errorf("discover %s protocol from client bundles: %w", apiName, lastErr)
@@ -578,7 +585,7 @@ func discoverAPIProtocolInBundle(bundle []byte, apiName string) (apiProtocol, er
 		break
 	}
 	if endpoint == "" {
-		return apiProtocol{}, fmt.Errorf("API client bundle has no recognizable %s schema and endpoint", apiName)
+		return apiProtocol{}, fmt.Errorf("%w for %s", errAPISchemaNotFound, apiName)
 	}
 
 	var xr string
@@ -605,52 +612,78 @@ func discoverAPIProtocolInBundle(bundle []byte, apiName string) (apiProtocol, er
 }
 
 func discoverResponseXOREncoding(bundle []byte) (seed, step, limit int, err error) {
-	responseXOR := responseXORPattern.FindSubmatchIndex(bundle)
-	if len(responseXOR) != 12 || string(bundle[responseXOR[4]:responseXOR[5]]) != string(bundle[responseXOR[8]:responseXOR[9]]) {
-		return 0, 0, 0, fmt.Errorf("API client bundle has no recognizable response encoding")
+	found := false
+	for _, match := range responseXORPattern.FindAllSubmatchIndex(bundle, -1) {
+		array := string(bundle[match[2]:match[3]])
+		index := string(bundle[match[4]:match[5]])
+		if index != string(bundle[match[12]:match[13]]) ||
+			(match[6] >= 0 && (array != string(bundle[match[6]:match[7]]) || index != string(bundle[match[8]:match[9]]))) {
+			continue
+		}
+		candidateSeed, parseErr := strconv.Atoi(string(bundle[match[10]:match[11]]))
+		if parseErr != nil {
+			return 0, 0, 0, fmt.Errorf("parse API response encoding seed: %w", parseErr)
+		}
+		candidateStep, parseErr := strconv.Atoi(string(bundle[match[14]:match[15]]))
+		if parseErr != nil {
+			return 0, 0, 0, fmt.Errorf("parse API response encoding step: %w", parseErr)
+		}
+		candidateLimit, ok, limitErr := discoverResponseXORLimit(bundle[:match[0]], array, index)
+		if limitErr != nil {
+			return 0, 0, 0, limitErr
+		}
+		if !ok {
+			continue
+		}
+		if found && (seed != candidateSeed || step != candidateStep || limit != candidateLimit) {
+			return 0, 0, 0, fmt.Errorf("API client bundle has ambiguous response encodings")
+		}
+		seed, step, limit = candidateSeed, candidateStep, candidateLimit
+		found = true
 	}
-	seed, err = strconv.Atoi(string(bundle[responseXOR[6]:responseXOR[7]]))
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse API response encoding seed: %w", err)
+	if !found {
+		return 0, 0, 0, fmt.Errorf("API client bundle has no recognizable response encoding or limit")
 	}
-	step, err = strconv.Atoi(string(bundle[responseXOR[10]:responseXOR[11]]))
-	if err != nil {
-		return 0, 0, 0, fmt.Errorf("parse API response encoding step: %w", err)
-	}
+	return seed, step, limit, nil
+}
 
-	arrayName := regexp.QuoteMeta(string(bundle[responseXOR[2]:responseXOR[3]]))
-	indexName := regexp.QuoteMeta(string(bundle[responseXOR[4]:responseXOR[5]]))
-	beforeXOR := bundle[:responseXOR[0]]
+func discoverResponseXORLimit(beforeXOR []byte, array, index string) (int, bool, error) {
+	arrayName := regexp.QuoteMeta(array)
+	indexName := regexp.QuoteMeta(index)
 	if len(beforeXOR) > 2048 {
 		beforeXOR = beforeXOR[len(beforeXOR)-2048:]
 	}
-	minLimitPattern := regexp.MustCompile(`([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*Math\.min\(\s*([0-9]+)\s*,\s*` + arrayName + `\.length\s*\)`)
-	for _, match := range minLimitPattern.FindAllSubmatchIndex(beforeXOR, -1) {
-		boundName := regexp.QuoteMeta(string(beforeXOR[match[2]:match[3]]))
-		limit, err = strconv.Atoi(string(beforeXOR[match[4]:match[5]]))
-		if err != nil {
-			return 0, 0, 0, fmt.Errorf("parse API response encoding limit: %w", err)
-		}
-		loopPattern := regexp.MustCompile(
-			`for\s*\(\s*(?:(?:let|var|const)\s+)?` + indexName + `\s*=\s*0\s*;\s*` +
-				indexName + `\s*<\s*` + boundName + `\s*;\s*` + indexName + `\+\+\s*\)\s*` +
-				arrayName + `\s*\[\s*` + indexName + `\s*\]\s*\^=`,
-		)
-		if loopPattern.Match(bundle[responseXOR[0]-len(beforeXOR):]) {
-			return seed, step, limit, nil
-		}
-	}
-
-	fullLengthLoopPattern := regexp.MustCompile(
+	loopPattern := regexp.MustCompile(
 		`for\s*\(\s*(?:(?:let|var|const)\s+)?` + indexName + `\s*=\s*0\s*;\s*` +
-			indexName + `\s*<\s*` + arrayName + `\.length\s*;\s*` + indexName + `\+\+\s*\)\s*` +
-			arrayName + `\s*\[\s*` + indexName + `\s*\]\s*\^=`,
+			indexName + `\s*<\s*([A-Za-z_$][A-Za-z0-9_$]*(?:\.length)?)\s*;\s*` +
+			`(?:` + indexName + `\s*\+\+|\+\+\s*` + indexName + `)\s*\)\s*\{?\s*$`,
 	)
-	if fullLengthLoopPattern.Match(bundle) {
-		return seed, step, 0, nil
+	loop := loopPattern.FindSubmatchIndex(beforeXOR)
+	if len(loop) == 0 {
+		return 0, false, nil
 	}
-
-	return 0, 0, 0, fmt.Errorf("API client bundle has no recognizable response encoding limit")
+	bound := string(beforeXOR[loop[2]:loop[3]])
+	if bound == array+".length" {
+		return 0, true, nil
+	}
+	boundName := regexp.QuoteMeta(bound)
+	minLimitPattern := regexp.MustCompile(`(?:^|[^A-Za-z0-9_$])` + boundName +
+		`\s*=\s*Math\.min\(\s*(?:([0-9]+)\s*,\s*` + arrayName + `\.length|` +
+		arrayName + `\.length\s*,\s*([0-9]+))\s*\)`)
+	matches := minLimitPattern.FindAllSubmatchIndex(beforeXOR[:loop[0]], -1)
+	if len(matches) == 0 {
+		return 0, false, nil
+	}
+	match := matches[len(matches)-1]
+	start, end := match[2], match[3]
+	if start < 0 {
+		start, end = match[4], match[5]
+	}
+	limit, err := strconv.Atoi(string(beforeXOR[start:end]))
+	if err != nil || limit <= 0 {
+		return 0, false, fmt.Errorf("invalid API response encoding limit %q", beforeXOR[start:end])
+	}
+	return limit, true, nil
 }
 
 func apiSchemaForEndpointCall(bundle []byte, endpointStart int, requiredFields []string, schemaCache map[string]bool) string {

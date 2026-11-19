@@ -316,6 +316,11 @@ against all upstream changes: if RaceRoom changes schema fields, their
 protobuf field layout, or the encoding itself, the corresponding decoder may
 still need to be updated.
 
+To check discovery and decode a live leaderboard page, run
+`R3E_LEADERBOARD_INTEGRATION=1 go test -v -run TestRaceRoomLeaderboardDiscoveryIntegration ./internal`
+(on PowerShell, set `$env:R3E_LEADERBOARD_INTEGRATION = "1"` before running the
+`go test` command). This opt-in test makes requests to RaceRoom.
+
 Automatic ranked-series discovery and targeted ranked-series refreshes are
 disabled, including at startup. The full refresh fetches the configured
 track/class combinations without a separate ranked-series fetch. Any existing

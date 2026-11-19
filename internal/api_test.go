@@ -371,6 +371,7 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 		xorSeed       int
 		xorStep       int
 		xorLimit      int
+		xorStatement  string
 		cached        apiProtocol
 		staleEndpoint string
 	}{
@@ -406,6 +407,19 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 			cached:        testAPIProtocol(testPreviousLeaderboardID, testPreviousRequestXR, testPreviousResponseSeed, testPreviousResponseStep),
 			staleEndpoint: testPreviousLeaderboardID,
 		},
+		{
+			name:          "nullish assignment after startup",
+			endpoint:      "/iapi/214b55db62de",
+			xr:            "5c6c0a81",
+			schemaFactory: "X",
+			helper:        "Q",
+			xorSeed:       53,
+			xorStep:       3,
+			xorLimit:      256,
+			xorStatement:  "n[e]=(n[e]??0)^53+e*3&255",
+			cached:        testAPIProtocol(testPreviousLeaderboardID, testPreviousRequestXR, testPreviousResponseSeed, testPreviousResponseStep),
+			staleEndpoint: testPreviousLeaderboardID,
+		},
 	}
 
 	for _, test := range tests {
@@ -419,12 +433,15 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 					discoveryRequests++
 					_, _ = w.Write([]byte(`<script type="module" src="/assets/client.js"></script>`))
 				case "/assets/client.js":
+					xorStatement := test.xorStatement
+					if xorStatement == "" {
+						xorStatement = "n[e]^=" + strconv.Itoa(test.xorSeed) + "+e*" + strconv.Itoa(test.xorStep) + "&255"
+					}
 					bundle := "wf=" + test.schemaFactory + "(()=>[[1,`results`,up,1],[2,`responseStatus`,Gm]])," +
 						"Eg=e=>" + test.helper + "(`/iapi/" + strings.TrimPrefix(test.endpoint, "/iapi/") +
 						"`,e,void 0,void 0,wf.decode)," +
 						"xr:`" + test.xr + "`,r=Math.min(" + strconv.Itoa(test.xorLimit) +
-						",n.length);for(let e=0;e<r;e++)n[e]^=" + strconv.Itoa(test.xorSeed) + "+e*" +
-						strconv.Itoa(test.xorStep) + "&255"
+						",n.length);for(let e=0;e<r;e++)" + xorStatement
 					_, _ = w.Write([]byte(bundle))
 				case test.endpoint:
 					if got := r.Header.Get("xr"); got != test.xr {
@@ -464,6 +481,68 @@ func TestAPIClient_FetchLeaderboardData_DiscoversChangedProtocol(t *testing.T) {
 			}
 			if client.protocol.responseLimit != test.xorLimit {
 				t.Errorf("Cached response encoding limit = %d, want %d", client.protocol.responseLimit, test.xorLimit)
+			}
+		})
+	}
+}
+
+func TestDiscoverResponseXOREncoding(t *testing.T) {
+	tests := []struct {
+		name        string
+		source      string
+		seed        int
+		step        int
+		limit       int
+		shouldError bool
+	}{
+		{
+			name: "current RaceRoom loop",
+			source: "let n=new Uint8Array(await e.arrayBuffer()),r=Math.min(256,n.length);" +
+				"for(let e=0;e<r;e++)n[e]=(n[e]??0)^53+e*3&255",
+			seed: 53, step: 3, limit: 256,
+		},
+		{
+			name: "reversed minimum and braced loop",
+			source: "limit=Math.min(bytes.length,512);for (let i=0; i<limit; ++i) { " +
+				"bytes[i] = bytes[i] ^ 57 + i * 19 & 255; }",
+			seed: 57, step: 19, limit: 512,
+		},
+		{
+			name:   "full length loop",
+			source: "for(let i=0;i<bytes.length;i++)bytes[i]^=31+i*7&255",
+			seed:   31, step: 7,
+		},
+		{
+			name: "skip unrelated XOR before valid loop",
+			source: "other[i]^=1+i*2&255;limit=Math.min(256,bytes.length);" +
+				"for(let i=0;i<limit;i++)bytes[i]^=53+i*3&255",
+			seed: 53, step: 3, limit: 256,
+		},
+		{name: "different source array", source: "r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]=(x[i]??0)^53+i*3&255", shouldError: true},
+		{name: "different source index", source: "r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]=(n[j]??0)^53+i*3&255", shouldError: true},
+		{name: "different multiplier index", source: "r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]^=53+j*3&255", shouldError: true},
+		{name: "zero limit", source: "r=Math.min(0,n.length);for(let i=0;i<r;i++)n[i]^=53+i*3&255", shouldError: true},
+		{
+			name: "ambiguous loops",
+			source: "r=Math.min(256,n.length);for(let i=0;i<r;i++)n[i]^=53+i*3&255;" +
+				"s=Math.min(512,b.length);for(let j=0;j<s;j++)b[j]^=57+j*19&255",
+			shouldError: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			seed, step, limit, err := discoverResponseXOREncoding([]byte(test.source))
+			if test.shouldError {
+				if err == nil {
+					t.Fatalf("expected discovery error, got (%d, %d, %d)", seed, step, limit)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("discoverResponseXOREncoding: %v", err)
+			}
+			if seed != test.seed || step != test.step || limit != test.limit {
+				t.Errorf("encoding = (%d, %d, %d), want (%d, %d, %d)", seed, step, limit, test.seed, test.step, test.limit)
 			}
 		})
 	}
@@ -630,6 +709,31 @@ func TestAPIClient_DiscoverAPIProtocol_ScansScriptBundles(t *testing.T) {
 	}
 	if bundleRequests != 3 {
 		t.Errorf("bundle requests = %d, want 3", bundleRequests)
+	}
+}
+
+func TestAPIClient_DiscoverAPIProtocol_PreservesRelevantBundleError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/leaderboard/":
+			_, _ = w.Write([]byte(`<script src="/client.js"></script><script src="/vendor.js"></script>`))
+		case "/client.js":
+			_, _ = w.Write([]byte(`board=X(()=>[[1,"results",items,1],[2,"responseStatus",status]]),` +
+				`fetch=e=>request("/iapi/0123456789abcdef",e,board.decode),headers={xr:"token"}`))
+		case "/vendor.js":
+			_, _ = w.Write([]byte(`vendor=()=>{}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+	_, err := client.discoverLeaderboardProtocol(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "/client.js") || !strings.Contains(err.Error(), "response encoding") {
+		t.Fatalf("discovery error = %v, want the client bundle's response encoding failure", err)
 	}
 }
 
