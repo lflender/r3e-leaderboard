@@ -13,12 +13,6 @@ Disclaimer: all code was written by AI.
 - 📅 Automatic full cache refresh every 3 hours (8 times daily)
 - 🗂️ Smart cache management (freshness follows the full refresh interval)
 
-## Data Coverage:
-
-- 169 tracks × 83 classes = 14,027 combinations
-- 60,000+ drivers searchable
-- 300,000+ leaderboard entries
-
 ## Clean Architecture:
 
 - Modular design
@@ -350,11 +344,11 @@ ranked-series cache may be stale.
 
 ## 📊 Data Coverage
 
-- **169 Tracks** - All RaceRoom circuits and layouts
-- **83 Car Classes** - DTM, WTCC, GT3, Formula, Historic, etc.
-- **14,027 Combinations** - Every track + class pairing
-- **45,000+ Drivers** - Searchable by name
-- **200,000+ Entries** - Complete leaderboard data with full pagination support
+- **180+ Tracks** - All RaceRoom circuits and layouts
+- **85+ Car Classes** - DTM, WTCC, GT3, Formula, Historic, etc.
+- **16,000+ Combinations** - Every track + class pairing
+- **100,000+ Drivers** - Searchable by name
+- **650,000+ Entries** - Complete leaderboard data with full pagination support
 
 ## ⚙️ How It Works
 
