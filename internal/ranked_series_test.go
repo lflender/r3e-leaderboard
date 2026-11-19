@@ -61,6 +61,11 @@ func TestAPIClient_FetchRankedSeries(t *testing.T) {
 	client := NewAPIClient()
 	defer client.Close()
 	client.baseURL = server.URL
+	var seriesStatusCleared bool
+	client.discoveryStatus = func(operation string, err error) error {
+		seriesStatusCleared = operation == "series" && err == nil
+		return nil
+	}
 
 	series, err := client.FetchRankedSeries(context.Background())
 	if err != nil {
@@ -68,6 +73,9 @@ func TestAPIClient_FetchRankedSeries(t *testing.T) {
 	}
 	if len(series) != 1 {
 		t.Fatalf("series count = %d, want 1", len(series))
+	}
+	if !seriesStatusCleared {
+		t.Error("successful ranked-series discovery did not clear its warning")
 	}
 	if series[0].ID != "series-1" || series[0].Name != "Touring Car Series" {
 		t.Fatalf("series = %+v, want the Touring Car Series fixture", series[0])

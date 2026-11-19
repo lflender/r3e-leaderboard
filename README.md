@@ -13,12 +13,6 @@ Disclaimer: all code was written by AI.
 - 📅 Automatic full cache refresh every 3 hours (8 times daily)
 - 🗂️ Smart cache management (freshness follows the full refresh interval)
 
-## Data Coverage:
-
-- 169 tracks × 83 classes = 14,027 combinations
-- 60,000+ drivers searchable
-- 300,000+ leaderboard entries
-
 ## Clean Architecture:
 
 - Modular design
@@ -116,6 +110,20 @@ their leaderboard entries, including entries without an indexable driver.
 name-only fallbacks. `total_fetched_combinations` instead counts cached files,
 including empty combinations.
 
+`failed_fetch_count` and `failed_fetches` describe failures still unresolved
+after retries in the most recent completed full refresh. A successful full
+refresh clears them; targeted refreshes, startup cache loading, and cancelled
+full refreshes do not replace them.
+
+`api_discovery_failed` is true if discovery of any RaceRoom API operation has
+failed or a rediscovered protocol is still stale. `api_discovery_errors` maps
+the affected operations (`leaderboard`, `profile`, or `series`) to their last
+discovery error. Each warning persists across restarts and clears only after a
+newly discovered protocol for that operation successfully serves a request.
+Cancelled requests do not create or clear warnings. This is not a general
+backend health check: an unattempted operation and unrelated request or export
+failures are not reported by this flag.
+
 **Structure:**
 ```json
 {
@@ -127,6 +135,10 @@ including empty combinations.
   "total_combinations": 20000,
   "total_drivers": 45000,
   "total_entries": 200000,
+  "api_discovery_failed": true,
+  "api_discovery_errors": {
+    "leaderboard": "API client bundle has no recognizable response encoding or limit"
+  },
   "last_index_update": "2025-12-19T16:30:15Z",
   "index_build_time_ms": 1250.5
 }
@@ -137,12 +149,16 @@ including empty combinations.
 // Load status
 const status = await fetch('cache/status.json').then(r => r.json());
 
+if (status.api_discovery_failed) {
+  console.warn('RaceRoom API discovery failed:', status.api_discovery_errors);
+}
+
 // Display loading state
 if (status.fetch_in_progress) {
   console.log('Data is being updated...');
   console.log(`${status.track_count} non-empty combinations indexed`);
 } else {
-  console.log('All data up to date!');
+  console.log('No data update currently running.');
   console.log(`${status.total_drivers} drivers indexed`);
 }
 ```
@@ -316,6 +332,11 @@ against all upstream changes: if RaceRoom changes schema fields, their
 protobuf field layout, or the encoding itself, the corresponding decoder may
 still need to be updated.
 
+To check discovery and decode a live leaderboard page, run
+`R3E_LEADERBOARD_INTEGRATION=1 go test -v -run TestRaceRoomLeaderboardDiscoveryIntegration ./internal`
+(on PowerShell, set `$env:R3E_LEADERBOARD_INTEGRATION = "1"` before running the
+`go test` command). This opt-in test makes requests to RaceRoom.
+
 Automatic ranked-series discovery and targeted ranked-series refreshes are
 disabled, including at startup. The full refresh fetches the configured
 track/class combinations without a separate ranked-series fetch. Any existing
@@ -323,11 +344,11 @@ ranked-series cache may be stale.
 
 ## 📊 Data Coverage
 
-- **169 Tracks** - All RaceRoom circuits and layouts
-- **83 Car Classes** - DTM, WTCC, GT3, Formula, Historic, etc.
-- **14,027 Combinations** - Every track + class pairing
-- **45,000+ Drivers** - Searchable by name
-- **200,000+ Entries** - Complete leaderboard data with full pagination support
+- **180+ Tracks** - All RaceRoom circuits and layouts
+- **85+ Car Classes** - DTM, WTCC, GT3, Formula, Historic, etc.
+- **16,000+ Combinations** - Every track + class pairing
+- **100,000+ Drivers** - Searchable by name
+- **650,000+ Entries** - Complete leaderboard data with full pagination support
 
 ## ⚙️ How It Works
 

@@ -57,7 +57,7 @@ func nextAvatarBackfillTime(now time.Time, schedule ScheduleConfig) time.Time {
 }
 
 func runDriverAvatarBackfill(ctx context.Context, schedule ScheduleConfig) {
-	client := NewAPIClient()
+	client := newStatusReportingAPIClient()
 	defer client.Close()
 
 	for {

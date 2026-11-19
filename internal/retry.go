@@ -13,15 +13,16 @@ type FailedFetchInfo struct {
 	Err   error
 }
 
-// retryFailedFetches attempts to retry all failed fetches and returns successfully fetched tracks
-func retryFailedFetches(ctx context.Context, apiClient *APIClient, tempCache *DataCache, failedFetches []FailedFetchInfo) []TrackInfo {
+// retryFailedFetches returns successful tracks and failures remaining after retry.
+func retryFailedFetches(ctx context.Context, apiClient *APIClient, tempCache *DataCache, failedFetches []FailedFetchInfo) ([]TrackInfo, []FailedFetchInfo) {
 	if len(failedFetches) == 0 {
 		log.Println("🔁 Retry phase triggered: no failed fetches to retry")
-		return nil
+		return nil, nil
 	}
 
 	log.Printf("🔁 Retrying %d failed fetches...", len(failedFetches))
 	retriedTracks := make([]TrackInfo, 0, len(failedFetches)/2)
+	var remaining []FailedFetchInfo
 	retriedCount := 0
 
 retryLoop:
@@ -29,12 +30,14 @@ retryLoop:
 		select {
 		case <-ctx.Done():
 			log.Printf("🛑 Retry cancelled at %d/%d", i+1, len(failedFetches))
+			remaining = append(remaining, failedFetches[i:]...)
 			break retryLoop
 		default:
 		}
 
 		if !WaitIfFetchPaused(ctx) {
 			log.Printf("🛑 Retry cancelled while paused at %d/%d", i+1, len(failedFetches))
+			remaining = append(remaining, failedFetches[i:]...)
 			break retryLoop
 		}
 
@@ -47,8 +50,11 @@ retryLoop:
 
 		if err != nil {
 			log.Printf("⚠️ Retry failed %s + %s: %v", failed.Track.Name, failed.Class.Name, err)
+			failed.Err = err
+			remaining = append(remaining, failed)
 			continue
 		}
+		retriedCount++
 
 		trackInfo := TrackInfo{
 			Name:    failed.Track.Name,
@@ -66,7 +72,6 @@ retryLoop:
 			log.Printf("✅ Retry succeeded %s + %s: %.2fs → %d entries", failed.Track.Name, failed.Class.Name, duration.Seconds(), len(data))
 			trackInfo.Data = nil // Payload persisted in temp cache; keep metadata only
 			retriedTracks = append(retriedTracks, trackInfo)
-			retriedCount++
 		} else {
 			log.Printf("ℹ️ Retry succeeded %s + %s: %.2fs → no data", failed.Track.Name, failed.Class.Name, duration.Seconds())
 		}
@@ -76,7 +81,7 @@ retryLoop:
 	}
 
 	log.Printf("✅ Retry phase complete: %d/%d succeeded", retriedCount, len(failedFetches))
-	return retriedTracks
+	return retriedTracks, remaining
 }
 
 // fetchWithTimeout performs a single fetch with timeout and error handling

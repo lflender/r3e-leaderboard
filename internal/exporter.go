@@ -41,26 +41,28 @@ type FailedFetch struct {
 
 // StatusData represents the status information to be exported to JSON
 type StatusData struct {
-	FetchInProgress          bool          `json:"fetch_in_progress"`
-	LastScrapeStart          time.Time     `json:"last_scrape_start"`
-	LastScrapeEnd            time.Time     `json:"last_scrape_end"`
-	TrackCount               int           `json:"track_count"`
-	TotalFetchedCombinations int           `json:"total_fetched_combinations"`
-	TotalUniqueTracks        int           `json:"total_unique_tracks"`
-	TotalCombinations        int           `json:"total_combinations"`
-	TotalDrivers             int           `json:"total_drivers"`
-	TotalEntries             int           `json:"total_entries"`
-	IndexMetricsVersion      int           `json:"index_metrics_version,omitempty"`
-	LastIndexUpdate          time.Time     `json:"last_index_update"`
-	IndexBuildTimeMs         float64       `json:"index_build_time_ms"`
-	MemoryAllocMB            uint64        `json:"memory_alloc_mb"`
-	MemorySysMB              uint64        `json:"memory_sys_mb"`
-	FailedFetchCount         int           `json:"failed_fetch_count"`
-	FailedFetches            []FailedFetch `json:"failed_fetches,omitempty"`
-	RetriedFetchCount        int           `json:"retried_fetch_count"`
-	LastAvatarRefresh        time.Time     `json:"last_avatar_refresh"`
-	RankedSeriesCount        int           `json:"ranked_series_count"`
-	LastRankedSeriesRefresh  time.Time     `json:"last_ranked_series_refresh"`
+	FetchInProgress          bool              `json:"fetch_in_progress"`
+	LastScrapeStart          time.Time         `json:"last_scrape_start"`
+	LastScrapeEnd            time.Time         `json:"last_scrape_end"`
+	TrackCount               int               `json:"track_count"`
+	TotalFetchedCombinations int               `json:"total_fetched_combinations"`
+	TotalUniqueTracks        int               `json:"total_unique_tracks"`
+	TotalCombinations        int               `json:"total_combinations"`
+	TotalDrivers             int               `json:"total_drivers"`
+	TotalEntries             int               `json:"total_entries"`
+	IndexMetricsVersion      int               `json:"index_metrics_version,omitempty"`
+	LastIndexUpdate          time.Time         `json:"last_index_update"`
+	IndexBuildTimeMs         float64           `json:"index_build_time_ms"`
+	MemoryAllocMB            uint64            `json:"memory_alloc_mb"`
+	MemorySysMB              uint64            `json:"memory_sys_mb"`
+	FailedFetchCount         int               `json:"failed_fetch_count"`
+	FailedFetches            []FailedFetch     `json:"failed_fetches,omitempty"`
+	RetriedFetchCount        int               `json:"retried_fetch_count"`
+	LastAvatarRefresh        time.Time         `json:"last_avatar_refresh"`
+	RankedSeriesCount        int               `json:"ranked_series_count"`
+	LastRankedSeriesRefresh  time.Time         `json:"last_ranked_series_refresh"`
+	APIDiscoveryFailed       bool              `json:"api_discovery_failed"`
+	APIDiscoveryErrors       map[string]string `json:"api_discovery_errors,omitempty"`
 }
 
 // TrackCombination represents a track/class combination with entry count
@@ -840,6 +842,7 @@ func UpdateStatusData(update func(*StatusData)) error {
 func writeStatusData(status StatusData) error {
 	status.TotalUniqueTracks = len(GetTracks())
 	status.TotalCombinations = status.TotalUniqueTracks * len(GetCarClasses())
+	status.APIDiscoveryFailed = len(status.APIDiscoveryErrors) > 0
 
 	// Convert to JSON
 	jsonData, err := json.MarshalIndent(status, "", "  ")
@@ -881,6 +884,29 @@ func writeStatusData(status StatusData) error {
 
 	// Reduced verbosity: avoid logging every status write
 	return nil
+}
+
+func updateAPIDiscoveryStatus(operation string, discoveryErr error) error {
+	statusDataMu.Lock()
+	defer statusDataMu.Unlock()
+
+	status := ReadStatusData()
+	if discoveryErr == nil {
+		if _, exists := status.APIDiscoveryErrors[operation]; !exists {
+			return nil
+		}
+		delete(status.APIDiscoveryErrors, operation)
+	} else {
+		message := discoveryErr.Error()
+		if status.APIDiscoveryErrors[operation] == message {
+			return nil
+		}
+		if status.APIDiscoveryErrors == nil {
+			status.APIDiscoveryErrors = make(map[string]string)
+		}
+		status.APIDiscoveryErrors[operation] = message
+	}
+	return writeStatusData(status)
 }
 
 // UpdateLastAvatarRefresh records when all known avatar profiles were refreshed.

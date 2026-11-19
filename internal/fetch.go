@@ -18,10 +18,13 @@ func SetAPIThrottle(d time.Duration) {
 
 // fetchCombinations is a shared helper that fetches data for a list of track configurations
 // It handles the fetch loop, error handling, logging, rate limiting, and cache promotion
-func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig, progressCallback func([]TrackInfo), logPrefix string) []TrackInfo {
-	apiClient := NewAPIClient()
+func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig, progressCallback func([]TrackInfo), logPrefix string, fullRefresh bool) []TrackInfo {
+	apiClient := newStatusReportingAPIClient()
 	defer apiClient.Close()
+	return fetchCombinationsWithClient(ctx, trackConfigs, classConfigs, progressCallback, logPrefix, fullRefresh, apiClient)
+}
 
+func fetchCombinationsWithClient(ctx context.Context, trackConfigs []TrackConfig, classConfigs []CarClassConfig, progressCallback func([]TrackInfo), logPrefix string, fullRefresh bool, apiClient *APIClient) []TrackInfo {
 	tempCache := NewTempDataCache()
 	totalCombinations := len(trackConfigs) * len(classConfigs)
 	allTrackData := make([]TrackInfo, 0, totalCombinations)
@@ -102,7 +105,7 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 	}
 
 	// Retry failed fetches
-	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	retriedTracks, remainingFailures := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// Promote temp cache to main cache atomically
@@ -113,9 +116,11 @@ func fetchCombinations(ctx context.Context, trackConfigs []TrackConfig, classCon
 	log.Printf("%s: fetched %d combinations (kept %d with data)", logPrefix, totalCombinations, len(allTrackData))
 
 	// Export failed fetch statistics to status file
-	if len(failedFetches) > 0 {
-		runtime.GC()
-		exportFailedFetches(failedFetches)
+	if fullRefresh && ctx.Err() == nil {
+		if len(remainingFailures) > 0 {
+			runtime.GC()
+		}
+		exportFailedFetches(remainingFailures)
 	}
 
 	return allTrackData
@@ -131,7 +136,7 @@ func FetchAllTrackDataWithCallback(ctx context.Context, progressCallback func([]
 	log.Printf("📊 Scheduled refresh: force-fetch %d tracks × %d classes = %d combinations...",
 		len(trackConfigs), len(classConfigs), len(trackConfigs)*len(classConfigs))
 
-	return fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "✅ Force-fetched")
+	return fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "✅ Force-fetched", true)
 }
 
 // exportFailedFetches saves failed fetch information to the status file
@@ -163,7 +168,7 @@ type targetCombo struct {
 
 // fetchSpecificCombinations fetches only the specific track-class combinations requested
 func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, trackConfigs []TrackConfig, allClassConfigs []CarClassConfig, progressCallback func([]TrackInfo)) []TrackInfo {
-	apiClient := NewAPIClient()
+	apiClient := newStatusReportingAPIClient()
 	defer apiClient.Close()
 
 	tempCache := NewTempDataCache()
@@ -285,7 +290,7 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	}
 
 	// Retry failed fetches
-	retriedTracks := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
+	retriedTracks, remainingFailures := retryFailedFetches(ctx, apiClient, tempCache, failedFetches)
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// NOTE: We intentionally do NOT call tempCache.PromoteTempCache() here.
@@ -296,11 +301,9 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	// to IncrementalIndexUpdate, causing those entries to be missing from the search index.
 
 	// Export failed fetches
-	if len(failedFetches) > 0 {
-		log.Printf("⚠️ %d combination(s) failed to fetch (will retry later)", len(failedFetches))
+	if len(remainingFailures) > 0 {
+		log.Printf("⚠️ %d combination(s) failed to fetch (will retry later)", len(remainingFailures))
 	}
-
-	exportFailedFetches(failedFetches)
 
 	return allTrackData
 }
@@ -424,5 +427,5 @@ func FetchTargetedTrackDataWithCallback(ctx context.Context, trackIDs []string, 
 		return fetchSpecificCombinations(ctx, targetCombos, trackConfigs, allClassConfigs, progressCallback)
 	}
 
-	return fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "✅ Targeted refresh complete")
+	return fetchCombinations(ctx, trackConfigs, classConfigs, progressCallback, "✅ Targeted refresh complete", false)
 }
