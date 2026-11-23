@@ -137,72 +137,6 @@ func TestDecodeRankedSeriesResponse_MalformedPayload(t *testing.T) {
 	}
 }
 
-func TestRankedSeriesTrackClassCombinations_CurrentRoundsOnlyAndDeduplicated(t *testing.T) {
-	series := []RankedSeries{
-		{
-			CurrentRound: 2,
-			Rounds: []RankedSeriesRound{
-				{
-					Number: 1,
-					Track:  RankedSeriesTrack{TrackID: "100"},
-					EligibleClasses: []RankedSeriesCarClass{
-						{ID: "1", Name: "Past"},
-					},
-				},
-				{
-					Number: 2,
-					Track:  RankedSeriesTrack{TrackID: "200"},
-					EligibleClasses: []RankedSeriesCarClass{
-						{ID: "20", Name: "Current"},
-						{ID: "invalid", Name: "Invalid"},
-					},
-				},
-			},
-		},
-		{
-			CurrentRound: 2,
-			Rounds: []RankedSeriesRound{{
-				Number: 2,
-				Track:  RankedSeriesTrack{TrackID: "200"},
-				EligibleClasses: []RankedSeriesCarClass{
-					{ID: "20", Name: "Duplicate"},
-					{ID: "21", Name: "Also current"},
-				},
-			}},
-		},
-	}
-
-	got := RankedSeriesTrackClassCombinations(series)
-	want := []string{"200-20", "200-21"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("combinations = %v, want %v", got, want)
-	}
-}
-
-func TestRankedSeriesFetchTargets_UsesDiscoveredClassMetadata(t *testing.T) {
-	series := []RankedSeries{{
-		CurrentRound: 1,
-		Rounds: []RankedSeriesRound{{
-			Number: 1,
-			Track:  RankedSeriesTrack{TrackID: "91234", Name: "New Track", Layout: "Short"},
-			EligibleClasses: []RankedSeriesCarClass{
-				{ID: "98765", Name: "New Class"},
-			},
-		}},
-	}}
-
-	targets, tracks, classes := rankedSeriesFetchTargets(series)
-	if !reflect.DeepEqual(targets, []targetCombo{{trackID: "91234", classID: "98765"}}) {
-		t.Errorf("targets = %+v, want the discovered track/class pair", targets)
-	}
-	if !reflect.DeepEqual(tracks, []TrackConfig{{Name: "New Track - Short", TrackID: "91234"}}) {
-		t.Errorf("tracks = %+v, want track metadata from the series response", tracks)
-	}
-	if !reflect.DeepEqual(classes, []CarClassConfig{{Name: "New Class", ClassID: "98765"}}) {
-		t.Errorf("classes = %+v, want class metadata from the series response", classes)
-	}
-}
-
 func TestExportRankedSeries_WritesSortedGzipJSON(t *testing.T) {
 	tempDir, cleanup := TempTestDir(t, "ranked_series_export_test")
 	defer cleanup()
@@ -303,7 +237,7 @@ func TestRankedSeriesRefreshRoundTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("refresh round %d: %v", round, err)
 		}
-		if got := RankedSeriesTrackClassCombinations(series); !reflect.DeepEqual(got, want[round]) {
+		if got := currentRoundCombinations(series); !reflect.DeepEqual(got, want[round]) {
 			t.Fatalf("round %d combinations = %v, want %v", round, got, want[round])
 		}
 		compressed, err := os.ReadFile(RankedSeriesFile)
@@ -321,7 +255,7 @@ func TestRankedSeriesRefreshRoundTransitions(t *testing.T) {
 		if err := reader.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if got := RankedSeriesTrackClassCombinations(exported.Series); !reflect.DeepEqual(got, want[round]) {
+		if got := currentRoundCombinations(exported.Series); !reflect.DeepEqual(got, want[round]) {
 			t.Fatalf("exported round %d combinations = %v, want %v", round, got, want[round])
 		}
 		status := ReadStatusData()
@@ -348,6 +282,28 @@ func TestRankedSeriesRefreshRoundTransitions(t *testing.T) {
 			fail = false
 		}
 	}
+}
+
+func currentRoundCombinations(series []RankedSeries) []string {
+	seen := make(map[string]struct{})
+	for _, item := range series {
+		for _, round := range item.Rounds {
+			if round.Number != item.CurrentRound || !isNumericIdentifier(round.Track.TrackID) {
+				continue
+			}
+			for _, class := range round.EligibleClasses {
+				if isNumericIdentifier(class.ID) {
+					seen[round.Track.TrackID+"-"+class.ID] = struct{}{}
+				}
+			}
+		}
+	}
+	combinations := make([]string, 0, len(seen))
+	for combination := range seen {
+		combinations = append(combinations, combination)
+	}
+	sort.Strings(combinations)
+	return combinations
 }
 
 // Track and class IDs come from the November 2026 Round 2 snapshot and live Round 3 response.

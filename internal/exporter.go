@@ -920,7 +920,7 @@ func UpdateLastAvatarRefresh(timestamp time.Time) error {
 
 const indexMetricsVersion = 1
 
-func updateStatusWithIndexMetrics(combinations map[string]int, index DriverIndex, buildDuration time.Duration, rankedSeriesRefresh time.Time) error {
+func updateStatusWithIndexMetrics(combinations map[string]int, index DriverIndex, buildDuration time.Duration) error {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	drivers := make(map[string]struct{})
@@ -948,9 +948,6 @@ func updateStatusWithIndexMetrics(combinations map[string]int, index DriverIndex
 		status.IndexBuildTimeMs = buildDuration.Seconds() * 1000
 		status.MemoryAllocMB = m.Alloc / 1024 / 1024
 		status.MemorySysMB = m.Sys / 1024 / 1024
-		if !rankedSeriesRefresh.IsZero() {
-			status.LastRankedSeriesRefresh = rankedSeriesRefresh
-		}
 	})
 }
 

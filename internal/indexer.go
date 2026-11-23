@@ -355,7 +355,7 @@ func buildAndExportIndex(tracks []TrackInfo) error {
 	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
 		return err
 	}
-	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, time.Time{}); err != nil {
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration); err != nil {
 		return fmt.Errorf("update index status: %w", err)
 	}
 
@@ -430,7 +430,7 @@ func HasShardedIndex() bool {
 // last periodic indexer tick) would be silently missing from the index.
 //
 // Returns the updated indexed-count baseline for orchestrator status tracking.
-func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastRankedSeriesRefresh time.Time) (int, error) {
+func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int) (int, error) {
 	tempCache := NewTempDataCache()
 	promotedCombos, err := tempCache.PromoteTempCache()
 	if err != nil {
@@ -438,7 +438,7 @@ func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastRank
 	}
 
 	if len(promotedCombos) > 0 {
-		if err := IncrementalIndexUpdate(promotedCombos, lastRankedSeriesRefresh); err != nil {
+		if err := IncrementalIndexUpdate(promotedCombos); err != nil {
 			return currentIndexedCount, fmt.Errorf("startup final incremental index update failed: %w", err)
 		}
 		log.Printf("✅ Final incremental index complete (%d changed combos)", len(promotedCombos))
@@ -559,17 +559,9 @@ func LoadDriverIndexFromShards() (DriverIndex, error) {
 //  4. Re-exports the updated index
 //
 // This reduces peak memory by ~2 GB compared to a full BuildAndExportIndex.
-// The lastRankedSeriesRefresh parameter allows the caller to preserve/update this
-// timestamp; if zero, it reads from the current status file on disk.
-func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...time.Time) error {
+func IncrementalIndexUpdate(changedCombos []string) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
-
-	// Extract the optional last-ranked-series refresh timestamp.
-	var rankedSeriesRefresh time.Time
-	if len(lastRankedSeriesRefresh) > 0 {
-		rankedSeriesRefresh = lastRankedSeriesRefresh[0]
-	}
 
 	if len(changedCombos) == 0 {
 		log.Println("ℹ️ No changed combos for incremental update — skipping")
@@ -581,11 +573,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 		return err
 	}
 	if rebuilt {
-		if !rankedSeriesRefresh.IsZero() {
-			return UpdateStatusData(func(status *StatusData) {
-				status.LastRankedSeriesRefresh = rankedSeriesRefresh
-			})
-		}
 		return nil
 	}
 
@@ -793,7 +780,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
 		return fmt.Errorf("export indexed combinations: %w", err)
 	}
-	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, rankedSeriesRefresh); err != nil {
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration); err != nil {
 		return fmt.Errorf("update incremental index status: %w", err)
 	}
 

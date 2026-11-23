@@ -275,12 +275,6 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 			default:
 			}
 
-			// Pause long-running fetches if requested (e.g. daily race refresh)
-			if !WaitIfFetchPaused(ctx) {
-				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", currentCombination, totalCombinations)
-				return allTrackData
-			}
-
 			key := track.TrackID + "_" + class.ClassID
 			needsRefresh := !dataCache.IsCacheValid(track.TrackID, class.ClassID)
 

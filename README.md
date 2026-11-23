@@ -342,7 +342,7 @@ the same environment variable. These opt-in tests make requests to RaceRoom.
 Ranked-series metadata is refreshed at startup and hourly, independently of
 leaderboard refreshes. If discovery fails, the last successful file is retained
 and discovery is retried on the next interval. Targeted ranked-series
-leaderboard refreshes remain disabled; full refreshes fetch the configured
+leaderboard refreshes are not performed; full refreshes fetch the configured
 track/class combinations.
 
 ## 📊 Data Coverage

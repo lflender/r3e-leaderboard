@@ -35,39 +35,6 @@ type TestFixtures struct {
 // GetTestFixtures returns shared test fixtures
 func GetTestFixtures() TestFixtures {
 	return TestFixtures{
-
-		// Message with TT Cup - should remain a single category entry
-
-		// Dec 23, 2025 - 992 Cup, LMDh, Paul Ricard, Mantorp Park
-
-		// Dec 15, 2025 - F3, BMW M235i, Lausitzring, Slovakiaring
-
-		// Dec 8, 2025 - Audi TT RS, FR Junior, FR 2, FR X-17, Oschersleben
-
-		// Dec 1, 2025 - Porsche 964, FR Junior, FR 3, Shanghai
-
-		// Nov 24, 2025 - 944, DTM 1995, WTCR 22, Aragon
-
-		// Nov 17, 2025 - Aquila, GTR 2, Porsche 944 Cup, P2, DTM 95
-
-		// Nov 10, 2025 - WTCC 2013, Silhouettes, Macau, Indianapolis
-
-		// Nov 3, 2025 - Praga, Carrera Cup, Norisring
-
-		// Oct 27, 2025 - Audi TT Cup, Falkenberg, Group C
-
-		// Oct 20, 2025 - Audi RS 5 DTM 2016, FRX 22, Watkins Glen
-
-		// Feb 9, 2026 - WTCR 18-22 range, DTM 2016, Nürburgring typo, Gelleråsen
-
-		// Feb 16, 2026 - Audi TT Cup category, DTM 2016, weekly races
-
-		// Feb 23, 2026 - Truck, Assen GP, Sonoma Long, Red Bull Ring Südschleife
-
-		// Mar 2, 2026 - DTM92, PCCD+PCCNA, Watkins Glen GP w/ Loop, DTM 2013-16
-
-		// May 2026 - Latest format with token-based track matching
-
 		// Sample leaderboard data matching real API structure
 		SampleTrackData: []map[string]interface{}{
 			{

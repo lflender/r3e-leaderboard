@@ -151,7 +151,7 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		if willFetchFresh {
 			o.logIndexBuild("startup final")
-			indexedCount, err := internal.FinalizeStartupIndex(opCtx, o.lastIndexedCount, time.Time{})
+			indexedCount, err := internal.FinalizeStartupIndex(opCtx, o.lastIndexedCount)
 			if err != nil {
 				log.Printf("⚠️ Startup final index finalization failed: %v", err)
 			} else if indexedCount > 0 {

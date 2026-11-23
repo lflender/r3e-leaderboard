@@ -521,7 +521,12 @@ func TestIncrementalIndexUpdate_UpdatesShards(t *testing.T) {
 	}
 
 	refreshTS := time.Date(2026, time.April, 2, 18, 30, 0, 0, time.UTC)
-	if err := IncrementalIndexUpdate([]string{"1111-1703"}, refreshTS); err != nil {
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.LastRankedSeriesRefresh = refreshTS
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := IncrementalIndexUpdate([]string{"1111-1703"}); err != nil {
 		t.Fatalf("IncrementalIndexUpdate failed: %v", err)
 	}
 
@@ -934,17 +939,26 @@ func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
 	if err := cache.SaveTrackData(comboB); err != nil {
 		t.Fatalf("SaveTrackData comboB failed: %v", err)
 	}
+	refreshTS := time.Date(2026, time.April, 2, 18, 30, 0, 0, time.UTC)
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.LastRankedSeriesRefresh = refreshTS
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	// FinalizeStartupIndex with currentIndexedCount=1 (only combo A was indexed).
 	// No temp cache files to promote. The function should rebuild from
 	// LoadAllCachedData which will find both combo A and combo B.
-	indexedCount, err := FinalizeStartupIndex(context.Background(), 1, time.Time{})
+	indexedCount, err := FinalizeStartupIndex(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FinalizeStartupIndex failed: %v", err)
 	}
 
 	if indexedCount < 2 {
 		t.Fatalf("Expected indexedCount >= 2 after rebuild, got %d", indexedCount)
+	}
+	if got := ReadStatusData().LastRankedSeriesRefresh; !got.Equal(refreshTS) {
+		t.Fatalf("ranked-series refresh timestamp after rebuild = %v, want %v", got, refreshTS)
 	}
 
 	// Verify Edward Johnson is now in the index.
@@ -964,6 +978,43 @@ func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
 	}
 	if !mirrorSet["edward johnson"] {
 		t.Fatalf("Mirror should contain 'edward johnson' after rebuild, got %d entries", len(mirrors))
+	}
+}
+
+func TestFinalizeStartupIndex_PromotesWithoutChangingRankedSeriesStatus(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	initial := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
+	if err := NewDataCache().SaveTrackData(initial); err != nil {
+		t.Fatal(err)
+	}
+	if err := BuildAndExportIndex([]TrackInfo{initial}); err != nil {
+		t.Fatal(err)
+	}
+	updated := testTrackInfo("Track A", "1111", "1703", "Charlie Pace")
+	if err := NewTempDataCache().SaveTrackData(updated); err != nil {
+		t.Fatal(err)
+	}
+	refreshTS := time.Date(2026, time.April, 2, 18, 30, 0, 0, time.UTC)
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.LastRankedSeriesRefresh = refreshTS
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := FinalizeStartupIndex(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	names, err := LoadShardedNamesIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := names["charlie pace"]; !ok {
+		t.Fatal("promoted data was not indexed")
+	}
+	if got := ReadStatusData().LastRankedSeriesRefresh; !got.Equal(refreshTS) {
+		t.Fatalf("ranked-series refresh timestamp after promotion = %v, want %v", got, refreshTS)
 	}
 }
 

@@ -22,8 +22,8 @@ go test -v ./internal/... -run TestDecodeRankedSeries
 ```
 
 Ranked-series tests cover protobuf decoding of series, round, race-format, and
-schedule details; malformed responses; current-round track/class combination
-extraction; and gzip-compressed JSON export.
+schedule details; malformed responses; current-round transitions and settings;
+and gzip-compressed JSON export.
 
 Shared leaderboard fixtures and temporary-directory helpers are in
 `testhelpers_test.go`.

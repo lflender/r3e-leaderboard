@@ -369,7 +369,7 @@ func (dc *DataCache) ClearTempCache() error {
 // Returns the list of promoted combo IDs ("trackID-classID" format) and any critical error
 func (dc *DataCache) PromoteTempCache() ([]string, error) {
 	// Serialize promotion to prevent concurrent calls from two parts of the code
-	// (e.g., daily race refresh + periodic indexer) both trying to promote the same files
+	// (e.g., a targeted refresh and periodic indexer) both trying to promote the same files
 	promoteMu.Lock()
 	defer promoteMu.Unlock()
 

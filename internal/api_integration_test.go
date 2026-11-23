@@ -56,7 +56,7 @@ func TestRaceRoomRankedSeriesDiscoveryIntegration(t *testing.T) {
 			}
 		}
 	}
-	if active == 0 || len(RankedSeriesTrackClassCombinations(series)) == 0 {
+	if active == 0 || len(currentRoundCombinations(series)) == 0 {
 		t.Fatal("live response has no usable current-round combinations")
 	}
 }
