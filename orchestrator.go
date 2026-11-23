@@ -13,43 +13,38 @@ import (
 
 // Orchestrator coordinates data loading, refreshing, and indexing
 type Orchestrator struct {
-	appContext              context.Context
-	appCancel               context.CancelFunc
-	fetchContext            context.Context
-	fetchCancel             context.CancelFunc
-	fullRefreshRunner       func(indexingIntervalMinutes int, origin string)
-	scheduledCancelDelay    time.Duration
-	fetchInProgress         bool
-	lastScrapeStart         time.Time
-	lastScrapeEnd           time.Time
-	tracks                  []internal.TrackInfo
-	totalDrivers            int
-	totalEntries            int
-	lastIndexedCount        int // Track last indexed count to avoid unnecessary rebuilds
-	scheduler               *internal.Scheduler
-	lastRankedSeriesRefresh time.Time // Track last ranked-series refresh
-	rankedSeriesCount       int
-	rebuildMu               sync.Mutex // Prevents concurrent index rebuilds
-	config                  internal.Config
+	appContext           context.Context
+	appCancel            context.CancelFunc
+	fetchContext         context.Context
+	fetchCancel          context.CancelFunc
+	fullRefreshRunner    func(indexingIntervalMinutes int, origin string)
+	scheduledCancelDelay time.Duration
+	fetchInProgress      bool
+	lastScrapeStart      time.Time
+	lastScrapeEnd        time.Time
+	tracks               []internal.TrackInfo
+	totalDrivers         int
+	totalEntries         int
+	lastIndexedCount     int // Track last indexed count to avoid unnecessary rebuilds
+	scheduler            *internal.Scheduler
+	rebuildMu            sync.Mutex // Prevents concurrent index rebuilds
+	config               internal.Config
 }
 
 // NewOrchestrator creates a new orchestrator instance
 func NewOrchestrator(ctx context.Context, cancel context.CancelFunc, cfg internal.Config) *Orchestrator {
-	// Load last ranked-series refresh time from status file
 	existingStatus := internal.ReadStatusData()
 
 	o := &Orchestrator{
-		appContext:              ctx,
-		appCancel:               cancel,
-		fetchContext:            ctx,
-		fetchCancel:             nil,
-		scheduledCancelDelay:    500 * time.Millisecond,
-		lastScrapeStart:         existingStatus.LastScrapeStart,
-		lastScrapeEnd:           existingStatus.LastScrapeEnd,
-		tracks:                  make([]internal.TrackInfo, 0),
-		lastRankedSeriesRefresh: existingStatus.LastRankedSeriesRefresh,
-		rankedSeriesCount:       existingStatus.RankedSeriesCount,
-		config:                  cfg,
+		appContext:           ctx,
+		appCancel:            cancel,
+		fetchContext:         ctx,
+		fetchCancel:          nil,
+		scheduledCancelDelay: 500 * time.Millisecond,
+		lastScrapeStart:      existingStatus.LastScrapeStart,
+		lastScrapeEnd:        existingStatus.LastScrapeEnd,
+		tracks:               make([]internal.TrackInfo, 0),
+		config:               cfg,
 	}
 	o.fullRefreshRunner = o.performFullRefresh
 
@@ -156,7 +151,7 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 		if willFetchFresh {
 			o.logIndexBuild("startup final")
-			indexedCount, err := internal.FinalizeStartupIndex(opCtx, o.lastIndexedCount, o.lastRankedSeriesRefresh)
+			indexedCount, err := internal.FinalizeStartupIndex(opCtx, o.lastIndexedCount, time.Time{})
 			if err != nil {
 				log.Printf("⚠️ Startup final index finalization failed: %v", err)
 			} else if indexedCount > 0 {
@@ -433,8 +428,6 @@ func (o *Orchestrator) exportStatus() {
 		}
 		status.MemoryAllocMB = m.Alloc / 1024 / 1024
 		status.MemorySysMB = m.Sys / 1024 / 1024
-		status.RankedSeriesCount = o.rankedSeriesCount
-		status.LastRankedSeriesRefresh = o.lastRankedSeriesRefresh
 	}); err != nil {
 		log.Printf("⚠️ Failed to export status: %v", err)
 	}

@@ -212,7 +212,7 @@ const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
 ### Ranked Series
 **File:** `cache/ranked_series.json.gz`
 
-If present, this file contains series and rounds previously obtained from RaceRoom's ranked-series page,
+If present, this file contains series and rounds obtained from RaceRoom's ranked-series page,
 including the current round, track/layout, eligible classes and cars, session
 format, schedule, and registration details. The file is gzip-compressed JSON.
 To inspect it locally:
@@ -335,12 +335,15 @@ still need to be updated.
 To check discovery and decode a live leaderboard page, run
 `R3E_LEADERBOARD_INTEGRATION=1 go test -v -run TestRaceRoomLeaderboardDiscoveryIntegration ./internal`
 (on PowerShell, set `$env:R3E_LEADERBOARD_INTEGRATION = "1"` before running the
-`go test` command). This opt-in test makes requests to RaceRoom.
+`go test` command). For ranked series, use
+`go test -v -run TestRaceRoomRankedSeriesDiscoveryIntegration ./internal` with
+the same environment variable. These opt-in tests make requests to RaceRoom.
 
-Automatic ranked-series discovery and targeted ranked-series refreshes are
-disabled, including at startup. The full refresh fetches the configured
-track/class combinations without a separate ranked-series fetch. Any existing
-ranked-series cache may be stale.
+Ranked-series metadata is refreshed at startup and hourly, independently of
+leaderboard refreshes. If discovery fails, the last successful file is retained
+and discovery is retried on the next interval. Targeted ranked-series
+leaderboard refreshes remain disabled; full refreshes fetch the configured
+track/class combinations.
 
 ## 📊 Data Coverage
 

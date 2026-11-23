@@ -63,6 +63,7 @@ func main() {
 	mpCancel()
 
 	// Start background operations
+	internal.StartRankedSeriesDiscovery(appContext)
 	if err := internal.StartDriverAvatarBackfill(appContext, config.Schedule); err != nil {
 		log.Printf("⚠️ Avatar URL backfill not started: %v", err)
 	}

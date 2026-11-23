@@ -18,6 +18,8 @@ import (
 
 const RankedSeriesFile = "cache/ranked_series.json.gz"
 
+const rankedSeriesDiscoveryInterval = time.Hour
+
 type RankedSeriesExport struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 	Series    []RankedSeries `json:"series"`
@@ -610,6 +612,10 @@ func ExportRankedSeries(series []RankedSeries) error {
 func FetchAndExportRankedSeries(ctx context.Context) ([]RankedSeries, error) {
 	api := newStatusReportingAPIClient()
 	defer api.Close()
+	return fetchAndExportRankedSeries(ctx, api)
+}
+
+func fetchAndExportRankedSeries(ctx context.Context, api *APIClient) ([]RankedSeries, error) {
 	series, err := api.FetchRankedSeries(ctx)
 	if err != nil {
 		return nil, err
@@ -617,7 +623,39 @@ func FetchAndExportRankedSeries(ctx context.Context) ([]RankedSeries, error) {
 	if err := ExportRankedSeries(series); err != nil {
 		return nil, fmt.Errorf("export ranked series: %w", err)
 	}
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.RankedSeriesCount = len(series)
+		status.LastRankedSeriesRefresh = time.Now()
+	}); err != nil {
+		return nil, fmt.Errorf("update ranked-series status: %w", err)
+	}
 	return series, nil
+}
+
+// StartRankedSeriesDiscovery refreshes ranked-series metadata independently of leaderboard fetches.
+func StartRankedSeriesDiscovery(ctx context.Context) {
+	go runRankedSeriesDiscovery(ctx, rankedSeriesDiscoveryInterval, func(ctx context.Context) error {
+		series, err := FetchAndExportRankedSeries(ctx)
+		if err == nil {
+			log.Printf("✅ Refreshed %d ranked series", len(series))
+		}
+		return err
+	})
+}
+
+func runRankedSeriesDiscovery(ctx context.Context, interval time.Duration, refresh func(context.Context) error) {
+	for ctx.Err() == nil {
+		if err := refresh(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("⚠️ Failed to refresh ranked series: %v", err)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }
 
 func RankedSeriesTrackClassCombinations(series []RankedSeries) []string {

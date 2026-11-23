@@ -46,6 +46,34 @@ func TestStartScheduledRefreshRunsOverdueScrape(t *testing.T) {
 	}
 }
 
+func TestExportStatusPreservesRankedSeriesDiscovery(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	o := NewOrchestrator(context.Background(), func() {}, internal.GetDefaultConfig())
+	refreshed := time.Now().UTC().Truncate(time.Second)
+	if err := internal.UpdateStatusData(func(status *internal.StatusData) {
+		status.RankedSeriesCount = 8
+		status.LastRankedSeriesRefresh = refreshed
+	}); err != nil {
+		t.Fatal(err)
+	}
+	o.exportStatus()
+	status := internal.ReadStatusData()
+	if status.RankedSeriesCount != 8 || !status.LastRankedSeriesRefresh.Equal(refreshed) {
+		t.Fatalf("orchestrator overwrote ranked-series discovery status: %+v", status)
+	}
+}
+
 // TestFormatDuration tests the pure formatDuration helper.
 func TestFormatDuration(t *testing.T) {
 	cases := []struct {
