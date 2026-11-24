@@ -32,3 +32,31 @@ func TestRaceRoomLeaderboardDiscoveryIntegration(t *testing.T) {
 	}
 	t.Logf("Discovered endpoint and decoded %d leaderboard results", len(results))
 }
+
+func TestRaceRoomRankedSeriesDiscoveryIntegration(t *testing.T) {
+	if os.Getenv("R3E_LEADERBOARD_INTEGRATION") != "1" {
+		t.Skip("set R3E_LEADERBOARD_INTEGRATION=1 to call the live RaceRoom ranked-series API")
+	}
+
+	client := NewAPIClient()
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	series, err := client.FetchRankedSeries(ctx)
+	if err != nil {
+		t.Fatalf("live ranked-series discovery and fetch: %v", err)
+	}
+	active := 0
+	for _, item := range series {
+		for _, round := range item.Rounds {
+			if round.Number == item.CurrentRound {
+				active++
+				t.Logf("%s: round %d, track %s, %d eligible classes", item.Name, item.CurrentRound, round.Track.TrackID, len(round.EligibleClasses))
+			}
+		}
+	}
+	if active == 0 || len(currentRoundCombinations(series)) == 0 {
+		t.Fatal("live response has no usable current-round combinations")
+	}
+}

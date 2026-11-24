@@ -14,104 +14,6 @@ import (
 
 var indexUpdateMu sync.Mutex
 
-// IndexerState provides the current state needed for periodic indexing
-type IndexerState struct {
-	TrackCount       int
-	FetchInProgress  bool
-	LastIndexedCount int
-}
-
-// IndexerCallbacks provides callback functions for the indexer
-type IndexerCallbacks struct {
-	GetState      func() IndexerState
-	UpdateIndexed func(count int)
-	ExportStatus  func()
-}
-
-// PeriodicIndexer handles periodic index rebuilding during data fetching
-type PeriodicIndexer struct {
-	ctx       context.Context
-	interval  time.Duration
-	callbacks IndexerCallbacks
-}
-
-// NewPeriodicIndexer creates a new periodic indexer
-func NewPeriodicIndexer(ctx context.Context, intervalMinutes int, callbacks IndexerCallbacks) *PeriodicIndexer {
-	// Validate interval; default to 30 minutes if invalid
-	if intervalMinutes < 1 {
-		log.Printf("⚠️ Invalid periodic indexing interval (%d). Defaulting to 30 minutes.", intervalMinutes)
-		intervalMinutes = 30
-	}
-	return &PeriodicIndexer{
-		ctx:       ctx,
-		interval:  time.Duration(intervalMinutes) * time.Minute,
-		callbacks: callbacks,
-	}
-}
-
-// Start begins periodic indexing
-func (pi *PeriodicIndexer) Start() {
-	go func() {
-		defer func() {
-			log.Println("⏹️ Periodic indexing goroutine exiting")
-		}()
-
-		// Get current state
-		state := pi.callbacks.GetState()
-
-		// Initial indexing is handled by orchestrator bootstrap/finalization.
-
-		ticker := time.NewTicker(pi.interval)
-		defer ticker.Stop()
-
-		for {
-			// Check if fetch is complete before waiting on ticker
-			state = pi.callbacks.GetState()
-			if !state.FetchInProgress {
-				log.Println("⏹️ Stopping periodic indexing - data loading completed")
-				return
-			}
-
-			select {
-			case <-ticker.C:
-				log.Println("⏱️ Periodic indexing tick fired")
-				state = pi.callbacks.GetState()
-
-				// Only index if we're still fetching and have some data
-				if state.FetchInProgress && state.TrackCount > 0 {
-					// Promote temp cache and get the list of changed combo IDs
-					tempCache := NewTempDataCache()
-					promotedCombos, err := tempCache.PromoteTempCache()
-					if err != nil {
-						log.Printf("⚠️ Failed to promote temp cache: %v", err)
-					} else if len(promotedCombos) > 0 {
-						log.Printf("🔄 Promoted %d new cache files before indexing", len(promotedCombos))
-					}
-
-					// Use incremental index update if we have promoted combos and an existing index
-					if len(promotedCombos) > 0 {
-						if err := IncrementalIndexUpdate(promotedCombos); err != nil {
-							log.Printf("⚠️ Incremental index update failed (skipping full rebuild to avoid high memory): %v", err)
-						} else {
-							log.Printf("🔍 Index incrementally updated with %d changed combos", len(promotedCombos))
-							pi.callbacks.UpdateIndexed(state.TrackCount)
-						}
-					} else {
-						log.Println("ℹ️ No new cache files to index — skipping")
-					}
-					pi.callbacks.ExportStatus()
-				} else if !state.FetchInProgress {
-					log.Println("⏹️ Stopping periodic indexing - data loading completed")
-					return
-				}
-			case <-pi.ctx.Done():
-				log.Println("⏹️ Periodic indexing cancelled via context")
-				return
-			}
-		}
-	}()
-}
-
 func mergeCachedCombinations(tracks []TrackInfo, comboIDs []string) []TrackInfo {
 	if len(comboIDs) == 0 {
 		return tracks
@@ -355,7 +257,7 @@ func buildAndExportIndex(tracks []TrackInfo) error {
 	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
 		return err
 	}
-	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, time.Time{}); err != nil {
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration); err != nil {
 		return fmt.Errorf("update index status: %w", err)
 	}
 
@@ -418,39 +320,13 @@ func HasShardedIndex() bool {
 	return len(files) > 0
 }
 
-// FinalizeStartupIndex promotes any pending temp-cache files and applies an
-// incremental update. When no promoted combos are found, it falls back to a
-// full rebuild from the main cache to ensure the index includes all cached
-// combinations — not just the ones that happened to pass through temp cache
-// during this startup cycle.
-//
-// Without the full-rebuild fallback, combos that exist in the main cache
-// but were never processed by any incremental update (e.g. fetched during a
-// previous cycle whose nightly rebuild was interrupted, or fetched after the
-// last periodic indexer tick) would be silently missing from the index.
-//
-// Returns the updated indexed-count baseline for orchestrator status tracking.
-func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int, lastRankedSeriesRefresh time.Time) (int, error) {
+// FinalizeStartupIndex promotes pending files and rebuilds from the full cache.
+func FinalizeStartupIndex(ctx context.Context, currentIndexedCount int) (int, error) {
 	tempCache := NewTempDataCache()
-	promotedCombos, err := tempCache.PromoteTempCache()
-	if err != nil {
+	if _, err := tempCache.PromoteTempCache(); err != nil {
 		return currentIndexedCount, fmt.Errorf("failed to promote temp cache at startup finalization: %w", err)
 	}
 
-	if len(promotedCombos) > 0 {
-		if err := IncrementalIndexUpdate(promotedCombos, lastRankedSeriesRefresh); err != nil {
-			return currentIndexedCount, fmt.Errorf("startup final incremental index update failed: %w", err)
-		}
-		log.Printf("✅ Final incremental index complete (%d changed combos)", len(promotedCombos))
-		return currentIndexedCount, nil
-	}
-
-	// No promoted combos — rebuild the full index from the main cache.
-	// This is the only reliable way to ensure the index includes every
-	// cached combination, including ones that were promoted to the main
-	// cache in a previous cycle but never made it into the sharded index
-	// (e.g. the nightly full rebuild was interrupted, or combos were
-	// fetched after the last periodic indexer tick).
 	cachedTracks := LoadAllCachedData(ctx)
 	if len(cachedTracks) == 0 {
 		return 0, nil
@@ -559,17 +435,9 @@ func LoadDriverIndexFromShards() (DriverIndex, error) {
 //  4. Re-exports the updated index
 //
 // This reduces peak memory by ~2 GB compared to a full BuildAndExportIndex.
-// The lastRankedSeriesRefresh parameter allows the caller to preserve/update this
-// timestamp; if zero, it reads from the current status file on disk.
-func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...time.Time) error {
+func IncrementalIndexUpdate(changedCombos []string) error {
 	indexUpdateMu.Lock()
 	defer indexUpdateMu.Unlock()
-
-	// Extract the optional last-ranked-series refresh timestamp.
-	var rankedSeriesRefresh time.Time
-	if len(lastRankedSeriesRefresh) > 0 {
-		rankedSeriesRefresh = lastRankedSeriesRefresh[0]
-	}
 
 	if len(changedCombos) == 0 {
 		log.Println("ℹ️ No changed combos for incremental update — skipping")
@@ -581,11 +449,6 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 		return err
 	}
 	if rebuilt {
-		if !rankedSeriesRefresh.IsZero() {
-			return UpdateStatusData(func(status *StatusData) {
-				status.LastRankedSeriesRefresh = rankedSeriesRefresh
-			})
-		}
 		return nil
 	}
 
@@ -793,7 +656,7 @@ func IncrementalIndexUpdate(changedCombos []string, lastRankedSeriesRefresh ...t
 	if err := ExportTopCombinations(tracks, trackEntryCounts); err != nil {
 		return fmt.Errorf("export indexed combinations: %w", err)
 	}
-	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration, rankedSeriesRefresh); err != nil {
+	if err := updateStatusWithIndexMetrics(trackEntryCounts, index, buildDuration); err != nil {
 		return fmt.Errorf("update incremental index status: %w", err)
 	}
 

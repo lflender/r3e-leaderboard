@@ -33,9 +33,9 @@ func TestStartScheduledRefreshRunsOverdueScrape(t *testing.T) {
 	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
 	o.scheduledCancelDelay = 0
 	called := make(chan struct{}, 1)
-	o.fullRefreshRunner = func(int, string) { called <- struct{}{} }
+	o.fullRefreshRunner = func(string) { called <- struct{}{} }
 
-	if !o.StartScheduledRefresh(2, 0, 3, 60) {
+	if !o.StartScheduledRefresh(2, 0, 3) {
 		t.Fatal("expected an overdue refresh")
 	}
 	defer o.scheduler.Stop()
@@ -43,6 +43,34 @@ func TestStartScheduledRefreshRunsOverdueScrape(t *testing.T) {
 	case <-called:
 	case <-time.After(time.Second):
 		t.Fatal("overdue scheduled refresh did not run")
+	}
+}
+
+func TestExportStatusPreservesRankedSeriesDiscovery(t *testing.T) {
+	originalDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	o := NewOrchestrator(context.Background(), func() {}, internal.GetDefaultConfig())
+	refreshed := time.Now().UTC().Truncate(time.Second)
+	if err := internal.UpdateStatusData(func(status *internal.StatusData) {
+		status.RankedSeriesCount = 8
+		status.LastRankedSeriesRefresh = refreshed
+	}); err != nil {
+		t.Fatal(err)
+	}
+	o.exportStatus()
+	status := internal.ReadStatusData()
+	if status.RankedSeriesCount != 8 || !status.LastRankedSeriesRefresh.Equal(refreshed) {
+		t.Fatalf("orchestrator overwrote ranked-series discovery status: %+v", status)
 	}
 }
 
@@ -146,7 +174,7 @@ func TestStartupLoadingDoesNotRefreshRankedSeries(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
-	o.StartBackgroundDataLoading(60)
+	o.StartBackgroundDataLoading()
 	select {
 	case output := <-startupLogs:
 		if !strings.Contains(output, "Phase 4: Load local cache") {
@@ -209,17 +237,14 @@ func TestRunScheduledRefresh_InterruptsFetchWithoutKillingApp(t *testing.T) {
 	o.scheduledCancelDelay = 0
 
 	called := false
-	o.fullRefreshRunner = func(indexingIntervalMinutes int, origin string) {
+	o.fullRefreshRunner = func(origin string) {
 		called = true
-		if indexingIntervalMinutes != 60 {
-			t.Fatalf("indexingIntervalMinutes = %d, want 60", indexingIntervalMinutes)
-		}
 		if origin != "nightly" {
 			t.Fatalf("origin = %q, want nightly", origin)
 		}
 	}
 
-	o.runScheduledRefresh(60)
+	o.runScheduledRefresh()
 
 	select {
 	case <-oldFetchCtx.Done():
@@ -249,17 +274,14 @@ func TestRunScheduledRefresh_NoFetchInProgressStillTriggersNightlyRefresh(t *tes
 	o.scheduledCancelDelay = 0
 
 	called := false
-	o.fullRefreshRunner = func(indexingIntervalMinutes int, origin string) {
+	o.fullRefreshRunner = func(origin string) {
 		called = true
-		if indexingIntervalMinutes != 30 {
-			t.Fatalf("indexingIntervalMinutes = %d, want 30", indexingIntervalMinutes)
-		}
 		if origin != "nightly" {
 			t.Fatalf("origin = %q, want nightly", origin)
 		}
 	}
 
-	o.runScheduledRefresh(30)
+	o.runScheduledRefresh()
 
 	if !called {
 		t.Fatal("nightly scheduled refresh was not triggered")

@@ -9,7 +9,6 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -17,6 +16,8 @@ import (
 )
 
 const RankedSeriesFile = "cache/ranked_series.json.gz"
+
+const rankedSeriesDiscoveryInterval = time.Hour
 
 type RankedSeriesExport struct {
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -610,6 +611,10 @@ func ExportRankedSeries(series []RankedSeries) error {
 func FetchAndExportRankedSeries(ctx context.Context) ([]RankedSeries, error) {
 	api := newStatusReportingAPIClient()
 	defer api.Close()
+	return fetchAndExportRankedSeries(ctx, api)
+}
+
+func fetchAndExportRankedSeries(ctx context.Context, api *APIClient) ([]RankedSeries, error) {
 	series, err := api.FetchRankedSeries(ctx)
 	if err != nil {
 		return nil, err
@@ -617,136 +622,37 @@ func FetchAndExportRankedSeries(ctx context.Context) ([]RankedSeries, error) {
 	if err := ExportRankedSeries(series); err != nil {
 		return nil, fmt.Errorf("export ranked series: %w", err)
 	}
+	if err := UpdateStatusData(func(status *StatusData) {
+		status.RankedSeriesCount = len(series)
+		status.LastRankedSeriesRefresh = time.Now()
+	}); err != nil {
+		return nil, fmt.Errorf("update ranked-series status: %w", err)
+	}
 	return series, nil
 }
 
-func RankedSeriesTrackClassCombinations(series []RankedSeries) []string {
-	seen := make(map[string]struct{})
-	for _, item := range series {
-		for _, round := range item.Rounds {
-			if round.Number != item.CurrentRound || !isNumericIdentifier(round.Track.TrackID) {
-				continue
-			}
-			for _, carClass := range round.EligibleClasses {
-				if !isNumericIdentifier(carClass.ID) {
-					continue
-				}
-				seen[round.Track.TrackID+"-"+carClass.ID] = struct{}{}
-			}
+// StartRankedSeriesDiscovery refreshes ranked-series metadata independently of leaderboard fetches.
+func StartRankedSeriesDiscovery(ctx context.Context) {
+	go runRankedSeriesDiscovery(ctx, rankedSeriesDiscoveryInterval, func(ctx context.Context) error {
+		series, err := FetchAndExportRankedSeries(ctx)
+		if err == nil {
+			log.Printf("✅ Refreshed %d ranked series", len(series))
+		}
+		return err
+	})
+}
+
+func runRankedSeriesDiscovery(ctx context.Context, interval time.Duration, refresh func(context.Context) error) {
+	for ctx.Err() == nil {
+		if err := refresh(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("⚠️ Failed to refresh ranked series: %v", err)
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
 		}
 	}
-	combinations := make([]string, 0, len(seen))
-	for combination := range seen {
-		combinations = append(combinations, combination)
-	}
-	sort.Strings(combinations)
-	return combinations
-}
-
-func FetchRankedSeriesTrackDataWithCallback(ctx context.Context, series []RankedSeries, progressCallback func([]TrackInfo)) []TrackInfo {
-	targets, tracks, classes := rankedSeriesFetchTargets(series)
-	if len(targets) == 0 {
-		return []TrackInfo{}
-	}
-	return fetchSpecificCombinations(ctx, targets, tracks, classes, progressCallback)
-}
-
-func rankedSeriesFetchTargets(series []RankedSeries) ([]targetCombo, []TrackConfig, []CarClassConfig) {
-	trackByID := make(map[string]TrackConfig)
-	classByID := make(map[string]CarClassConfig)
-	for _, item := range series {
-		for _, round := range item.Rounds {
-			if round.Number != item.CurrentRound || !isNumericIdentifier(round.Track.TrackID) {
-				continue
-			}
-			trackName := round.Track.Name
-			if round.Track.Layout != "" {
-				trackName += " - " + round.Track.Layout
-			}
-			trackByID[round.Track.TrackID] = TrackConfig{Name: trackName, TrackID: round.Track.TrackID}
-			for _, carClass := range round.EligibleClasses {
-				if isNumericIdentifier(carClass.ID) {
-					classByID[carClass.ID] = CarClassConfig{Name: carClass.Name, ClassID: carClass.ID}
-				}
-			}
-		}
-	}
-
-	combinations := RankedSeriesTrackClassCombinations(series)
-	targets := make([]targetCombo, 0, len(combinations))
-	trackIDs := make(map[string]struct{})
-	classIDs := make(map[string]struct{})
-	for _, combination := range combinations {
-		parts := strings.SplitN(combination, "-", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		targets = append(targets, targetCombo{trackID: parts[0], classID: parts[1]})
-		trackIDs[parts[0]] = struct{}{}
-		classIDs[parts[1]] = struct{}{}
-	}
-
-	trackIDList := make([]string, 0, len(trackIDs))
-	for id := range trackIDs {
-		trackIDList = append(trackIDList, id)
-	}
-	sort.Strings(trackIDList)
-	tracks := make([]TrackConfig, 0, len(trackIDList))
-	for _, id := range trackIDList {
-		tracks = append(tracks, trackByID[id])
-	}
-
-	classIDList := make([]string, 0, len(classIDs))
-	for id := range classIDs {
-		classIDList = append(classIDList, id)
-	}
-	sort.Strings(classIDList)
-	classes := make([]CarClassConfig, 0, len(classIDList))
-	for _, id := range classIDList {
-		classes = append(classes, classByID[id])
-	}
-
-	return targets, tracks, classes
-}
-
-func RefreshRankedSeriesCombinations(ctx context.Context, series []RankedSeries, refreshMPPositions bool, cfg Config) ([]string, error) {
-	ctx = WithFetchPauseBypass(ctx)
-	combinations := RankedSeriesTrackClassCombinations(series)
-	if len(combinations) == 0 {
-		return nil, nil
-	}
-
-	FetchRankedSeriesTrackDataWithCallback(ctx, series, nil)
-	tempCache := NewTempDataCache()
-	promoted, err := tempCache.PromoteTempCache()
-	if err != nil {
-		return nil, fmt.Errorf("promote ranked-series track cache: %w", err)
-	}
-	changed := MergeUniqueStrings(promoted, combinations)
-	UpdateRankedSeriesRefreshTime()
-
-	if refreshMPPositions {
-		mpCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := RefreshMultiplayerPositions(mpCtx, cfg.Data.MultiplayerPositionLimit); err != nil {
-			log.Printf("⚠️ Failed to refresh multiplayer positions: %v", err)
-		}
-		cancel()
-	}
-	return changed, nil
-}
-
-func UpdateRankedSeriesRefreshTime() {
-	if err := UpdateStatusData(func(status *StatusData) {
-		status.LastRankedSeriesRefresh = time.Now()
-	}); err != nil {
-		log.Printf("⚠️ Failed to update ranked-series refresh time: %v", err)
-	}
-}
-
-func RankedSeriesFileAge() time.Duration {
-	info, err := os.Stat(RankedSeriesFile)
-	if err != nil {
-		return -1
-	}
-	return time.Since(info.ModTime())
 }

@@ -227,15 +227,14 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 	log.Printf("✅ Cache loaded: %d combinations", cacheLoadCount)
 
 	// Trigger cache complete callback with whether we'll fetch
-	// Always invoke so orchestrator can decide to start periodic indexing
+	// Always invoke so the orchestrator can update its fetch status.
 	if cacheCompleteCallback != nil {
 		log.Printf("📊 Building initial index from %d cached combinations...", len(allTrackData))
 		cacheCompleteCallback(allTrackData, needsFetching)
 	}
 
 	// During long fetch runs we don't need to retain full payloads in-memory.
-	// Keep only metadata for progress/status tracking and rely on temp cache +
-	// incremental indexing for index updates.
+	// Keep only metadata for progress/status tracking; data is indexed after fetching.
 	if needsFetching {
 		for i := range allTrackData {
 			allTrackData[i].Data = nil
@@ -273,12 +272,6 @@ func loadAllTrackDataWithCallback(ctx context.Context, trackConfigs []TrackConfi
 				log.Printf("🛑 Fetch cancelled at %d/%d combinations", currentCombination, totalCombinations)
 				return allTrackData
 			default:
-			}
-
-			// Pause long-running fetches if requested (e.g. daily race refresh)
-			if !WaitIfFetchPaused(ctx) {
-				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", currentCombination, totalCombinations)
-				return allTrackData
 			}
 
 			key := track.TrackID + "_" + class.ClassID

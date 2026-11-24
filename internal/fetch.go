@@ -44,12 +44,6 @@ func fetchCombinationsWithClient(ctx context.Context, trackConfigs []TrackConfig
 			default:
 			}
 
-			// Pause long-running fetches if requested
-			if !WaitIfFetchPaused(ctx) {
-				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", processed, totalCombinations)
-				return allTrackData
-			}
-
 			data, duration, err := fetchWithTimeout(ctx, apiClient, track, class)
 			if err != nil {
 				// Log and continue on error to avoid losing large portions
@@ -228,12 +222,6 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 			default:
 			}
 
-			// Pause long-running fetches if requested
-			if !WaitIfFetchPaused(ctx) {
-				log.Printf("🛑 Fetch cancelled while paused at %d/%d combinations", processed, totalCombinations)
-				return allTrackData
-			}
-
 			data, duration, err := fetchWithTimeout(ctx, apiClient, *trackConfig, class)
 			if err != nil {
 				log.Printf("⚠️ Fetch error %s + %s: %v (will retry later)", trackConfig.Name, class.Name, err)
@@ -294,9 +282,8 @@ func fetchSpecificCombinations(ctx context.Context, targetCombos []targetCombo, 
 	allTrackData = append(allTrackData, retriedTracks...)
 
 	// NOTE: We intentionally do NOT call tempCache.PromoteTempCache() here.
-	// Promotion is the responsibility of the caller (e.g., ranked-series refresh,
-	// PerformTargetedRefresh) so it can capture ALL promoted combo IDs for incremental
-	// indexing. Calling PromoteTempCache() here would silently promote files from
+	// The caller promotes the cache so it can capture ALL promoted combo IDs for
+	// incremental indexing. Calling PromoteTempCache() here would silently promote files from
 	// concurrent operations (like the startup loader) without passing their combo IDs
 	// to IncrementalIndexUpdate, causing those entries to be missing from the search index.
 

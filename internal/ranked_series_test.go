@@ -5,12 +5,14 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -135,72 +137,6 @@ func TestDecodeRankedSeriesResponse_MalformedPayload(t *testing.T) {
 	}
 }
 
-func TestRankedSeriesTrackClassCombinations_CurrentRoundsOnlyAndDeduplicated(t *testing.T) {
-	series := []RankedSeries{
-		{
-			CurrentRound: 2,
-			Rounds: []RankedSeriesRound{
-				{
-					Number: 1,
-					Track:  RankedSeriesTrack{TrackID: "100"},
-					EligibleClasses: []RankedSeriesCarClass{
-						{ID: "1", Name: "Past"},
-					},
-				},
-				{
-					Number: 2,
-					Track:  RankedSeriesTrack{TrackID: "200"},
-					EligibleClasses: []RankedSeriesCarClass{
-						{ID: "20", Name: "Current"},
-						{ID: "invalid", Name: "Invalid"},
-					},
-				},
-			},
-		},
-		{
-			CurrentRound: 2,
-			Rounds: []RankedSeriesRound{{
-				Number: 2,
-				Track:  RankedSeriesTrack{TrackID: "200"},
-				EligibleClasses: []RankedSeriesCarClass{
-					{ID: "20", Name: "Duplicate"},
-					{ID: "21", Name: "Also current"},
-				},
-			}},
-		},
-	}
-
-	got := RankedSeriesTrackClassCombinations(series)
-	want := []string{"200-20", "200-21"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("combinations = %v, want %v", got, want)
-	}
-}
-
-func TestRankedSeriesFetchTargets_UsesDiscoveredClassMetadata(t *testing.T) {
-	series := []RankedSeries{{
-		CurrentRound: 1,
-		Rounds: []RankedSeriesRound{{
-			Number: 1,
-			Track:  RankedSeriesTrack{TrackID: "91234", Name: "New Track", Layout: "Short"},
-			EligibleClasses: []RankedSeriesCarClass{
-				{ID: "98765", Name: "New Class"},
-			},
-		}},
-	}}
-
-	targets, tracks, classes := rankedSeriesFetchTargets(series)
-	if !reflect.DeepEqual(targets, []targetCombo{{trackID: "91234", classID: "98765"}}) {
-		t.Errorf("targets = %+v, want the discovered track/class pair", targets)
-	}
-	if !reflect.DeepEqual(tracks, []TrackConfig{{Name: "New Track - Short", TrackID: "91234"}}) {
-		t.Errorf("tracks = %+v, want track metadata from the series response", tracks)
-	}
-	if !reflect.DeepEqual(classes, []CarClassConfig{{Name: "New Class", ClassID: "98765"}}) {
-		t.Errorf("classes = %+v, want class metadata from the series response", classes)
-	}
-}
-
 func TestExportRankedSeries_WritesSortedGzipJSON(t *testing.T) {
 	tempDir, cleanup := TempTestDir(t, "ranked_series_export_test")
 	defer cleanup()
@@ -247,6 +183,201 @@ func TestExportRankedSeries_WritesSortedGzipJSON(t *testing.T) {
 	}
 	if len(exported.Series) != 2 || exported.Series[0].Name != "A Series" || exported.Series[1].Name != "Z Series" {
 		t.Errorf("exported series order = %+v, want alphabetical order", exported.Series)
+	}
+}
+
+func TestRankedSeriesRefreshRoundTransitions(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	const endpoint = "/iapi/abcdef0123456789"
+	currentRound := 2
+	fail := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/ranked/series":
+			_, _ = w.Write([]byte(`<script src="/series.js"></script>`))
+		case "/series.js":
+			_, _ = w.Write([]byte(`item=createSchema({fields:[[1,"rounds",items,1],[2,"currentRound",3]]}),` +
+				`series=createSchema({fields:[[1,"series",item,1],[2,"responseStatus",status]]}),` +
+				`fetch=params=>request({url:"` + endpoint + `",decoder:series.decode},params),` +
+				`headers={"xr":"token"}, limit=Math.min(512,bytes.length);for(let i=0;i<limit;i++)bytes[i]^=51+i*5&255`))
+		case endpoint:
+			if fail {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			w.Header().Set("Content-Type", "application/javascript-binast")
+			_, _ = w.Write(encodeDetectedRoundSettings(currentRound))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewAPIClient()
+	defer client.Close()
+	client.baseURL = server.URL
+
+	want := map[int][]string{
+		2: {"6009-13397", "2517-7075", "1849-1703", "1849-12770", "1849-13129", "1849-13136", "1849-13571",
+			"10781-1703", "10781-12770", "10781-13136", "10781-13571", "2812-10977", "12111-1710", "1670-4867",
+			"2812-7009", "2812-7844", "2812-9233", "2812-10344", "2812-11317"},
+		3: {"6657-13397", "1683-13264", "1855-1703", "1855-12770", "1855-13129", "1855-13136", "1855-13571",
+			"9176-1703", "9176-12770", "9176-13136", "9176-13571", "2812-5825", "2020-1710", "1692-4867",
+			"10781-3905", "10781-4517", "10781-6036", "10781-6309"},
+		4: {"1855-13397", "10781-7168", "13255-1703", "13255-12770", "13255-13129", "13255-13136", "13255-13571",
+			"4038-1703", "4038-12770", "4038-13136", "4038-13571", "2812-7009", "2812-7844", "2812-9233",
+			"2812-10344", "2812-11317", "12267-1710", "5275-4867", "1683-7009", "1683-7844", "1683-9233",
+			"1683-10344", "1683-11317"},
+	}
+	for _, round := range []int{2, 3, 4} {
+		sort.Strings(want[round])
+		currentRound = round
+		series, err := fetchAndExportRankedSeries(context.Background(), client)
+		if err != nil {
+			t.Fatalf("refresh round %d: %v", round, err)
+		}
+		if got := currentRoundCombinations(series); !reflect.DeepEqual(got, want[round]) {
+			t.Fatalf("round %d combinations = %v, want %v", round, got, want[round])
+		}
+		compressed, err := os.ReadFile(RankedSeriesFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(compressed))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var exported RankedSeriesExport
+		if err := json.NewDecoder(reader).Decode(&exported); err != nil {
+			t.Fatal(err)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := currentRoundCombinations(exported.Series); !reflect.DeepEqual(got, want[round]) {
+			t.Fatalf("exported round %d combinations = %v, want %v", round, got, want[round])
+		}
+		status := ReadStatusData()
+		if status.RankedSeriesCount != 8 || status.LastRankedSeriesRefresh.IsZero() {
+			t.Fatalf("round %d status = %+v", round, status)
+		}
+
+		if round == 3 {
+			fail = true
+			if _, err := fetchAndExportRankedSeries(context.Background(), client); err == nil {
+				t.Fatal("expected failed discovery to return an error")
+			}
+			after, err := os.ReadFile(RankedSeriesFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(compressed, after) {
+				t.Fatal("failed refresh overwrote the last successful snapshot")
+			}
+			afterStatus := ReadStatusData()
+			if !afterStatus.LastRankedSeriesRefresh.Equal(status.LastRankedSeriesRefresh) {
+				t.Fatal("failed refresh changed the last successful refresh time")
+			}
+			fail = false
+		}
+	}
+}
+
+func currentRoundCombinations(series []RankedSeries) []string {
+	seen := make(map[string]struct{})
+	for _, item := range series {
+		for _, round := range item.Rounds {
+			if round.Number != item.CurrentRound || !isNumericIdentifier(round.Track.TrackID) {
+				continue
+			}
+			for _, class := range round.EligibleClasses {
+				if isNumericIdentifier(class.ID) {
+					seen[round.Track.TrackID+"-"+class.ID] = struct{}{}
+				}
+			}
+		}
+	}
+	combinations := make([]string, 0, len(seen))
+	for combination := range seen {
+		combinations = append(combinations, combination)
+	}
+	sort.Strings(combinations)
+	return combinations
+}
+
+// Track and class IDs come from the November 2026 Round 2 snapshot and live Round 3 response.
+func encodeDetectedRoundSettings(currentRound int) []byte {
+	type setting struct {
+		track   uint64
+		classes []uint64
+	}
+	fixtures := []struct {
+		name   string
+		rounds []setting
+	}{
+		{"Alpine A110 Cup", []setting{{6009, []uint64{13397}}, {6657, []uint64{13397}}, {1855, []uint64{13397}}}},
+		{"DTM All-Stars", []setting{{2517, []uint64{7075}}, {1683, []uint64{13264}}, {10781, []uint64{7168}}}},
+		{"Endurance Masters", []setting{{1849, []uint64{1703, 12770, 13129, 13136, 13571}}, {1855, []uint64{1703, 12770, 13129, 13136, 13571}}, {13255, []uint64{1703, 12770, 13129, 13136, 13571}}}},
+		{"GT3 Sprint Series", []setting{{10781, []uint64{1703, 12770, 13136, 13571}}, {9176, []uint64{1703, 12770, 13136, 13571}}, {4038, []uint64{1703, 12770, 13136, 13571}}}},
+		{"Nordschleife Trophy", []setting{{2812, []uint64{10977}}, {2812, []uint64{5825}}, {2812, []uint64{7009, 7844, 9233, 10344, 11317}}}},
+		{"Super Touring", []setting{{12111, []uint64{1710}}, {2020, []uint64{1710}}, {12267, []uint64{1710}}}},
+		{"Tatuus F4", []setting{{1670, []uint64{4867}}, {1692, []uint64{4867}}, {5275, []uint64{4867}}}},
+		{"Touring Car Series", []setting{{2812, []uint64{7009, 7844, 9233, 10344, 11317}}, {10781, []uint64{3905, 4517, 6036, 6309}}, {1683, []uint64{7009, 7844, 9233, 10344, 11317}}}},
+	}
+	var response []byte
+	for _, fixture := range fixtures {
+		var series []byte
+		series = appendTestProtoBytes(series, 1, []byte(fixture.name))
+		series = appendTestProtoBytes(series, 2, []byte(fixture.name))
+		for i, setting := range fixture.rounds {
+			var track []byte
+			track = appendTestProtoVarint(track, 1, setting.track+1)
+			track = appendTestProtoVarint(track, 3, setting.track)
+			track = appendTestProtoBytes(track, 4, []byte("Track"))
+			var round []byte
+			round = appendTestProtoVarint(round, 1, uint64(i+2))
+			round = appendTestProtoBytes(round, 7, track)
+			for _, id := range setting.classes {
+				var class []byte
+				class = appendTestProtoVarint(class, 1, id)
+				class = appendTestProtoBytes(class, 2, []byte("Class"))
+				round = appendTestProtoBytes(round, 9, class)
+			}
+			series = appendTestProtoBytes(series, 8, round)
+		}
+		series = appendTestProtoVarint(series, 10, uint64(currentRound))
+		response = appendTestProtoBytes(response, 1, series)
+	}
+	xorAPIResponsePrefix(response, testResponseXORSeed, testResponseXORStep, 512)
+	return response
+}
+
+func TestRankedSeriesDiscoveryRetriesAndStops(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := make(chan int, 2)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		count := 0
+		runRankedSeriesDiscovery(ctx, 10*time.Millisecond, func(context.Context) error {
+			count++
+			calls <- count
+			if count == 1 {
+				return errors.New("temporary failure")
+			}
+			cancel()
+			return nil
+		})
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		cancel()
+		t.Fatal("discovery did not retry and stop")
+	}
+	if len(calls) != 2 || <-calls != 1 || <-calls != 2 {
+		t.Fatal("discovery did not run immediately and retry once")
 	}
 }
 

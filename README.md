@@ -212,7 +212,7 @@ const gtr3 = topCombos.results.filter(c => c.class_id === '1703');
 ### Ranked Series
 **File:** `cache/ranked_series.json.gz`
 
-If present, this file contains series and rounds previously obtained from RaceRoom's ranked-series page,
+If present, this file contains series and rounds obtained from RaceRoom's ranked-series page,
 including the current round, track/layout, eligible classes and cars, session
 format, schedule, and registration details. The file is gzip-compressed JSON.
 To inspect it locally:
@@ -335,12 +335,15 @@ still need to be updated.
 To check discovery and decode a live leaderboard page, run
 `R3E_LEADERBOARD_INTEGRATION=1 go test -v -run TestRaceRoomLeaderboardDiscoveryIntegration ./internal`
 (on PowerShell, set `$env:R3E_LEADERBOARD_INTEGRATION = "1"` before running the
-`go test` command). This opt-in test makes requests to RaceRoom.
+`go test` command). For ranked series, use
+`go test -v -run TestRaceRoomRankedSeriesDiscoveryIntegration ./internal` with
+the same environment variable. These opt-in tests make requests to RaceRoom.
 
-Automatic ranked-series discovery and targeted ranked-series refreshes are
-disabled, including at startup. The full refresh fetches the configured
-track/class combinations without a separate ranked-series fetch. Any existing
-ranked-series cache may be stale.
+Ranked-series metadata is refreshed at startup and hourly, independently of
+leaderboard refreshes. If discovery fails, the last successful file is retained
+and discovery is retried on the next interval. Targeted ranked-series
+leaderboard refreshes are not performed; full refreshes fetch the configured
+track/class combinations.
 
 ## 📊 Data Coverage
 
@@ -354,10 +357,10 @@ ranked-series cache may be stale.
 
 ### Initial Startup (First Run)
 1. Application starts
-2. Fetches all 14,027 track/class combinations from RaceRoom API (~6 hours)
+2. Fetches all configured track/class combinations from RaceRoom API
 3. Uses pagination to get complete results (handles 1500+ entry leaderboards)
 4. Saves data to local cache (`cache/` directory)
-5. Builds and exports driver index to JSON every 30 minutes during fetch (configurable)
+5. Builds and exports the driver index after fetching completes
 6. Updates status.json throughout the process
 
 ### Subsequent Startups (With Cache)
@@ -365,7 +368,7 @@ ranked-series cache may be stale.
 2. Builds search index and exports to JSON immediately
 3. **Index is ready in ~3 seconds with all available data**
 4. Fetches missing data and refreshes cache older than the configured full-refresh interval in background
-5. Updates JSON files as new data arrives
+5. Updates the index and statistics after fetching completes
 
 ### Automatic Refresh
 - Runs every 3 hours; after a restart, the previous scrape start determines when the next refresh is due
@@ -374,7 +377,7 @@ ranked-series cache may be stale.
 - If a refresh takes longer than the interval, the next starts after it finishes
 - Performs a full-force refresh of ALL track/class combinations (ignores cache age)
 - Writes fresh data to a temporary cache and promotes atomically at the end (prevents partial/dirty states)
-- Rebuilds the complete searchable index every `indexing_minutes` during the refresh window (default 30)
+- Rebuilds the complete searchable index after the refresh finishes
 - Maintains data availability throughout: previous cache and index remain accessible while refresh runs
 
 ## 🗂️ Cache Management

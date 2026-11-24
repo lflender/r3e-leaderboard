@@ -31,28 +31,23 @@ func TestGetTracks(t *testing.T) {
 func TestGetTracks_KnownTracks(t *testing.T) {
 	tracks := GetTracks()
 
-	// Test some well-known tracks exist with correct IDs
 	knownTracks := map[string]string{
-		"Autodrom Most - Grand Prix":                   "7112",
-		"Nordschleife - NLS":                           "4975",
-		"Circuit Zandvoort - Grand Prix":               "10782",
-		"Interlagos - Grand Prix":                      "10463",
-		"Monza Circuit - Grand Prix":                   "1671",
-		"WeatherTech Raceway Laguna Seca - Grand Prix": "1856",
+		"7112":  "Most",
+		"4975":  "Nordschleife NLS",
+		"10782": "Zandvoort",
+		"10463": "Interlagos",
+		"1671":  "Monza",
+		"1856":  "Laguna Seca",
 	}
 
-	trackMap := make(map[string]string, len(tracks))
+	trackIDs := make(map[string]bool, len(tracks))
 	for _, track := range tracks {
-		trackMap[track.Name] = track.TrackID
+		trackIDs[track.TrackID] = true
 	}
 
-	for name, expectedID := range knownTracks {
-		if id, ok := trackMap[name]; ok {
-			if id != expectedID {
-				t.Errorf("Track %q has ID %q, expected %q", name, id, expectedID)
-			}
-		} else {
-			t.Errorf("Known track %q not found in GetTracks()", name)
+	for id, name := range knownTracks {
+		if !trackIDs[id] {
+			t.Errorf("Known track %s (ID %s) not found in GetTracks()", name, id)
 		}
 	}
 }

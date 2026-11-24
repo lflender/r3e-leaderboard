@@ -221,7 +221,7 @@ func TestMergeUniqueStrings_ThreeSlices(t *testing.T) {
 }
 
 func TestMergeUniqueStrings_NilAndNonEmpty(t *testing.T) {
-	// Simulates requested series combinations with no pre-promoted files.
+	// Simulates requested combinations with no pre-promoted files.
 	result := MergeUniqueStrings(nil, []string{"9958-8600", "7112-1703"})
 	if len(result) != 2 {
 		t.Errorf("Expected 2 items, got %d: %v", len(result), result)
@@ -241,7 +241,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 	// were passed to IncrementalIndexUpdate, causing main loader entries to be
 	// missing from the search index.
 
-	// Setup: create temp cache with "loader" files and requested series files.
+	// Setup: create temp cache with loader and targeted refresh files.
 	tempDir := t.TempDir()
 	cacheDir := t.TempDir()
 
@@ -265,7 +265,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 		t.Fatalf("Failed to save loader track: %v", err)
 	}
 
-	// Simulate ranked-series refresh writing to cache_temp.
+	// Simulate a targeted refresh writing to cache_temp.
 	refreshedTrack := TrackInfo{
 		Name:    "Autodrom Most - Grand Prix",
 		TrackID: "7112",
@@ -275,7 +275,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 		},
 	}
 	if err := dc.SaveTrackData(refreshedTrack); err != nil {
-		t.Fatalf("Failed to save daily race track: %v", err)
+		t.Fatalf("Failed to save targeted track: %v", err)
 	}
 
 	// Promote cached data for later indexing.
@@ -304,7 +304,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 		t.Error("Promoted IDs should include loader combo '9958-8600' (Indianapolis)")
 	}
 	if !foundTrack {
-		t.Error("Promoted IDs should include daily race combo '7112-1703' (Most)")
+		t.Error("Promoted IDs should include targeted combo '7112-1703' (Most)")
 	}
 
 	// Verify files are now in main cache
@@ -320,7 +320,7 @@ func TestPromoteTempCache_CapturesAllFiles(t *testing.T) {
 		t.Error("Most cache file should exist in main cache after promotion")
 	}
 
-	// If we merge promoted IDs with daily race trackIDs (like the fix does),
+	// If we merge promoted IDs with targeted trackIDs (like the fix does),
 	// the result should include BOTH
 	targetedIDs := []string{"7112-1703"}
 	allIDs := MergeUniqueStrings(promoted, targetedIDs)
