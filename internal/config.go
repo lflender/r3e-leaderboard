@@ -26,7 +26,6 @@ type ScheduleConfig struct {
 	RefreshHour           int          `json:"refresh_hour"`
 	RefreshMinute         int          `json:"refresh_minute"`
 	RefreshIntervalHours  int          `json:"refresh_interval_hours"`
-	IndexingMinutes       int          `json:"indexing_minutes"`
 	AvatarBackfillWeekday time.Weekday `json:"avatar_backfill_weekday"`
 	AvatarBackfillHour    int          `json:"avatar_backfill_hour"`
 	AvatarBackfillMinute  int          `json:"avatar_backfill_minute"`
@@ -45,7 +44,6 @@ func GetDefaultConfig() Config {
 			RefreshHour:           2, // 2 AM
 			RefreshMinute:         0, // At the top of the hour
 			RefreshIntervalHours:  defaultFullRefreshIntervalHours,
-			IndexingMinutes:       60, // Every 60 minutes during fetching (reduced from 30 to lower memory pressure)
 			AvatarBackfillWeekday: time.Monday,
 			AvatarBackfillHour:    4,
 			AvatarBackfillMinute:  0,

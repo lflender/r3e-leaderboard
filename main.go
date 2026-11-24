@@ -71,15 +71,14 @@ func main() {
 		config.Schedule.RefreshHour,
 		config.Schedule.RefreshMinute,
 		config.Schedule.RefreshIntervalHours,
-		config.Schedule.IndexingMinutes,
 	)
 	if overdue {
 		log.Println("🔄 Last scrape is overdue; starting a full refresh instead of normal startup loading")
 	} else {
-		orchestrator.StartBackgroundDataLoading(config.Schedule.IndexingMinutes)
+		orchestrator.StartBackgroundDataLoading()
 	}
 	// Ultra-lightweight manual trigger via file sentinel
-	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60, config.Schedule.IndexingMinutes)
+	orchestrator.StartRefreshFileTrigger("cache/refresh_now", 60)
 
 	// Start periodic memory monitoring and GC
 	go periodicMemoryMonitoring(appContext)

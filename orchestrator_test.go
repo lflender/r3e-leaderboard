@@ -33,9 +33,9 @@ func TestStartScheduledRefreshRunsOverdueScrape(t *testing.T) {
 	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
 	o.scheduledCancelDelay = 0
 	called := make(chan struct{}, 1)
-	o.fullRefreshRunner = func(int, string) { called <- struct{}{} }
+	o.fullRefreshRunner = func(string) { called <- struct{}{} }
 
-	if !o.StartScheduledRefresh(2, 0, 3, 60) {
+	if !o.StartScheduledRefresh(2, 0, 3) {
 		t.Fatal("expected an overdue refresh")
 	}
 	defer o.scheduler.Stop()
@@ -174,7 +174,7 @@ func TestStartupLoadingDoesNotRefreshRankedSeries(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	o := NewOrchestrator(ctx, cancel, internal.GetDefaultConfig())
-	o.StartBackgroundDataLoading(60)
+	o.StartBackgroundDataLoading()
 	select {
 	case output := <-startupLogs:
 		if !strings.Contains(output, "Phase 4: Load local cache") {
@@ -237,17 +237,14 @@ func TestRunScheduledRefresh_InterruptsFetchWithoutKillingApp(t *testing.T) {
 	o.scheduledCancelDelay = 0
 
 	called := false
-	o.fullRefreshRunner = func(indexingIntervalMinutes int, origin string) {
+	o.fullRefreshRunner = func(origin string) {
 		called = true
-		if indexingIntervalMinutes != 60 {
-			t.Fatalf("indexingIntervalMinutes = %d, want 60", indexingIntervalMinutes)
-		}
 		if origin != "nightly" {
 			t.Fatalf("origin = %q, want nightly", origin)
 		}
 	}
 
-	o.runScheduledRefresh(60)
+	o.runScheduledRefresh()
 
 	select {
 	case <-oldFetchCtx.Done():
@@ -277,17 +274,14 @@ func TestRunScheduledRefresh_NoFetchInProgressStillTriggersNightlyRefresh(t *tes
 	o.scheduledCancelDelay = 0
 
 	called := false
-	o.fullRefreshRunner = func(indexingIntervalMinutes int, origin string) {
+	o.fullRefreshRunner = func(origin string) {
 		called = true
-		if indexingIntervalMinutes != 30 {
-			t.Fatalf("indexingIntervalMinutes = %d, want 30", indexingIntervalMinutes)
-		}
 		if origin != "nightly" {
 			t.Fatalf("origin = %q, want nightly", origin)
 		}
 	}
 
-	o.runScheduledRefresh(30)
+	o.runScheduledRefresh()
 
 	if !called {
 		t.Fatal("nightly scheduled refresh was not triggered")

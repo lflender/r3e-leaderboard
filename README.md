@@ -357,10 +357,10 @@ track/class combinations.
 
 ### Initial Startup (First Run)
 1. Application starts
-2. Fetches all 14,027 track/class combinations from RaceRoom API (~6 hours)
+2. Fetches all configured track/class combinations from RaceRoom API
 3. Uses pagination to get complete results (handles 1500+ entry leaderboards)
 4. Saves data to local cache (`cache/` directory)
-5. Builds and exports driver index to JSON every 30 minutes during fetch (configurable)
+5. Builds and exports the driver index after fetching completes
 6. Updates status.json throughout the process
 
 ### Subsequent Startups (With Cache)
@@ -368,7 +368,7 @@ track/class combinations.
 2. Builds search index and exports to JSON immediately
 3. **Index is ready in ~3 seconds with all available data**
 4. Fetches missing data and refreshes cache older than the configured full-refresh interval in background
-5. Updates JSON files as new data arrives
+5. Updates the index and statistics after fetching completes
 
 ### Automatic Refresh
 - Runs every 3 hours; after a restart, the previous scrape start determines when the next refresh is due
@@ -377,7 +377,7 @@ track/class combinations.
 - If a refresh takes longer than the interval, the next starts after it finishes
 - Performs a full-force refresh of ALL track/class combinations (ignores cache age)
 - Writes fresh data to a temporary cache and promotes atomically at the end (prevents partial/dirty states)
-- Rebuilds the complete searchable index every `indexing_minutes` during the refresh window (default 30)
+- Rebuilds the complete searchable index after the refresh finishes
 - Maintains data availability throughout: previous cache and index remain accessible while refresh runs
 
 ## 🗂️ Cache Management

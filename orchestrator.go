@@ -17,7 +17,7 @@ type Orchestrator struct {
 	appCancel            context.CancelFunc
 	fetchContext         context.Context
 	fetchCancel          context.CancelFunc
-	fullRefreshRunner    func(indexingIntervalMinutes int, origin string)
+	fullRefreshRunner    func(origin string)
 	scheduledCancelDelay time.Duration
 	fetchInProgress      bool
 	lastScrapeStart      time.Time
@@ -73,7 +73,7 @@ func (o *Orchestrator) GetScrapeTimestamps() (time.Time, time.Time, bool) {
 }
 
 // StartBackgroundDataLoading initiates the background data loading process
-func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
+func (o *Orchestrator) StartBackgroundDataLoading() {
 	go func() {
 		opCtx := o.startFetchOperation()
 
@@ -120,7 +120,7 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 				log.Println("ℹ️ No cached combinations found — skipping initial index")
 			}
 
-			// Only start periodic indexing and mark scrape start if we will fetch
+			// Mark scrape start only if we will fetch.
 			if shouldFetchFresh {
 				if opCtx.Err() != nil {
 					return
@@ -130,10 +130,6 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 				o.fetchInProgress = true
 				o.exportStatus()
 
-				log.Printf("⏱️ Starting periodic indexing every %d minutes during fetch...", indexingIntervalMinutes)
-				o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
-			} else {
-				log.Println("✅ All data is cached - skipping periodic indexing")
 			}
 		}
 
@@ -191,19 +187,18 @@ func (o *Orchestrator) StartBackgroundDataLoading(indexingIntervalMinutes int) {
 
 // StartScheduledRefresh starts automatic cache refreshes using the same
 // mechanisms as the startup load & fetch phase, but forces a full refresh
-// of all combinations (ignoring cache age and content) and runs periodic
-// indexing during the fetch phase.
-func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, refreshIntervalHours, indexingIntervalMinutes int) bool {
+// of all combinations (ignoring cache age and content).
+func (o *Orchestrator) StartScheduledRefresh(refreshHour, refreshMinute, refreshIntervalHours int) bool {
 	o.scheduler = internal.NewScheduler(refreshHour, refreshMinute, refreshIntervalHours)
 	now := time.Now()
 	overdue := !o.scheduler.NextRefreshTime(now, o.lastScrapeStart).After(now)
 	o.scheduler.Start(func() {
-		o.runScheduledRefresh(indexingIntervalMinutes)
+		o.runScheduledRefresh()
 	}, o.lastScrapeStart)
 	return overdue
 }
 
-func (o *Orchestrator) runScheduledRefresh(indexingIntervalMinutes int) {
+func (o *Orchestrator) runScheduledRefresh() {
 	// If a fetch is already in progress, cancel it and start the scheduled refresh instead.
 	if o.fetchInProgress {
 		log.Println("⏹️ Cancelling in-progress fetch to start scheduled cache refresh")
@@ -215,11 +210,11 @@ func (o *Orchestrator) runScheduledRefresh(indexingIntervalMinutes int) {
 		}
 	}
 
-	o.fullRefreshRunner(indexingIntervalMinutes, "nightly")
+	o.fullRefreshRunner("nightly")
 }
 
 // performFullRefresh executes the full-force refresh flow
-func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin string) {
+func (o *Orchestrator) performFullRefresh(origin string) {
 	o.rebuildMu.Lock()
 	defer o.rebuildMu.Unlock()
 
@@ -232,10 +227,6 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 
 	// Build initial index from cache if available
 	o.buildBootstrapIndex()
-
-	// Start periodic indexing during refresh
-	log.Printf("⏱️ Starting periodic indexing every %d minutes...", indexingIntervalMinutes)
-	o.StartPeriodicIndexing(opCtx, indexingIntervalMinutes)
 
 	// Progress callback for status updates
 	progressCallback := func(merged []internal.TrackInfo) {
@@ -261,7 +252,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 	o.tracks = nil
 
 	// Build final index from disk cache (all temp cache files are promoted by now).
-	// We load from disk rather than keeping ~2 GB of payloads in memory for 10 hours.
+	// We load from disk rather than retaining the full payloads during the fetch.
 	o.logIndexBuild("full refresh final")
 	cachedTracks := internal.LoadAllCachedData(o.appContext)
 	if err := internal.BuildAndExportIndex(cachedTracks); err != nil {
@@ -288,7 +279,7 @@ func (o *Orchestrator) performFullRefresh(indexingIntervalMinutes int, origin st
 // performTargetedRefresh executes a targeted refresh for specific track IDs or track-class couples.
 // Uses incremental index updates instead of a full rebuild,
 // reducing a ~2 minute operation to ~5-10 seconds.
-func (o *Orchestrator) performTargetedRefresh(trackIDs []string, indexingIntervalMinutes int, origin string) {
+func (o *Orchestrator) performTargetedRefresh(trackIDs []string, origin string) {
 	o.rebuildMu.Lock()
 	defer o.rebuildMu.Unlock()
 
@@ -366,7 +357,7 @@ func (o *Orchestrator) fullRebuildFallback() {
 
 // StartRefreshFileTrigger watches for a lightweight file trigger to start a full refresh
 // The check is ultra-lightweight: a single stat per interval (defaults recommended: 30s)
-func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkIntervalSeconds int, indexingIntervalMinutes int) {
+func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkIntervalSeconds int) {
 	// Create watcher with callbacks
 	watcher := internal.NewRefreshWatcher(
 		o.appContext,
@@ -376,10 +367,10 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 			// Launch targeted or full refresh based on file contents
 			if len(trackIDs) > 0 {
 				log.Printf("🎯 Targeted refresh requested for %d track(s)", len(trackIDs))
-				o.performTargetedRefresh(trackIDs, indexingIntervalMinutes, origin)
+				o.performTargetedRefresh(trackIDs, origin)
 			} else {
 				log.Println("🔄 Full refresh requested (no track IDs specified)")
-				o.performFullRefresh(indexingIntervalMinutes, origin)
+				o.performFullRefresh(origin)
 			}
 		},
 		func() bool {
@@ -387,27 +378,6 @@ func (o *Orchestrator) StartRefreshFileTrigger(triggerPath string, checkInterval
 		},
 	)
 	watcher.Start()
-}
-
-// StartPeriodicIndexing starts periodic index updates during data loading
-func (o *Orchestrator) StartPeriodicIndexing(ctx context.Context, intervalMinutes int) {
-	// Create indexer with callbacks to access orchestrator state
-	indexer := internal.NewPeriodicIndexer(ctx, intervalMinutes, internal.IndexerCallbacks{
-		GetState: func() internal.IndexerState {
-			return internal.IndexerState{
-				TrackCount:       len(o.tracks),
-				FetchInProgress:  o.fetchInProgress,
-				LastIndexedCount: o.lastIndexedCount,
-			}
-		},
-		UpdateIndexed: func(count int) {
-			o.lastIndexedCount = count
-		},
-		ExportStatus: func() {
-			o.exportStatus()
-		},
-	})
-	indexer.Start()
 }
 
 // exportStatus exports the current status to JSON

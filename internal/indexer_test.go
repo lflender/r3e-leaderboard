@@ -933,9 +933,7 @@ func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
 		t.Fatal("Edward Johnson should NOT be in the initial index")
 	}
 
-	// Now save combo B to the main cache (simulating data fetched and promoted
-	// to main cache but never indexed — e.g. fetched after the last periodic
-	// indexer tick, or the nightly rebuild was interrupted).
+	// Save combo B to the main cache without updating the index.
 	if err := cache.SaveTrackData(comboB); err != nil {
 		t.Fatalf("SaveTrackData comboB failed: %v", err)
 	}
@@ -981,19 +979,28 @@ func TestFinalizeStartupIndex_RebuildWhenCacheExceedsIndex(t *testing.T) {
 	}
 }
 
-func TestFinalizeStartupIndex_PromotesWithoutChangingRankedSeriesStatus(t *testing.T) {
+func TestFinalizeStartupIndex_IndexesPromotedAndPreviouslyCachedUpdates(t *testing.T) {
 	_, cleanup := withWorkingDir(t)
 	defer cleanup()
 
-	initial := testTrackInfo("Track A", "1111", "1703", "Alice Speed")
-	if err := NewDataCache().SaveTrackData(initial); err != nil {
+	initialA := testTrackInfo("Monza", "1671", "1703", "Alice Speed")
+	initialB := testTrackInfo("Laguna Seca", "1856", "5825", "Bob Racer")
+	cache := NewDataCache()
+	if err := cache.SaveTrackData(initialA); err != nil {
 		t.Fatal(err)
 	}
-	if err := BuildAndExportIndex([]TrackInfo{initial}); err != nil {
+	if err := cache.SaveTrackData(initialB); err != nil {
 		t.Fatal(err)
 	}
-	updated := testTrackInfo("Track A", "1111", "1703", "Charlie Pace")
-	if err := NewTempDataCache().SaveTrackData(updated); err != nil {
+	if err := BuildAndExportIndex([]TrackInfo{initialA, initialB}); err != nil {
+		t.Fatal(err)
+	}
+	updatedA := testTrackInfo("Monza", "1671", "1703", "Charlie Pace")
+	if err := cache.SaveTrackData(updatedA); err != nil {
+		t.Fatal(err)
+	}
+	updatedB := testTrackInfo("Laguna Seca", "1856", "5825", "Dana Racer")
+	if err := NewTempDataCache().SaveTrackData(updatedB); err != nil {
 		t.Fatal(err)
 	}
 	refreshTS := time.Date(2026, time.April, 2, 18, 30, 0, 0, time.UTC)
@@ -1003,75 +1010,30 @@ func TestFinalizeStartupIndex_PromotesWithoutChangingRankedSeriesStatus(t *testi
 		t.Fatal(err)
 	}
 
-	if _, err := FinalizeStartupIndex(context.Background(), 1); err != nil {
+	count, err := FinalizeStartupIndex(context.Background(), 2)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Fatalf("indexed count = %d, want 2", count)
 	}
 	names, err := LoadShardedNamesIndex()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := names["charlie pace"]; !ok {
-		t.Fatal("promoted data was not indexed")
+	for _, name := range []string{"charlie pace", "dana racer"} {
+		if _, ok := names[name]; !ok {
+			t.Errorf("updated driver %q was not indexed", name)
+		}
+	}
+	for _, name := range []string{"alice speed", "bob racer"} {
+		if _, ok := names[name]; ok {
+			t.Errorf("stale driver %q remains indexed", name)
+		}
 	}
 	if got := ReadStatusData().LastRankedSeriesRefresh; !got.Equal(refreshTS) {
 		t.Fatalf("ranked-series refresh timestamp after promotion = %v, want %v", got, refreshTS)
 	}
-}
-
-// =============================================================================
-// NEW PERIODIC INDEXER TESTS
-// =============================================================================
-
-func TestNewPeriodicIndexer_ValidInterval(t *testing.T) {
-	ctx := context.Background()
-	callbacks := IndexerCallbacks{
-		GetState:      func() IndexerState { return IndexerState{} },
-		UpdateIndexed: func(count int) {},
-		ExportStatus:  func() {},
-	}
-	pi := NewPeriodicIndexer(ctx, 5, callbacks)
-	if pi == nil {
-		t.Fatal("NewPeriodicIndexer returned nil")
-	}
-	if pi.interval != 5*time.Minute {
-		t.Errorf("interval = %v, expected 5m", pi.interval)
-	}
-	if pi.ctx != ctx {
-		t.Error("ctx not stored correctly")
-	}
-}
-
-func TestNewPeriodicIndexer_InvalidInterval_DefaultsTo30(t *testing.T) {
-	ctx := context.Background()
-	callbacks := IndexerCallbacks{
-		GetState:      func() IndexerState { return IndexerState{} },
-		UpdateIndexed: func(count int) {},
-		ExportStatus:  func() {},
-	}
-
-	pi0 := NewPeriodicIndexer(ctx, 0, callbacks)
-	if pi0.interval != 30*time.Minute {
-		t.Errorf("interval for 0 = %v, expected 30m", pi0.interval)
-	}
-
-	piNeg := NewPeriodicIndexer(ctx, -5, callbacks)
-	if piNeg.interval != 30*time.Minute {
-		t.Errorf("interval for -5 = %v, expected 30m", piNeg.interval)
-	}
-}
-
-func TestPeriodicIndexer_Start_ContextCancel(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	callbacks := IndexerCallbacks{
-		GetState:      func() IndexerState { return IndexerState{FetchInProgress: true, TrackCount: 0} },
-		UpdateIndexed: func(count int) {},
-		ExportStatus:  func() {},
-	}
-	pi := NewPeriodicIndexer(ctx, 60, callbacks)
-	pi.Start()
-	cancel() // triggers goroutine exit via ctx.Done
-	// Give the goroutine time to exit; no hang means success
-	time.Sleep(50 * time.Millisecond)
 }
 
 // =============================================================================
