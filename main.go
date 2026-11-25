@@ -45,6 +45,7 @@ func main() {
 	orchestrator = NewOrchestrator(appContext, appCancel, config)
 
 	// Promote any leftover temporary cache from previous runs before starting
+	log.Println("🔄 Phase 1: Promote temporary cache")
 	tempCache := internal.NewTempDataCache()
 	if _, err := tempCache.PromoteTempCache(); err != nil {
 		log.Printf("⚠️ Startup cache promotion error: %v", err)
@@ -63,6 +64,7 @@ func main() {
 	mpCancel()
 
 	// Start background operations
+	log.Println("🔄 Phase 3: Start ranked-series discovery and background jobs")
 	internal.StartRankedSeriesDiscovery(appContext)
 	if err := internal.StartDriverAvatarBackfill(appContext, config.Schedule); err != nil {
 		log.Printf("⚠️ Avatar URL backfill not started: %v", err)

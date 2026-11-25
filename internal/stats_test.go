@@ -465,6 +465,70 @@ func TestExportStatsFromShards_AfterBuildAndExportIndex(t *testing.T) {
 	}
 }
 
+func TestExportStatsFromShards_GroupsByDriverID(t *testing.T) {
+	_, cleanup := withWorkingDir(t)
+	defer cleanup()
+
+	tracks := []TrackInfo{
+		testTrackInfo("Track A", "1111", "1703", "Old Name", "Shared Name"),
+		testTrackInfo("Track B", "2222", "1703", "Shared Name", "Shared Name"),
+	}
+	for i := range tracks {
+		for j := range tracks[i].Data {
+			entry := tracks[i].Data[j]
+			driver := entry["driver"].(map[string]interface{})
+			if j == 0 {
+				driver["path"] = "/users/info/101"
+				entry["country"] = map[string]interface{}{"name": "France"}
+			} else {
+				driver["path"] = "/users/info/202"
+				entry["country"] = map[string]interface{}{"name": "Italy"}
+			}
+			if i == 0 {
+				entry["date_time"] = "2026-04-01T12:00:00Z"
+			} else {
+				entry["date_time"] = "2026-04-02T12:00:00Z"
+			}
+		}
+	}
+
+	if err := BuildAndExportIndex(tracks); err != nil {
+		t.Fatalf("BuildAndExportIndex failed: %v", err)
+	}
+	if err := ExportStatsFromShards(); err != nil {
+		t.Fatalf("ExportStatsFromShards failed: %v", err)
+	}
+
+	for _, file := range []string{
+		StatsOverallEntriesFile,
+		filepath.Join(StatsClassesDir, "1703_entries.json.gz"),
+		filepath.Join(StatsSuperclassesDir, "gt3_entries.json.gz"),
+	} {
+		t.Run(filepath.Base(filepath.Dir(file)), func(t *testing.T) {
+			payload, err := readGzipJSON[DriverStatsData](file)
+			if err != nil {
+				t.Fatalf("read stats: %v", err)
+			}
+			if len(payload.Results) != 2 {
+				t.Fatalf("expected two distinct drivers, got %+v", payload.Results)
+			}
+			byID := make(map[string]DriverStatsEntry)
+			for _, entry := range payload.Results {
+				byID[entry.DriverKey] = entry
+			}
+			for id, country := range map[string]string{"101": "France", "202": "Italy"} {
+				entry, ok := byID[id]
+				if !ok || entry.Name != "Shared Name" || entry.Country != country || entry.Entries != 2 {
+					t.Errorf("driver %s: got %+v, present=%t", id, entry, ok)
+				}
+			}
+			if byID["101"].PolePositions != 2 || byID["202"].PolePositions != 0 {
+				t.Errorf("incorrect poles by driver ID: %+v", byID)
+			}
+		})
+	}
+}
+
 func TestBuildTopPayload_TruncatesAndFiltersAvgBested(t *testing.T) {
 	full := DriverStatsData{
 		ScopeType: "overall",
